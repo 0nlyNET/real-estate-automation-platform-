@@ -9,7 +9,6 @@ import { UsersModule } from './users/users.module';
 import { LeadsModule } from './leads/leads.module';
 import { MessagingModule } from './messaging/messaging.module';
 import { SequencesModule } from './sequences/sequences.module';
-// QueueModule temporarily disabled for Railway
 import { CrmModule } from './crm/crm.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { SettingsModule } from './settings/settings.module';
@@ -23,7 +22,8 @@ import ormconfig from '../ormconfig';
     ConfigModule.forRoot({ isGlobal: true }),
 
     TypeOrmModule.forRootAsync({
-      useFactory: async (configService: ConfigService) => ormconfig(configService),
+      useFactory: async (configService: ConfigService) =>
+        ormconfig(configService),
       inject: [ConfigService],
     }),
 
@@ -34,7 +34,6 @@ import ormconfig from '../ormconfig';
     LeadsModule,
     MessagingModule,
     SequencesModule,
-    // QueueModule, // disabled
     CrmModule,
     CalendarModule,
     SettingsModule,
