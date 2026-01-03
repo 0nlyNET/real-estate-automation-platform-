@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TerminusModule } from '@nestjs/terminus';
 
@@ -15,20 +15,27 @@ import { SettingsModule } from './settings/settings.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 
-import ormconfig from '../ormconfig';
-
 @Module({
   imports: [
+    // ENV
     ConfigModule.forRoot({ isGlobal: true }),
 
-    TypeOrmModule.forRootAsync({
-      useFactory: async (configService: ConfigService) =>
-        ormconfig(configService),
-      inject: [ConfigService],
+    // DATABASE (Railway Postgres)
+    TypeOrmModule.forRoot({
+      type: 'postgres',
+      url: process.env.DATABASE_URL,
+      autoLoadEntities: true,
+      synchronize: true, // OK for demo only
+      ssl: {
+        rejectUnauthorized: false,
+      },
     }),
 
+    // Health check (Railway needs this)
     TerminusModule,
     HealthModule,
+
+    // Core business modules
     TenantsModule,
     UsersModule,
     LeadsModule,
@@ -39,6 +46,8 @@ import ormconfig from '../ormconfig';
     SettingsModule,
     AuditModule,
     AuthModule,
+
+    // ❌ QueueModule / Redis intentionally removed for Railway
   ],
 })
 export class AppModule {}

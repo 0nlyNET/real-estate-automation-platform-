@@ -2,17 +2,18 @@
   "name": "real-estate-automation-platform-backend",
   "version": "0.1.0",
   "description": "Multi-tenant real estate agent automation platform backend (NestJS)",
-  "main": "dist/main.js",
   "license": "MIT",
+  "private": true,
+
   "scripts": {
     "build": "nest build",
-    "start": "nest start",
+    "start": "node dist/main.js",
     "start:dev": "nest start --watch",
-    "lint": "eslint 'src/**/*.ts'",
+    "lint": "eslint \"src/**/*.ts\"",
     "test": "jest",
-    "seed": "ts-node -r tsconfig-paths/register src/scripts/seed.ts",
-    "format": "prettier --write 'src/**/*.ts'"
+    "seed": "ts-node -r tsconfig-paths/register src/scripts/seed.ts"
   },
+
   "dependencies": {
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.0.0",
@@ -22,29 +23,24 @@
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/terminus": "^10.0.0",
     "@nestjs/typeorm": "^10.0.0",
+
     "@sendgrid/mail": "^8.1.6",
     "@sentry/node": "^7.109.0",
-    "@types/react": "^19.2.7",
-    "axios": "^1.6.0",
+
     "bcryptjs": "^3.0.3",
-    "bullmq": "^4.12.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
     "dotenv": "^16.3.1",
-    "fast-json-stringify": "^5.8.0",
-    "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.11.3",
-    "react": "^19.2.3",
     "reflect-metadata": "^0.1.13",
-    "resend": "^6.6.0",
     "rxjs": "^7.8.1",
-    "sentry": "^0.1.2",
     "typeorm": "^0.3.17",
     "winston": "^3.10.0"
   },
+
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",
     "@nestjs/schematics": "^10.0.0",
