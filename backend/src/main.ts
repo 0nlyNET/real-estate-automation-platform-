@@ -1,60 +1,35 @@
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./modules/app.module";
 import { ValidationPipe } from "@nestjs/common";
-import { json } from "express";
-import * as Sentry from "@sentry/node";
-import { ConfigService } from "@nestjs/config";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
   });
 
-  const configService = app.get(ConfigService);
-
-  // ✅ CORS (local + tunnel + production safe)
-  const corsOrigins = (configService.get<string>("CORS_ORIGIN") || "")
-    .split(",")
-    .map((o) => o.trim())
-    .filter(Boolean);
-
+  // CORS (keep simple for now; you can tighten later)
   app.enableCors({
-    origin: corsOrigins.length ? corsOrigins : ["http://localhost:3000"],
+    origin: true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   });
 
-  // ✅ Optional Sentry
-  const sentryDsn = configService.get<string>("SENTRY_DSN");
-  if (sentryDsn) {
-    Sentry.init({
-      dsn: sentryDsn,
-      environment: configService.get<string>("NODE_ENV", "development"),
-      tracesSampleRate: 0.2,
-    });
-  }
-
-  // ✅ Global validation
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       transform: true,
-      forbidUnknownValues: true,
-    })
+      forbidNonWhitelisted: true,
+    }),
   );
 
-  // ✅ Body size limit
-  app.use(json({ limit: "1mb" }));
+  // ✅ Railway provides PORT dynamically
+  const port = parseInt(process.env.PORT || "4000", 10);
 
-  // ✅ Global API prefix
-  app.setGlobalPrefix("api");
+  // ✅ Bind to 0.0.0.0 so Railway can reach it
+  await app.listen(port, "0.0.0.0");
 
-  const port = configService.get<number>("PORT") || 4000;
-  await app.listen(port);
-
-  console.log(`🚀 Backend running on port ${port}`);
+  console.log(`API listening on ${port}`);
 }
 
 bootstrap();
-
