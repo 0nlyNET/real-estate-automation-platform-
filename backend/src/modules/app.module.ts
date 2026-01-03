@@ -11,7 +11,7 @@ import { UsersModule } from './users/users.module';
 import { LeadsModule } from './leads/leads.module';
 import { MessagingModule } from './messaging/messaging.module';
 import { SequencesModule } from './sequences/sequences.module';
-import { QueueModule } from './queue/queue.module';
+//import { QueueModule } from './queue/queue.module';
 import { CrmModule } from './crm/crm.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { SettingsModule } from './settings/settings.module';
