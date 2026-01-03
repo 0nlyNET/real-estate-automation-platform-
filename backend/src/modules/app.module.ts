@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TerminusModule } from '@nestjs/terminus';
+
+import { AppController } from '../app.controller';
+
 import { HealthModule } from './health/health.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { UsersModule } from './users/users.module';
@@ -14,6 +17,7 @@ import { CalendarModule } from './calendar/calendar.module';
 import { SettingsModule } from './settings/settings.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
+
 import ormconfig from '../ormconfig';
 
 @Module({
@@ -37,5 +41,6 @@ import ormconfig from '../ormconfig';
     AuditModule,
     AuthModule,
   ],
+  controllers: [AppController],
 })
 export class AppModule {}
