@@ -1,3 +1,4 @@
+import { SequencesModule } from '../sequences/sequences.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -8,7 +9,6 @@ import { LeadsService } from './leads.service';
 
 import { TenantsModule } from '../tenants/tenants.module';
 import { MessagingModule } from '../messaging/messaging.module';
-import { SequencesModule } from '../sequences/sequences.module';
 import { MailModule } from '../../mail/mail.module';
 
 @Module({
