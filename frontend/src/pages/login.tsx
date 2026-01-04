@@ -46,7 +46,6 @@ export default function LoginPage() {
           placeholder="Email"
           autoComplete="email"
           required
-          style={{ padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
         />
 
         <input
@@ -56,16 +55,11 @@ export default function LoginPage() {
           placeholder="Password"
           autoComplete="current-password"
           required
-          style={{ padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
         />
 
         {error && <div style={{ color: "red" }}>{error}</div>}
 
-        <button
-          type="submit"
-          disabled={loading}
-          style={{ padding: 12, borderRadius: 10, fontWeight: 700 }}
-        >
+        <button type="submit" disabled={loading}>
           {loading ? "Signing in..." : "Login"}
         </button>
       </form>
