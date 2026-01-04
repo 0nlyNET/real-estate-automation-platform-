@@ -1,34 +1,15 @@
-import { NestFactory } from "@nestjs/core";
-import { AppModule } from "./modules/app.module";
-import { ValidationPipe } from "@nestjs/common";
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
-    bufferLogs: true,
-  });
+  const app = await NestFactory.create(AppModule);
 
-  // CORS (keep simple for now; you can tighten later)
-  app.enableCors({
-    origin: true,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  });
+  // If you use CORS:
+  // app.enableCors({ origin: true, credentials: true });
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-      forbidNonWhitelisted: true,
-    }),
-  );
+  const port = Number(process.env.PORT) || 4000;
 
-  // ✅ Railway provides PORT dynamically
-  const port = parseInt(process.env.PORT || "4000", 10);
-
-  // ✅ Bind to 0.0.0.0 so Railway can reach it
-  await app.listen(port, "0.0.0.0");
-
+  await app.listen(port, '0.0.0.0');
   console.log(`API listening on ${port}`);
 }
 
