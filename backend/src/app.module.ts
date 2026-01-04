@@ -9,3 +9,5 @@ import { CalendarModule } from './modules/calendar/calendar.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
+export class AppModule {}
+
