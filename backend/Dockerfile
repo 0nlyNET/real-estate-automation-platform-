@@ -1,20 +1,19 @@
-# backend/Dockerfile
 FROM node:20-alpine
 
-WORKDIR /app
+WORKDIR /backend
 
-# Install deps first (better caching)
+# Copy dependency files first
 COPY package*.json ./
-RUN npm ci
 
-# Copy the rest of the backend
+# Install deps
+RUN npm install
+
+# Copy rest of backend
 COPY . .
 
-# Build Nest into /dist
+# Build NestJS
 RUN npm run build
 
-# Railway sets PORT, Nest should listen on it
-ENV NODE_ENV=production
-EXPOSE 4000
+EXPOSE 3001
 
-CMD ["npm", "start"]
+CMD ["node", "dist/main.js"]
