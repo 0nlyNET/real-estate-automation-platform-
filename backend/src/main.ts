@@ -9,7 +9,8 @@ async function bootstrap() {
 
   const port = Number(process.env.PORT) || 4000;
 
-  await app.listen(port, '0.0.0.0');
+  await console.log('BUILD_COMMIT=7938896');
+app.listen(port, '0.0.0.0');
   console.log(`API listening on ${port}`);
 }
 
