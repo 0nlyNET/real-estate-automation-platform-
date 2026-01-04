@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import { login, getToken } from "../lib/auth"; // IMPORTANT: relative import
+import { login, getToken } from "../lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,7 +11,9 @@ export default function LoginPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (getToken()) router.replace("/leads");
+    if (getToken()) {
+      router.replace("/leads");
+    }
   }, [router]);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -23,7 +25,11 @@ export default function LoginPage() {
       await login(email.trim(), password);
       router.push("/leads");
     } catch (err: any) {
-      setError(err?.response?.data?.message || err?.message || "Login failed");
+      setError(
+        err?.response?.data?.message ||
+        err?.message ||
+        "Login failed"
+      );
     } finally {
       setLoading(false);
     }
@@ -39,6 +45,7 @@ export default function LoginPage() {
           onChange={(e) => setEmail(e.target.value)}
           placeholder="Email"
           autoComplete="email"
+          required
           style={{ padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
         />
 
@@ -48,10 +55,11 @@ export default function LoginPage() {
           type="password"
           placeholder="Password"
           autoComplete="current-password"
+          required
           style={{ padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
         />
 
-        {error ? <div style={{ color: "red" }}>{error}</div> : null}
+        {error && <div style={{ color: "red" }}>{error}</div>}
 
         <button
           type="submit"

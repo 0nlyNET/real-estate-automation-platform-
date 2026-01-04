@@ -16,8 +16,15 @@ type Lead = {
 function normalizeLeads(payload: any): Lead[] {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload?.items)) return payload.items; // sometimes APIs use items
+  if (Array.isArray(payload?.items)) return payload.items;
   return [];
+}
+
+function safeDateLabel(value?: string) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString();
 }
 
 export default function LeadsPage() {
@@ -27,48 +34,65 @@ export default function LeadsPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
+    // If no token, bounce immediately
+    if (!getToken()) {
       router.replace("/login");
       return;
     }
 
-    const run = async () => {
+    let cancelled = false;
+
+    async function run() {
       try {
         setLoading(true);
         setError("");
 
+        // Interceptor adds Authorization header automatically
         const res = await api.get("/api/leads");
         const list = normalizeLeads(res.data);
 
-        setLeads(list);
+        if (!cancelled) setLeads(list);
       } catch (err: any) {
         const status = err?.response?.status;
+
+        if (status === 401) {
+          // token invalid/expired
+          logout("/login");
+          return;
+        }
+
         const msg =
           err?.response?.data?.message ||
           err?.message ||
           "Failed to load leads";
 
-        setError(msg);
-
-        if (status === 401) {
-          logout();
-        }
+        if (!cancelled) setError(String(msg));
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    };
+    }
 
     run();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   return (
     <main style={{ maxWidth: 900, margin: "40px auto", padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+        }}
+      >
         <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0 }}>Leads</h1>
 
         <button
-          onClick={() => logout()}
+          onClick={() => logout("/login")}
           style={{
             padding: "10px 14px",
             borderRadius: 10,
@@ -92,35 +116,43 @@ export default function LeadsPage() {
           {leads.length === 0 ? (
             <p>No leads yet.</p>
           ) : (
-            leads.map((lead) => (
-              <div
-                key={lead.id}
-                style={{
-                  padding: 14,
-                  border: "1px solid #e5e5e5",
-                  borderRadius: 12,
-                  background: "white",
-                }}
-              >
-                <div style={{ fontWeight: 700 }}>{lead.fullName || "Unnamed Lead"}</div>
+            leads.map((lead) => {
+              const created = safeDateLabel(lead.createdAt);
 
-                <div style={{ fontSize: 14, opacity: 0.8 }}>
-                  {lead.email ? `Email: ${lead.email}` : null}
-                  {lead.phone ? ` | Phone: ${lead.phone}` : null}
-                </div>
-
-                <div style={{ fontSize: 14, opacity: 0.8 }}>
-                  {lead.source ? `Source: ${lead.source}` : null}
-                  {lead.propertyInterest ? ` | Interest: ${lead.propertyInterest}` : null}
-                </div>
-
-                {lead.createdAt && (
-                  <div style={{ fontSize: 12, opacity: 0.6, marginTop: 6 }}>
-                    Created: {new Date(lead.createdAt).toLocaleString()}
+              return (
+                <div
+                  key={lead.id}
+                  style={{
+                    padding: 14,
+                    border: "1px solid #e5e5e5",
+                    borderRadius: 12,
+                    background: "white",
+                  }}
+                >
+                  <div style={{ fontWeight: 700 }}>
+                    {lead.fullName || "Unnamed Lead"}
                   </div>
-                )}
-              </div>
-            ))
+
+                  <div style={{ fontSize: 14, opacity: 0.8 }}>
+                    {lead.email ? `Email: ${lead.email}` : "Email: -"}
+                    {lead.phone ? ` | Phone: ${lead.phone}` : " | Phone: -"}
+                  </div>
+
+                  <div style={{ fontSize: 14, opacity: 0.8 }}>
+                    {lead.source ? `Source: ${lead.source}` : "Source: -"}
+                    {lead.propertyInterest
+                      ? ` | Interest: ${lead.propertyInterest}`
+                      : " | Interest: -"}
+                  </div>
+
+                  {created && (
+                    <div style={{ fontSize: 12, opacity: 0.6, marginTop: 6 }}>
+                      Created: {created}
+                    </div>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       )}
