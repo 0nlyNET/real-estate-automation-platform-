@@ -1,3 +1,10 @@
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { TerminusModule } from '@nestjs/terminus';
+
+import ormconfig from './ormconfig';
+
 import { HealthModule } from './modules/health/health.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { UsersModule } from './modules/users/users.module';
@@ -9,5 +16,34 @@ import { CalendarModule } from './modules/calendar/calendar.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
-export class AppModule {}
 
+@Module({
+  imports: [
+    // ENV
+    ConfigModule.forRoot({ isGlobal: true }),
+
+    // DATABASE
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: ormconfig,
+    }),
+
+    // HEALTH
+    TerminusModule,
+    HealthModule,
+
+    // CORE MODULES
+    TenantsModule,
+    UsersModule,
+    AuthModule,
+    LeadsModule,
+    MessagingModule,
+    SequencesModule,
+    CrmModule,
+    CalendarModule,
+    SettingsModule,
+    AuditModule,
+  ],
+})
+export class AppModule {}
