@@ -2,18 +2,21 @@ FROM node:20-alpine
 
 WORKDIR /backend
 
-# Copy dependency files first
+# Copy package files
 COPY package*.json ./
 
-# Install deps
+# Copy tsconfig BEFORE install so nest build works
+COPY tsconfig*.json ./
+
+# Install deps (this triggers postinstall -> build)
 RUN npm install
 
-# Copy rest of backend
+# Copy the rest of the backend
 COPY . .
 
-# Build NestJS
+# Build explicitly (safe even if postinstall ran)
 RUN npm run build
 
-EXPOSE 3001
+EXPOSE 4000
 
-CMD ["node", "dist/main.js"]
+CMD ["npm", "start"]
