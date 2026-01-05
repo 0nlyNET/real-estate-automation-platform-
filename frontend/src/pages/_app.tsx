@@ -6,6 +6,8 @@ export default function MyApp({ Component, pageProps }: AppProps) {
   return (
     <>
       <Head>
+        <title>RealtyTechAI</title>
+        <meta name="description" content="Real estate automation for modern agents" />
         <link rel="icon" href="/favicon.ico" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </Head>
