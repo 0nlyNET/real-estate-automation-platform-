@@ -1,50 +1,146 @@
-import Link from 'next/link';
+import { useMemo, useState } from "react";
+import { useRouter } from "next/router";
+import AppShell from "../components/AppShell";
+import EmptyState from "../components/EmptyState";
+import FilterChips from "../components/FilterChips";
+import { copy } from "../content/copy";
 
-const mockConversations = [
-  {
-    id: '1',
-    lead: 'Alex Buyer',
-    lastMessage: 'Can we tour 123 Main St?',
-    status: 'Active sequence',
-  },
-  {
-    id: '2',
-    lead: 'Sandra Seller',
-    lastMessage: 'What is my home worth?',
-    status: 'Awaiting reply',
-  },
-];
+type Thread = {
+  id: string;
+  leadName: string;
+  stage: string;
+  channel: "sms" | "email";
+  lastMessage: string;
+  lastAt: string;
+  status: "needs_reply" | "ok";
+};
 
-export default function Inbox() {
+const mockThreads: Thread[] = [];
+
+export default function InboxPage() {
+  const router = useRouter();
+  const tab = (router.query.tab as string) || "needs-reply";
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const threads = useMemo(() => {
+    if (tab === "needs-reply") return mockThreads.filter((t) => t.status === "needs_reply");
+    return mockThreads;
+  }, [tab]);
+
+  const selected = threads.find((t) => t.id === selectedId) || null;
+
+  function setTab(next?: string) {
+    const q = { ...router.query } as any;
+    if (!next) delete q.tab;
+    else q.tab = next;
+    router.push({ pathname: router.pathname, query: q }, undefined, { shallow: true });
+  }
+
+  const chips = useMemo(
+    () => [
+      { key: "needs-reply", label: "Needs reply", count: mockThreads.filter((t) => t.status === "needs_reply").length },
+      { key: "all", label: "All", count: mockThreads.length },
+    ],
+    []
+  );
+
+  const empty = threads.length === 0;
+
   return (
-    <main className="mx-auto max-w-5xl px-6 py-10">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Inbox</h1>
-          <p className="text-gray-600">Two-way SMS + email with sequence context.</p>
-        </div>
-        <Link href="/" className="text-blue-600 hover:underline">
-          Home
-        </Link>
+    <AppShell title={copy.inbox.title} subtitle={copy.inbox.subtitle}>
+      <div className="card" style={{ marginTop: 14 }}>
+        <FilterChips
+          chips={chips}
+          activeKey={tab === "all" ? "all" : "needs-reply"}
+          onChange={(key) => setTab(key)}
+        />
       </div>
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
-        {mockConversations.map((convo) => (
-          <div key={convo.id} className="rounded border p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">{convo.lead}</h3>
-              <span className="text-xs text-green-700">{convo.status}</span>
+
+      {empty ? (
+        <div style={{ marginTop: 14 }}>
+          <EmptyState
+            title={copy.inbox.empty.title}
+            body={copy.inbox.empty.body}
+            primary={{ label: copy.inbox.empty.primary, href: "/leads" }}
+            secondary={{ label: copy.inbox.empty.secondary, href: "/leads?sample=1" }}
+          />
+
+          <div className="card" style={{ marginTop: 14 }}>
+            <div style={{ fontWeight: 900 }}>What this becomes next</div>
+            <div className="muted" style={{ marginTop: 8 }}>
+              Once SMS + email webhooks are wired, this page becomes your “Needs reply” command center. You’ll see every
+              reply instantly, plus quick actions like Call, Text, Pause follow-ups, and Move stage.
             </div>
-            <p className="mt-2 text-sm text-gray-700">{convo.lastMessage}</p>
-            <button className="mt-3 rounded bg-blue-600 px-3 py-1 text-white">Reply</button>
           </div>
-        ))}
-      </div>
-      <section className="mt-8 rounded border p-4">
-        <h2 className="font-semibold">AI Reply Suggestions</h2>
-        <p className="text-sm text-gray-600">
-          Suggestions are powered by pluggable providers. Implement `src/lib/ai/suggestions.ts`.
-        </p>
-      </section>
-    </main>
+        </div>
+      ) : (
+        <div className="inboxLayout" style={{ marginTop: 14 }}>
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            {threads.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={"threadRow" + (t.id === selectedId ? " isActive" : "")}
+                onClick={() => setSelectedId(t.id)}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                  <div style={{ fontWeight: 900 }}>{t.leadName}</div>
+                  <div className="small">{new Date(t.lastAt).toLocaleTimeString()}</div>
+                </div>
+                <div className="small" style={{ marginTop: 4, display: "flex", gap: 8, alignItems: "center" }}>
+                  <span className="badge">{t.channel.toUpperCase()}</span>
+                  <span className="badge">{t.stage}</span>
+                  {t.status === "needs_reply" ? <span className="badge">Needs reply</span> : null}
+                </div>
+                <div className="muted" style={{ marginTop: 6, fontSize: 13, lineHeight: 1.35 }}>
+                  {t.lastMessage}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <div className="card">
+            {selected ? (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                  <div>
+                    <div style={{ fontWeight: 950, fontSize: 18 }}>{selected.leadName}</div>
+                    <div className="small" style={{ marginTop: 6 }}>
+                      <span className="badge">{selected.stage}</span>
+                      <span className="badge" style={{ marginLeft: 8 }}>{selected.channel.toUpperCase()}</span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button className="btn btnGhost" type="button">
+                      Call
+                    </button>
+                    <button className="btn btnGhost" type="button">
+                      Text
+                    </button>
+                    <button className="btn btnGhost" type="button">
+                      Email
+                    </button>
+                    <button className="btn" type="button">
+                      Mark as replied
+                    </button>
+                  </div>
+                </div>
+
+                <div className="card" style={{ marginTop: 14 }}>
+                  <div className="muted">
+                    Messaging is not wired yet in this build. When it is, this panel will show the full conversation,
+                    timeline events, and quick reply.
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="muted">Select a conversation on the left.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </AppShell>
   );
 }

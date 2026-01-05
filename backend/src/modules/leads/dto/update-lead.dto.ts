@@ -1,21 +1,21 @@
 import { LeadStage, LeadTemperature, LeadType } from '../lead.entity';
 
-// Public intake payload for website forms / Zapier / FB leads.
-// Keep this intentionally permissive for MVP; sanitize in the service.
-export class IntakeLeadDto {
-  fullName!: string;
+// Protected updates from agent UI (stage moves, notes, assignment, etc.)
+export class UpdateLeadDto {
+  fullName?: string;
   email?: string;
   phone?: string;
   source?: string;
   location?: string;
   propertyInterest?: string;
-
   leadType?: LeadType;
   temperature?: LeadTemperature;
   stage?: LeadStage;
-
   budgetRange?: string;
   estimatedPrice?: string;
   preferredAreas?: string[];
   notes?: string;
+  assignedTo?: string;
+  score?: number;
+  nextFollowUpAt?: string;
 }

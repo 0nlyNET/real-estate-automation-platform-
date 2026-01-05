@@ -16,6 +16,8 @@ import { CalendarModule } from './modules/calendar/calendar.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { MeModule } from './modules/me/me.module';
+import { StatsModule } from './modules/stats/stats.module';
 
 @Module({
   imports: [
@@ -44,6 +46,8 @@ import { AuthModule } from './modules/auth/auth.module';
     CalendarModule,
     SettingsModule,
     AuditModule,
+    MeModule,
+    StatsModule,
   ],
 })
 export class AppModule {}

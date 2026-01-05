@@ -1,85 +1,98 @@
+import Head from "next/head";
 import Link from "next/link";
+import PublicHeader from "../components/PublicHeader";
 
 export default function Home() {
   return (
-    <main style={{ maxWidth: 900, margin: "0 auto", padding: "48px 20px", fontFamily: "system-ui" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 18 }}>RealtyTechAI</div>
-        <div style={{ display: "flex", gap: 12 }}>
-          <Link href="/login">Agent Login</Link>
-          <a href="#demo">Request Demo</a>
+    <>
+      <Head>
+        <title>RealtyTech AI</title>
+      </Head>
+
+      <main
+        style={{
+          minHeight: "100vh",
+          background:
+            "linear-gradient(180deg, var(--bg) 0%, var(--bg) 55%, var(--bg2) 100%)",
+        }}
+      >
+        <div className="container" style={{ paddingBottom: 70 }}>
+          <PublicHeader rightCtaLabel="Sign up" showLogin />
+
+          <section style={{ padding: "34px 0 10px" }}>
+            <h1 style={{ fontSize: 46, margin: 0, lineHeight: 1.06, letterSpacing: "-0.02em" }}>
+              Reply to new leads in seconds.
+              <br />
+              Follow up automatically until they respond.
+            </h1>
+
+            <p
+              style={{
+                marginTop: 12,
+                maxWidth: 720,
+                color: "var(--muted)",
+                fontSize: 16,
+                lineHeight: 1.6,
+              }}
+            >
+              RealtyTech AI is your agent command center for speed-to-lead, follow-ups, and a clean pipeline view. No
+              bloat, no busywork.
+            </p>
+
+            <div style={{ display: "flex", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+              <Link href="/auth/signup" className="btnPrimary">
+                Create an agent account
+              </Link>
+
+              <Link href="/login" className="btnSecondary">
+                Log in
+              </Link>
+
+              <Link href="/pricing" className="btnSecondary">
+                View pricing
+              </Link>
+            </div>
+
+            <div style={{ marginTop: 22 }} className="grid2">
+              <div className="card cardHover" style={{ padding: 16 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Instant response</div>
+                <div style={{ color: "var(--muted)", lineHeight: 1.55, fontSize: 14 }}>
+                  New lead comes in, they get an instant text and email so you never lose the first touch.
+                </div>
+              </div>
+
+              <div className="card cardHover" style={{ padding: 16 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>No-reply follow-ups</div>
+                <div style={{ color: "var(--muted)", lineHeight: 1.55, fontSize: 14 }}>
+                  Prebuilt follow-up sequence that stops the moment they reply.
+                </div>
+              </div>
+
+              <div className="card cardHover" style={{ padding: 16 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>One inbox</div>
+                <div style={{ color: "var(--muted)", lineHeight: 1.55, fontSize: 14 }}>
+                  SMS and email in one place with “Needs reply” so you know exactly what to do next.
+                </div>
+              </div>
+
+              <div className="card cardHover" style={{ padding: 16 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Simple pipeline</div>
+                <div style={{ color: "var(--muted)", lineHeight: 1.55, fontSize: 14 }}>
+                  New, Active, Hot, Under contract, Closed. Clean counts, fast drill-down.
+                </div>
+              </div>
+            </div>
+
+            <div className="card" style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 900 }}>Built for busy agents</div>
+              <div className="muted" style={{ marginTop: 8, maxWidth: 840 }}>
+                Every screen answers: “What should I do right now?” Metrics are clickable. Empty states guide you to the
+                next action. The rest is automation.
+              </div>
+            </div>
+          </section>
         </div>
-      </div>
-
-      <section style={{ marginTop: 56 }}>
-        <h1 style={{ fontSize: 44, lineHeight: 1.1, margin: 0 }}>
-          Respond to new leads fast, stay organized, and never miss follow ups.
-        </h1>
-        <p style={{ marginTop: 18, fontSize: 18, color: "#333", maxWidth: 720 }}>
-          A lightweight agent dashboard for viewing inquiries and powering automated follow ups. This is the demo version.
-        </p>
-
-        <div style={{ display: "flex", gap: 12, marginTop: 22 }}>
-          <Link
-            href="/login"
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              background: "black",
-              color: "white",
-              textDecoration: "none",
-              fontWeight: 700,
-            }}
-          >
-            Open Agent Demo
-          </Link>
-          <a
-            href="#demo"
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #ccc",
-              textDecoration: "none",
-              fontWeight: 700,
-              color: "black",
-            }}
-          >
-            What it does
-          </a>
-        </div>
-
-        <div
-          style={{
-            marginTop: 36,
-            padding: 18,
-            borderRadius: 14,
-            border: "1px solid #e5e5e5",
-            background: "#fafafa",
-          }}
-        >
-          <div style={{ fontWeight: 800 }}>Demo credentials</div>
-          <div style={{ marginTop: 8, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
-            admin@test.com / DevPass123!
-          </div>
-          <div style={{ marginTop: 8, color: "#555", fontSize: 14 }}>
-            Demo only. Invite-only access is planned.
-          </div>
-        </div>
-      </section>
-
-      <section id="demo" style={{ marginTop: 56 }}>
-        <h2 style={{ fontSize: 28, marginBottom: 10 }}>Demo flow</h2>
-        <ol style={{ color: "#333", lineHeight: 1.7 }}>
-          <li>Agent logs in.</li>
-          <li>Agent sees a lead dashboard.</li>
-          <li>Each lead has contact info and interest fields.</li>
-          <li>Next: automated follow ups and tenant scoping.</li>
-        </ol>
-      </section>
-
-      <footer style={{ marginTop: 80, paddingTop: 18, borderTop: "1px solid #eee", color: "#666" }}>
-        Demo build for agent feedback.
-      </footer>
-    </main>
+      </main>
+    </>
   );
 }

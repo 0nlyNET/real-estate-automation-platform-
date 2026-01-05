@@ -4,9 +4,14 @@ import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 export default (configService: ConfigService): TypeOrmModuleOptions => {
   const databaseUrl = configService.get<string>('DATABASE_URL');
 
-  // Railway / hosted Postgres
+  // ===== Hosted / Railway Postgres =====
   if (databaseUrl) {
     const url = new URL(databaseUrl);
+
+    const isLocal =
+      url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.hostname === 'postgres';
 
     return {
       type: 'postgres',
@@ -16,12 +21,12 @@ export default (configService: ConfigService): TypeOrmModuleOptions => {
       password: decodeURIComponent(url.password),
       database: url.pathname.replace(/^\//, ''),
       autoLoadEntities: true,
-      synchronize: true, // OK for now, turn off later
-      ssl: { rejectUnauthorized: false },
+      synchronize: true, // OK for now
+      ssl: isLocal ? false : { rejectUnauthorized: false },
     };
   }
 
-  // Local fallback (PG* envs)
+  // ===== Local Postgres (docker / local dev) =====
   const host = configService.get<string>('PGHOST');
   const port = parseInt(configService.get<string>('PGPORT') || '5432', 10);
   const username = configService.get<string>('PGUSER');
@@ -42,7 +47,8 @@ export default (configService: ConfigService): TypeOrmModuleOptions => {
     password,
     database,
     autoLoadEntities: true,
-    synchronize: true, // OK for now, turn off later
-    ssl: { rejectUnauthorized: false },
+    synchronize: true, // OK for now
+    ssl: false,
   };
 };
+

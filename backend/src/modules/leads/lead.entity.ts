@@ -6,6 +6,13 @@ import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
 
 export type LeadType = 'buyer' | 'seller' | 'investor' | 'renter';
 export type LeadTemperature = 'hot' | 'warm' | 'cold';
+export type LeadStage =
+  | 'new'
+  | 'active'
+  | 'hot'
+  | 'under_contract'
+  | 'closed'
+  | 'lost';
 
 @Entity({ name: 'leads' })
 @Index(['tenant', 'email'], { unique: true, where: 'email IS NOT NULL' })
@@ -13,6 +20,14 @@ export type LeadTemperature = 'hot' | 'warm' | 'cold';
 export class Lead extends BaseEntity {
   @Column({ name: 'full_name' })
   fullName!: string;
+
+  // Agent-friendly pipeline stage (MVP)
+  @Column({ name: 'stage', type: 'varchar', default: 'new' })
+  stage!: LeadStage;
+
+  // Simple lead score (0-100). Higher = more likely to convert.
+  @Column({ name: 'score', type: 'int', default: 50 })
+  score!: number;
 
   @Column({ nullable: true })
   email?: string;
@@ -28,6 +43,28 @@ export class Lead extends BaseEntity {
 
   @Column({ name: 'property_interest', nullable: true })
   propertyInterest?: string;
+
+  @Column({ name: 'budget_range', nullable: true })
+  budgetRange?: string;
+
+  @Column({ name: 'estimated_price', nullable: true })
+  estimatedPrice?: string;
+
+  @Column({ name: 'preferred_areas', type: 'simple-array', nullable: true })
+  preferredAreas?: string[];
+
+  @Column({ name: 'notes', type: 'text', nullable: true })
+  notes?: string;
+
+  @Column({ name: 'last_activity_at', type: 'timestamptz', nullable: true })
+  lastActivityAt?: Date;
+
+  @Column({ name: 'last_contacted_at', type: 'timestamptz', nullable: true })
+  lastContactedAt?: Date;
+
+  // Placeholder for “Follow-ups due” in the UI. Later: derive from sequences.
+  @Column({ name: 'next_follow_up_at', type: 'timestamptz', nullable: true })
+  nextFollowUpAt?: Date;
 
   @Column({ name: 'lead_type', type: 'varchar', default: 'buyer' })
   leadType!: LeadType;

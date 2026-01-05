@@ -1,8 +1,14 @@
 import type { AppProps } from "next/app";
 import Head from "next/head";
+import { useEffect } from "react";
+import { initTheme } from "../lib/theme";
 import "../styles/globals.css";
 
 export default function MyApp({ Component, pageProps }: AppProps) {
+  useEffect(() => {
+    initTheme();
+  }, []);
+
   return (
     <>
       <Head>

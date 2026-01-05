@@ -28,6 +28,20 @@ export class UsersService {
     return this.usersRepository.save(user);
   }
 
+  async createUser(params: { email: string; password: string; role?: 'admin' | 'agent'; tenantId?: string }) {
+    const existing = await this.findByEmail(params.email);
+    if (existing) return existing;
+
+    const passwordHash = await bcrypt.hash(params.password, 12);
+    const user = this.usersRepository.create({
+      email: params.email,
+      passwordHash,
+      role: params.role ?? 'agent',
+      tenantId: params.tenantId,
+    });
+    return this.usersRepository.save(user);
+  }
+
   async validatePassword(user: User, password: string) {
     return bcrypt.compare(password, user.passwordHash);
   }

@@ -1,8 +1,7 @@
 import { LeadStage, LeadTemperature, LeadType } from '../lead.entity';
 
-// Public intake payload for website forms / Zapier / FB leads.
-// Keep this intentionally permissive for MVP; sanitize in the service.
-export class IntakeLeadDto {
+// Protected payload for agents creating a lead manually from the app.
+export class CreateLeadDto {
   fullName!: string;
   email?: string;
   phone?: string;
@@ -18,4 +17,7 @@ export class IntakeLeadDto {
   estimatedPrice?: string;
   preferredAreas?: string[];
   notes?: string;
+
+  // For future: allow disabling instant responses.
+  triggerAutomation?: boolean;
 }
