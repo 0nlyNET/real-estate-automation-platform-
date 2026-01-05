@@ -6,7 +6,6 @@ WORKDIR /backend
 COPY package*.json ./
 
 # Copy tsconfig BEFORE install so nest build works
-COPY tsconfig*.json ./
 
 # Install deps (this triggers postinstall -> build)
 RUN npm install
@@ -15,7 +14,6 @@ RUN npm install
 COPY . .
 
 # Build explicitly (safe even if postinstall ran)
-RUN npm run build
 
 EXPOSE 4000
 
