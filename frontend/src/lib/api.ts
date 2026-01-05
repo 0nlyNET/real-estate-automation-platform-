@@ -1,27 +1,23 @@
 import axios from "axios";
-import { getToken, logout } from "./auth";
-
-const PROD_BACKEND =
-  "https://real-estate-automation-platform-production.up.railway.app";
 
 const baseURL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  (process.env.NODE_ENV === "production"
-    ? PROD_BACKEND
-    : "http://localhost:4000");
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
 
-export const api = axios.create({ baseURL });
-
-api.interceptors.request.use((config) => {
-  const token = getToken();
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
+export const api = axios.create({
+  baseURL,
+  headers: {
+    "Content-Type": "application/json",
+  },
 });
 
-api.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    if (err?.response?.status === 401) logout();
-    return Promise.reject(err);
+// Attach JWT automatically for all requests
+api.interceptors.request.use((config) => {
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("accessToken");
+    if (token) {
+      config.headers = config.headers || {};
+      config.headers.Authorization = `Bearer ${token}`;
+    }
   }
-);
+  return config;
+});

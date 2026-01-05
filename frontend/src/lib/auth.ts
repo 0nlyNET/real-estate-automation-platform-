@@ -3,12 +3,11 @@ import { api } from "./api";
 const TOKEN_KEY = "accessToken";
 
 export async function login(email: string, password: string) {
+  // IMPORTANT: backend login route is /auth/login (NO /api prefix)
   const res = await api.post("/auth/login", { email, password });
 
   const token: string | undefined = res.data?.accessToken;
-  if (!token) {
-    throw new Error("No accessToken returned from backend");
-  }
+  if (!token) throw new Error("No accessToken returned from backend");
 
   if (typeof window !== "undefined") {
     localStorage.setItem(TOKEN_KEY, token);
