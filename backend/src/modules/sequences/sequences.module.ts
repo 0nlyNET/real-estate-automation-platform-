@@ -8,9 +8,21 @@ import { Message } from '../messaging/message.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { Tenants } from '../tenants/tenant.entity';
 import { Lead } from '../leads/lead.entity';
+import { TenantSettings } from '../settings/tenant-settings.entity'; // ADD THIS
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Sequence, SequenceEnrollment, SequenceStep, Message, LeadEvent, Tenants, Lead])],
+  imports: [
+    TypeOrmModule.forFeature([
+      Sequence,
+      SequenceEnrollment,
+      SequenceStep,
+      Message,
+      LeadEvent,
+      Tenants,
+      Lead,
+      TenantSettings, // ADD THIS
+    ]),
+  ],
   providers: [SequencesService],
   exports: [SequencesService],
 })

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import PublicHeader from "../components/PublicHeader";
 import { login, getToken } from "../lib/auth";
+import { friendlyAuthError } from "../lib/friendlyError";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,8 +28,8 @@ export default function LoginPage() {
     try {
       await login(email.trim(), password);
       router.push("/dashboard");
-    } catch (err: any) {
-      setError(err?.response?.data?.message || err?.message || "Login failed");
+    } catch (e) {
+      setError(friendlyAuthError(e));
     } finally {
       setLoading(false);
     }
@@ -113,6 +114,12 @@ export default function LoginPage() {
                   Don’t have an account?{" "}
                   <Link href="/auth/signup" style={{ fontWeight: 800 }}>
                     Sign up
+                  </Link>
+                </div>
+
+                <div className="small" style={{ textAlign: "center" }}>
+                  <Link href="/forgot-password" style={{ fontWeight: 800 }}>
+                    Forgot password?
                   </Link>
                 </div>
               </form>

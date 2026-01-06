@@ -1,3 +1,4 @@
+import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -32,6 +33,8 @@ export class SequencesService implements OnModuleInit {
     private readonly leadEventRepository: Repository<LeadEvent>,
     @InjectRepository(Tenants)
     private readonly tenantRepository: Repository<Tenants>,
+    @InjectRepository(TenantSettings)
+    private readonly tenantSettingsRepository: Repository<TenantSettings>,
     @InjectRepository(Lead)
     private readonly leadRepository: Repository<Lead>,
   ) {}
@@ -236,9 +239,13 @@ export class SequencesService implements OnModuleInit {
 
     // Quiet hours
     const now = new Date();
-    const tz = (tenant as any)?.timezone;
-    const qStart = (tenant as any)?.quietHoursStart;
-    const qEnd = (tenant as any)?.quietHoursEnd;
+    const tenantSettings = tenantId
+      ? await this.tenantSettingsRepository.findOne({ where: { tenantId } as any })
+      : undefined;
+
+    const tz = (tenantSettings as any)?.timeZone || (tenant as any)?.timezone;
+    const qStart = (tenantSettings as any)?.quietHoursStart || (tenant as any)?.quietHoursStart;
+    const qEnd = (tenantSettings as any)?.quietHoursEnd || (tenant as any)?.quietHoursEnd;
 
     const scheduledAt =
       tz &&
@@ -247,6 +254,24 @@ export class SequencesService implements OnModuleInit {
       isWithinQuietHours({ now, timeZone: tz, quietStart: qStart, quietEnd: qEnd })
         ? nextAllowedSendTime({ now, timeZone: tz, quietStart: qStart, quietEnd: qEnd })
         : undefined;
+
+
+    const globalDisabled = process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true';
+    const tenantSettings2 = tenantId
+      ? await this.tenantSettingsRepository.findOne({ where: { tenantId } as any })
+      : undefined;
+    const tenantDisabled = tenantSettings2 ? tenantSettings2.automationsEnabled === false : false;
+
+    if (globalDisabled || tenantDisabled) {
+      this.logger.warn(
+        `Automations disabled, stopping enrollment (enrollmentId=${(hydrated as any).id} tenantId=${tenantId} globalDisabled=${globalDisabled} tenantDisabled=${tenantDisabled})`,
+      );
+      hydrated.status = 'stopped';
+      hydrated.stoppedReason = 'manual';
+      hydrated.nextRunAt = undefined;
+      await this.enrollmentRepository.save(hydrated);
+      return;
+    }
 
     // Create outbound message row (delivery handled by MessagingService)
     const msg = this.messageRepository.create({

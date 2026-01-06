@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TerminusModule } from '@nestjs/terminus';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
 import ormconfig from './ormconfig';
 
@@ -23,6 +25,14 @@ import { StatsModule } from './modules/stats/stats.module';
   imports: [
     // ENV
     ConfigModule.forRoot({ isGlobal: true }),
+
+    // RATE LIMITING (global baseline)
+    ThrottlerModule.forRoot([
+      {
+        ttl: Number(process.env.RATE_LIMIT_TTL ?? 60),
+        limit: Number(process.env.RATE_LIMIT_LIMIT ?? 60),
+      },
+    ]),
 
     // DATABASE
     TypeOrmModule.forRootAsync({
@@ -48,6 +58,12 @@ import { StatsModule } from './modules/stats/stats.module';
     AuditModule,
     MeModule,
     StatsModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}

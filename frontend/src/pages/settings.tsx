@@ -144,7 +144,20 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
-  function persist() {
+  async function persist() {
+    try {
+      // Save tenant-level settings to backend
+      await api.put("/settings/tenant", {
+        timeZone: state.timeZone,
+        quietHoursStart: state.quietHoursStart,
+        quietHoursEnd: state.quietHoursEnd,
+        bookingLink: state.bookingLink,
+        automationsEnabled: state.automationsEnabled,
+      });
+    } catch {
+      // ignore (backend may not be configured yet)
+    }
+
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       setSaved(true);
@@ -271,6 +284,50 @@ export default function SettingsPage() {
               onChange={(e) => setState((s) => ({ ...s, quietHoursEnd: e.target.value }))}
             />
           </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+          <div>
+            <label className="small" style={{ display: "block", marginBottom: 6 }}>
+              Time zone
+            </label>
+            <input
+              value={state.timeZone}
+              onChange={(e) => setState((s) => ({ ...s, timeZone: e.target.value }))}
+              placeholder="America/New_York"
+            />
+            <div className="small" style={{ marginTop: 6 }}>
+              Used for quiet hours scheduling.
+            </div>
+          </div>
+
+          <div>
+            <label className="small" style={{ display: "block", marginBottom: 6 }}>
+              Booking link
+            </label>
+            <input
+              value={state.bookingLink}
+              onChange={(e) => setState((s) => ({ ...s, bookingLink: e.target.value }))}
+              placeholder="https://calendly.com/yourname/15min"
+            />
+            <div className="small" style={{ marginTop: 6 }}>
+              Optional. Used in templates that invite them to book.
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={state.automationsEnabled}
+              onChange={(e) => setState((s) => ({ ...s, automationsEnabled: e.target.checked }))}
+            />
+            <div>
+              <div style={{ fontWeight: 900 }}>Automations enabled</div>
+              <div className="small muted">Turn off to stop all automated sends for this tenant.</div>
+            </div>
+          </label>
         </div>
       </div>
 

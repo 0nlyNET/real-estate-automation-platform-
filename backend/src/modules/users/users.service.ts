@@ -42,6 +42,13 @@ export class UsersService {
     return this.usersRepository.save(user);
   }
 
+
+  async setPassword(user: User, newPassword: string) {
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    (user as any).passwordHash = passwordHash;
+    return this.usersRepository.save(user);
+  }
+
   async validatePassword(user: User, password: string) {
     return bcrypt.compare(password, user.passwordHash);
   }
