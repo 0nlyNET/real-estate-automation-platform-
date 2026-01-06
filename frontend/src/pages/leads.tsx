@@ -6,6 +6,8 @@ import FilterChips from "../components/FilterChips";
 import LeadDrawer from "../components/LeadDrawer";
 import { api } from "../lib/api";
 import { getToken, logout } from "../lib/auth";
+import { usePlan } from "../components/PlanContext";
+import { formatAgo } from "../lib/time";
 import { copy } from "../content/copy";
 
 type Lead = {
@@ -21,6 +23,7 @@ type Lead = {
   propertyInterest?: string;
   location?: string;
   lastActivityAt?: string;
+  lastContactedAt?: string;
   nextFollowUpAt?: string;
   createdAt?: string;
   notes?: string;
@@ -66,6 +69,7 @@ type LeadForm = {
 
 export default function LeadsPage() {
   const router = useRouter();
+  const plan = usePlan();
   const { status, stage, open, q, sample } = router.query as Record<string, string | undefined>;
 
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -274,7 +278,6 @@ export default function LeadsPage() {
         </div>
       ) : null}
 
-      {/* Search + filters */}
       {!loading ? (
         <div className="card" style={{ marginTop: 14 }}>
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -295,19 +298,21 @@ export default function LeadsPage() {
               <option value="lost">Lost</option>
             </select>
 
-            <button className="btn btnGhost" type="button" onClick={() => setQuery({ q: undefined, stage: undefined, status: undefined })}>
+            <button
+              className="btn btnGhost"
+              type="button"
+              onClick={() => setQuery({ q: undefined, stage: undefined, status: undefined })}
+            >
               {copy.global.clearFilters}
             </button>
           </div>
 
-          <div className="muted" style={{ marginTop: 10 }}>{copy.leads.helper}</div>
+          <div className="muted" style={{ marginTop: 10 }}>
+            {copy.leads.helper}
+          </div>
 
           <div style={{ marginTop: 12 }}>
-            <FilterChips
-              chips={chips}
-              activeKey={status}
-              onChange={(key) => setQuery({ status: key })}
-            />
+            <FilterChips chips={chips} activeKey={status} onChange={(key) => setQuery({ status: key })} />
           </div>
         </div>
       ) : null}
@@ -328,7 +333,10 @@ export default function LeadsPage() {
           <EmptyState
             title={copy.leads.emptyFiltered.title}
             body={copy.leads.emptyFiltered.body}
-            primary={{ label: copy.leads.emptyFiltered.primary, onClick: () => setQuery({ q: undefined, stage: undefined, status: undefined }) }}
+            primary={{
+              label: copy.leads.emptyFiltered.primary,
+              onClick: () => setQuery({ q: undefined, stage: undefined, status: undefined }),
+            }}
           />
         </div>
       ) : null}
@@ -345,7 +353,8 @@ export default function LeadsPage() {
           </div>
 
           {filtered.map((l) => {
-            const leadScore = typeof l.score === "number" ? l.score : l.temperature === "hot" ? 85 : l.temperature === "warm" ? 65 : 40;
+            const leadScore =
+              typeof l.score === "number" ? l.score : l.temperature === "hot" ? 85 : l.temperature === "warm" ? 65 : 40;
             const badge = scoreLabel(leadScore);
             const stageLabel = (l.stage || "new").replace(/_/g, " ");
 
@@ -353,6 +362,11 @@ export default function LeadsPage() {
             if (isToday(l.createdAt)) statusLabel = "New";
             else if (l.nextFollowUpAt && isToday(l.nextFollowUpAt)) statusLabel = "Follow-up due";
             else if (leadScore >= 80) statusLabel = "Hot";
+
+            const arrived = l.createdAt ? formatAgo(l.createdAt) : "-";
+            const needsReply = !l.lastContactedAt;
+            const delayMins = l.createdAt ? Math.floor((Date.now() - new Date(l.createdAt).getTime()) / 60000) : 0;
+            const urgency = needsReply && delayMins >= 120 ? "Missed" : needsReply && delayMins >= 15 ? "Delayed" : "";
 
             return (
               <button
@@ -369,10 +383,29 @@ export default function LeadsPage() {
                   <div style={{ fontWeight: 900 }}>{l.fullName || "(Unnamed lead)"}</div>
                   <div className="small" style={{ marginTop: 2 }}>
                     {l.leadType ? <span className="badge">{l.leadType}</span> : null}
-                    {badge ? <span className="badge" style={{ marginLeft: 8 }}>{badge}</span> : null}
+                    {badge ? (
+                      <span className="badge" style={{ marginLeft: 8 }}>
+                        {badge}
+                      </span>
+                    ) : null}
+                    <span className="badge" style={{ marginLeft: 8 }}>
+                      Arrived {arrived}
+                    </span>
+                    {urgency ? (
+                      <span className="badge" style={{ marginLeft: 8 }}>
+                        {urgency}
+                      </span>
+                    ) : null}
                   </div>
+                  {plan.isPreview && needsReply ? (
+                    <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+                      Replies are locked on Freemium. Upgrade to respond in under 60 seconds.
+                    </div>
+                  ) : null}
                 </div>
-                <div className="small" style={{ fontWeight: 800 }}>{stageLabel}</div>
+                <div className="small" style={{ fontWeight: 800 }}>
+                  {stageLabel}
+                </div>
                 <div className="small">{statusLabel || "-"}</div>
                 <div className="small">{l.source || "-"}</div>
                 <div className="small">{fmtRelative(l.lastActivityAt || l.createdAt)}</div>
@@ -385,7 +418,6 @@ export default function LeadsPage() {
         </div>
       ) : null}
 
-      {/* Lead drawer */}
       <LeadDrawer
         open={drawerOpen}
         lead={drawerLead}
@@ -402,7 +434,6 @@ export default function LeadsPage() {
         onEmail={() => drawerLead?.email && window.open(`mailto:${drawerLead.email}`)}
       />
 
-      {/* Add lead modal */}
       {showAdd ? (
         <>
           <div className="overlay" onClick={() => setShowAdd(false)} />
@@ -410,31 +441,55 @@ export default function LeadsPage() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
               <div>
                 <div style={{ fontWeight: 950, fontSize: 18 }}>Add a lead</div>
-                <div className="small" style={{ marginTop: 4 }}>Add someone you’re working right now. Instant responses can run once your number is connected.</div>
+                <div className="small" style={{ marginTop: 4 }}>
+                  Add someone you’re working right now. Instant responses can run once your number is connected.
+                </div>
               </div>
-              <button className="btn btnGhost" type="button" onClick={() => setShowAdd(false)}>Close</button>
+              <button className="btn btnGhost" type="button" onClick={() => setShowAdd(false)}>
+                Close
+              </button>
             </div>
 
             <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
               <div>
-                <label className="small" style={{ display: "block", marginBottom: 6 }}>Full name</label>
-                <input value={form.fullName} onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))} placeholder="Lead name" />
+                <label className="small" style={{ display: "block", marginBottom: 6 }}>
+                  Full name
+                </label>
+                <input
+                  value={form.fullName}
+                  onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
+                  placeholder="Lead name"
+                />
               </div>
 
               <div className="grid2">
                 <div>
-                  <label className="small" style={{ display: "block", marginBottom: 6 }}>Phone</label>
-                  <input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="(555) 555-5555" />
+                  <label className="small" style={{ display: "block", marginBottom: 6 }}>
+                    Phone
+                  </label>
+                  <input
+                    value={form.phone}
+                    onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                    placeholder="(555) 555-5555"
+                  />
                 </div>
                 <div>
-                  <label className="small" style={{ display: "block", marginBottom: 6 }}>Email</label>
-                  <input value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="lead@email.com" />
+                  <label className="small" style={{ display: "block", marginBottom: 6 }}>
+                    Email
+                  </label>
+                  <input
+                    value={form.email}
+                    onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                    placeholder="lead@email.com"
+                  />
                 </div>
               </div>
 
               <div className="grid2">
                 <div>
-                  <label className="small" style={{ display: "block", marginBottom: 6 }}>Type</label>
+                  <label className="small" style={{ display: "block", marginBottom: 6 }}>
+                    Type
+                  </label>
                   <select value={form.leadType} onChange={(e) => setForm((f) => ({ ...f, leadType: e.target.value as any }))}>
                     <option value="buyer">Buyer</option>
                     <option value="seller">Seller</option>
@@ -443,7 +498,9 @@ export default function LeadsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="small" style={{ display: "block", marginBottom: 6 }}>Stage</label>
+                  <label className="small" style={{ display: "block", marginBottom: 6 }}>
+                    Stage
+                  </label>
                   <select value={form.stage} onChange={(e) => setForm((f) => ({ ...f, stage: e.target.value as any }))}>
                     <option value="new">New</option>
                     <option value="active">Active</option>
@@ -457,22 +514,34 @@ export default function LeadsPage() {
 
               <div className="grid2">
                 <div>
-                  <label className="small" style={{ display: "block", marginBottom: 6 }}>Source</label>
+                  <label className="small" style={{ display: "block", marginBottom: 6 }}>
+                    Source
+                  </label>
                   <input value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))} placeholder="Facebook / Website / Referral" />
                 </div>
                 <div>
-                  <label className="small" style={{ display: "block", marginBottom: 6 }}>Area (optional)</label>
+                  <label className="small" style={{ display: "block", marginBottom: 6 }}>
+                    Area (optional)
+                  </label>
                   <input value={form.location} onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))} placeholder="Neighborhood or city" />
                 </div>
               </div>
 
               <div>
-                <label className="small" style={{ display: "block", marginBottom: 6 }}>What are they looking for? (optional)</label>
-                <input value={form.propertyInterest} onChange={(e) => setForm((f) => ({ ...f, propertyInterest: e.target.value }))} placeholder="3 bed condo, listing, rental" />
+                <label className="small" style={{ display: "block", marginBottom: 6 }}>
+                  What are they looking for? (optional)
+                </label>
+                <input
+                  value={form.propertyInterest}
+                  onChange={(e) => setForm((f) => ({ ...f, propertyInterest: e.target.value }))}
+                  placeholder="3 bed condo, listing, rental"
+                />
               </div>
 
               <div>
-                <label className="small" style={{ display: "block", marginBottom: 6 }}>Notes (optional)</label>
+                <label className="small" style={{ display: "block", marginBottom: 6 }}>
+                  Notes (optional)
+                </label>
                 <textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Anything important to remember" />
               </div>
 
@@ -486,19 +555,12 @@ export default function LeadsPage() {
                 <button className="btn btnGhost" type="button" onClick={() => setShowAdd(false)}>
                   Cancel
                 </button>
-                <button
-                  className="btnPrimary"
-                  type="button"
-                  disabled={creating || (!form.phone && !form.email)}
-                  onClick={createLead}
-                >
+                <button className="btnPrimary" type="button" disabled={creating || (!form.phone && !form.email)} onClick={createLead}>
                   {creating ? "Adding..." : "Add lead"}
                 </button>
               </div>
 
-              <div className="small">
-                {(!form.phone && !form.email) ? "Add a phone or email so you can message this lead." : ""}
-              </div>
+              <div className="small">{!form.phone && !form.email ? "Add a phone or email so you can message this lead." : ""}</div>
             </div>
           </div>
         </>

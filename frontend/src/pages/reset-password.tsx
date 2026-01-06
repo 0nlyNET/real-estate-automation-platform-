@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import PublicHeader from "../components/PublicHeader";
+import Footer from "../components/Footer";
 import { resetPassword } from "../lib/auth";
 import { friendlyAuthError } from "../lib/friendlyError";
 
@@ -142,6 +143,10 @@ export default function ResetPasswordPage() {
               </Link>
               .
             </div>
+          </div>
+
+          <div style={{ marginTop: 24 }}>
+            <Footer />
           </div>
         </div>
       </main>

@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
 import ThemeToggle from "./ThemeToggle";
+import Footer from "./Footer";
+import { usePlan } from "./PlanContext";
 import { logout } from "../lib/auth";
 
 type NavItem = {
@@ -26,6 +28,7 @@ export default function AppShell(props: {
 }) {
   const router = useRouter();
   const path = router.pathname;
+  const plan = usePlan();
 
   return (
     <div className="appShell">
@@ -55,6 +58,16 @@ export default function AppShell(props: {
         </nav>
 
         <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
+          <Link href="/billing" className="card" style={{ padding: 12, textDecoration: "none" }}>
+            <div className="small" style={{ opacity: 0.85 }}>Current plan</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginTop: 4 }}>
+<div style={{ fontWeight: 950 }}>{plan.isPreview ? "Freemium Preview" : plan.planName}</div>
+              <span className="badge">{plan.isPreview ? "Upgrade" : "Manage"}</span>
+            </div>
+            <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+              {plan.isPreview ? "Replies + automations locked." : "Billing and limits."}
+            </div>
+          </Link>
           <ThemeToggle size="sm" />
           <button className="btn btnGhost" type="button" onClick={() => logout("/login")}>Logout</button>
           <div className="small">v0.1 MVP</div>
@@ -72,6 +85,8 @@ export default function AppShell(props: {
           </div>
 
           {props.children}
+
+          <Footer />
         </div>
       </main>
     </div>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import AppShell from "../components/AppShell";
+import { api } from "../lib/api";
 import { getToken } from "../lib/auth";
 import { copy } from "../content/copy";
 import { automationTemplates } from "../content/templates";
@@ -10,6 +11,9 @@ type SettingsState = {
   replyToEmail: string;
   quietHoursStart: string;
   quietHoursEnd: string;
+  timeZone: string;
+  bookingLink: string;
+  automationsEnabled: boolean;
   instantText: boolean;
   instantEmail: boolean;
   stopOnReply: boolean;
@@ -71,6 +75,9 @@ export default function SettingsPage() {
     replyToEmail: "",
     quietHoursStart: "21:00",
     quietHoursEnd: "08:00",
+    timeZone: "America/New_York",
+    bookingLink: "",
+    automationsEnabled: true,
     instantText: true,
     instantEmail: true,
     stopOnReply: true,
@@ -146,7 +153,7 @@ export default function SettingsPage() {
 
   async function persist() {
     try {
-      // Save tenant-level settings to backend
+      // Save tenant-level settings to backend (safe: backend may ignore unknown fields)
       await api.put("/settings/tenant", {
         timeZone: state.timeZone,
         quietHoursStart: state.quietHoursStart,

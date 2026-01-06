@@ -1,5 +1,6 @@
 import Head from 'next/head';
 import PublicHeader from '../components/PublicHeader';
+import Footer from '../components/Footer';
 
 export default function TermsPage() {
   return (
@@ -33,6 +34,8 @@ export default function TermsPage() {
             Questions? Contact the RealtyTechAI team.
           </p>
         </section>
+
+        <Footer />
       </main>
     </>
   );

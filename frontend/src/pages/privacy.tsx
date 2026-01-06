@@ -1,5 +1,6 @@
 import Head from 'next/head';
 import PublicHeader from '../components/PublicHeader';
+import Footer from '../components/Footer';
 
 export default function PrivacyPage() {
   return (
@@ -35,6 +36,7 @@ export default function PrivacyPage() {
             access.
           </p>
         </section>
+        <Footer />
       </main>
     </>
   );

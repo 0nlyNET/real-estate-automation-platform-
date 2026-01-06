@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/router";
 import PublicHeader from "../components/PublicHeader";
+import Footer from "../components/Footer";
 import { requestPasswordReset } from "../lib/auth";
 import { friendlyAuthError } from "../lib/friendlyError";
 
@@ -93,6 +94,10 @@ export default function ForgotPasswordPage() {
             <div className="small" style={{ marginTop: 12, textAlign: "center" }}>
               Didn’t get the email? Check spam or try again in a minute.
             </div>
+          </div>
+
+          <div style={{ marginTop: 24 }}>
+            <Footer />
           </div>
         </div>
       </main>

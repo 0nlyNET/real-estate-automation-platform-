@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Footer from '../components/Footer';
 
 const checklist = [
   'Create tenant & timezone',
@@ -12,7 +13,7 @@ const checklist = [
 
 export default function Onboarding() {
   return (
-    <main className="mx-auto max-w-4xl px-6 py-10">
+    <main className="container" style={{ paddingBottom: 70 }}>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Onboarding checklist</h1>
@@ -30,6 +31,10 @@ export default function Onboarding() {
           </li>
         ))}
       </ul>
+
+      <div style={{ marginTop: 24 }}>
+        <Footer />
+      </div>
     </main>
   );
 }

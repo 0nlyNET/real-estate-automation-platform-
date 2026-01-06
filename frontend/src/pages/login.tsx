@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import PublicHeader from "../components/PublicHeader";
+import Footer from "../components/Footer";
 import { login, getToken } from "../lib/auth";
 import { friendlyAuthError } from "../lib/friendlyError";
 
@@ -128,6 +129,14 @@ export default function LoginPage() {
             <div className="small" style={{ marginTop: 12, textAlign: "center" }}>
               Tip: if you don’t see texts sending yet, connect a business number in Settings.
             </div>
+          </div>
+
+          <div style={{ marginTop: 24 }}>
+            <Footer />
+          </div>
+
+          <div style={{ marginTop: 24 }}>
+            <Footer />
           </div>
         </div>
       </main>

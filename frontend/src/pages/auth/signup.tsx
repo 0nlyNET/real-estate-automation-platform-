@@ -3,7 +3,9 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import PublicHeader from "../../components/PublicHeader";
+import Footer from "../../components/Footer";
 import { api } from "../../lib/api";
+import { friendlyAuthError } from "../../lib/friendlyError";
 
 type FieldErrors = {
   fullName?: string;
@@ -47,7 +49,7 @@ export default function SignupPage() {
       });
       router.push("/login");
     } catch (err: any) {
-      setError(String(err?.response?.data?.message || err?.message || "Signup failed"));
+      setError(friendlyAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -156,6 +158,10 @@ export default function SignupPage() {
                   {loading ? "Creating..." : "Create account"}
                 </button>
 
+                <div className="small" style={{ marginTop: -2, opacity: 0.9 }}>
+                  Freemium is a read-only preview. No credit card required.
+                </div>
+
                 <div className="small">
                   Already have an account?{" "}
                   <Link href="/login" style={{ fontWeight: 800 }}>
@@ -167,6 +173,10 @@ export default function SignupPage() {
 
             <div className="small" style={{ marginTop: 12, textAlign: "center" }}>
               By creating an account, you agree to the Terms and Privacy Policy.
+            </div>
+
+            <div style={{ marginTop: 24 }}>
+              <Footer />
             </div>
           </div>
         </div>
