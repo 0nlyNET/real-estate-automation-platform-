@@ -2,19 +2,19 @@ FROM node:20-alpine
 
 WORKDIR /backend
 
-# Copy package files
+# Install dependencies
 COPY package*.json ./
-
-# Copy tsconfig BEFORE install so nest build works
-
-# Install deps (this triggers postinstall -> build)
 RUN npm install
 
-# Copy the rest of the backend
+# Copy source code
 COPY . .
 
-# Build explicitly (safe even if postinstall ran)
+# 🔥 IMPORTANT: compile NestJS TypeScript
+RUN npm run build
 
+# Expose backend port
 EXPOSE 4000
 
-CMD ["npm", "start"]
+# Run compiled app
+CMD ["node", "dist/main.js"]
+
