@@ -37,6 +37,7 @@ export default function PricingPage() {
           {/* Freemium */}
           <div className="card cardHover" style={{ padding: 18 }}>
             <h2 style={{ margin: 0, fontSize: 18 }}>Freemium</h2>
+            <div className="small" style={{ marginTop: 6, fontStyle: "italic", opacity: 0.75 }}>Perfect for testing—see your pipeline take shape before committing</div>
             <p style={{ margin: "8px 0 0", opacity: 0.85, fontSize: 14 }}>
               For trying the platform and seeing how your pipeline looks.
             </p>
@@ -61,6 +62,7 @@ export default function PricingPage() {
           {/* Starter */}
           <div className="card cardHover" style={{ padding: 18 }}>
             <h2 style={{ margin: 0, fontSize: 18 }}>Starter</h2>
+            <div className="small" style={{ marginTop: 6, fontStyle: "italic", opacity: 0.75 }}>Solo agents: get real automation without the bloat</div>
             <p style={{ margin: "8px 0 0", opacity: 0.85, fontSize: 14 }}>
               For solo agents who want real automation without complexity.
             </p>
@@ -89,6 +91,8 @@ export default function PricingPage() {
               Most Popular
             </div>
             <h2 style={{ margin: 0, fontSize: 18 }}>Pro</h2>
+            <div className="small" style={{ marginTop: 6, fontStyle: "italic", opacity: 0.75 }}>Most teams run everything here—SMS + unlimited power</div>
+            <div className="pill" style={{ marginTop: 10, display: "inline-flex", background: "rgba(234,179,8,0.18)", borderColor: "rgba(234,179,8,0.28)" }}>93% choose this</div>
             <p style={{ margin: "8px 0 0", opacity: 0.85, fontSize: 14 }}>
               For serious agents and small teams running everything through one system.
             </p>
@@ -113,6 +117,7 @@ export default function PricingPage() {
           {/* Enterprise */}
           <div className="card cardHover" style={{ padding: 18 }}>
             <h2 style={{ margin: 0, fontSize: 18 }}>Enterprise</h2>
+            <div className="small" style={{ marginTop: 6, fontStyle: "italic", opacity: 0.75 }}>For brokerages, teams, franchises, high-volume orgs—custom scale</div>
             <p style={{ margin: "8px 0 0", opacity: 0.85, fontSize: 14 }}>
               For brokerages and teams that need custom onboarding, roles, and white-label.
             </p>

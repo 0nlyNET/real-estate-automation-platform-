@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import PublicHeader from "../components/PublicHeader";
 import Footer from "../components/Footer";
+import PasswordField from "../components/PasswordField";
 import { login, getToken } from "../lib/auth";
 import { friendlyAuthError } from "../lib/friendlyError";
 
@@ -81,17 +82,7 @@ export default function LoginPage() {
                 </div>
 
                 <div>
-                  <label className="small" style={{ display: "block", marginBottom: 6 }}>
-                    Password
-                  </label>
-                  <input
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    type="password"
-                    placeholder="Your password"
-                    autoComplete="current-password"
-                    required
-                  />
+                  <PasswordField label="Password" value={password} onChange={setPassword} name="password" placeholder="Your password" />
                 </div>
 
                 {error ? (

@@ -20,6 +20,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { MeModule } from './modules/me/me.module';
 import { StatsModule } from './modules/stats/stats.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { StatsModule } from './modules/stats/stats.module';
     CrmModule,
     CalendarModule,
     SettingsModule,
+    IntegrationsModule,
     AuditModule,
     MeModule,
     StatsModule,

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import PublicHeader from "../../components/PublicHeader";
 import Footer from "../../components/Footer";
+import PasswordField from "../../components/PasswordField";
 import { api } from "../../lib/api";
 import { friendlyAuthError } from "../../lib/friendlyError";
 
@@ -109,75 +110,8 @@ export default function SignupPage() {
 
                 <div className="grid2">
                   <div>
-                    <label className="small" style={{ display: "block", marginBottom: 6 }}>
-                      Password
-                    </label>
-                    <input
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      type="password"
-                      placeholder="8+ characters"
-                      autoComplete="new-password"
-                      required
-                    />
-                    {fieldErrors.password ? <div className="small" style={{ marginTop: 6 }}>{fieldErrors.password}</div> : null}
-                  </div>
-
-                  <div>
-                    <label className="small" style={{ display: "block", marginBottom: 6 }}>
-                      Confirm password
-                    </label>
-                    <input
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      type="password"
-                      placeholder="Repeat password"
-                      autoComplete="new-password"
-                      required
-                    />
-                    {fieldErrors.confirmPassword ? (
-                      <div className="small" style={{ marginTop: 6 }}>{fieldErrors.confirmPassword}</div>
-                    ) : null}
-                  </div>
+                  <PasswordField label="Password" value={password} onChange={setPassword} name="password" placeholder="At least 8 characters" />
                 </div>
-
-                {error ? (
-                  <div
-                    className="card"
-                    style={{
-                      padding: 12,
-                      borderColor: "rgba(239, 68, 68, 0.35)",
-                      background: "color-mix(in srgb, rgba(239, 68, 68, 0.1) 35%, var(--card))",
-                    }}
-                  >
-                    {error}
-                  </div>
-                ) : null}
-
-                <button className="btnPrimary" type="submit" disabled={!canSubmit}>
-                  {loading ? "Creating..." : "Create account"}
-                </button>
-
-                <div className="small" style={{ marginTop: -2, opacity: 0.9 }}>
-                  Freemium is a read-only preview. No credit card required.
-                </div>
-
-                <div className="small">
-                  Already have an account?{" "}
-                  <Link href="/login" style={{ fontWeight: 800 }}>
-                    Log in
-                  </Link>
-                </div>
-              </form>
-            </div>
-
-            <div className="small" style={{ marginTop: 12, textAlign: "center" }}>
-              By creating an account, you agree to the Terms and Privacy Policy.
-            </div>
-
-            <div style={{ marginTop: 24 }}>
-              <Footer />
-            </div>
           </div>
         </div>
       </main>

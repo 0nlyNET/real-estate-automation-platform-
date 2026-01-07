@@ -84,9 +84,9 @@ export default function BillingPage() {
                 Status: <span className="badge">{plan.status}</span>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
-                <button className="btn" type="button" onClick={() => alert("Upgrade coming next")}>Upgrade</button>
-                <button className="btn btnGhost" type="button" onClick={() => alert("Payment update coming next")}>Update payment</button>
-                <button className="btn btnGhost" type="button" onClick={() => alert("Cancel flow coming next")}>Cancel plan</button>
+                <button className="btn" type="button" onClick={() => router.push("/checkout")}>Upgrade</button>
+                <button className="btn btnGhost" type="button" onClick={() => router.push("/checkout")}>Update payment</button>
+                <button className="btn btnGhost" type="button" onClick={() => alert("Cancel flow: Phase 2 (Stripe).")}>Cancel plan</button>
               </div>
             </div>
 

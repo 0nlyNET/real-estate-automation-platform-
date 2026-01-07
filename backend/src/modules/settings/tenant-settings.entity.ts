@@ -21,4 +21,26 @@ export class TenantSettings extends BaseEntity {
 
   @Column({ name: 'automations_enabled', type: 'bool', default: true })
   automationsEnabled!: boolean;
+  // -------- Integrations foundation (Phase 1) --------
+  @Column({ name: 'zapier_api_key_hash', type: 'varchar', nullable: true })
+  zapierApiKeyHash?: string;
+
+  @Column({ name: 'zapier_api_key_last4', type: 'varchar', nullable: true })
+  zapierApiKeyLast4?: string;
+
+  @Column({ name: 'webhook_url', type: 'varchar', nullable: true })
+  webhookUrl?: string;
+
+  @Column({ name: 'webhook_events', type: 'simple-array', nullable: true })
+  webhookEvents?: string[];
+
+  @Column({ name: 'facebook_connected', type: 'bool', default: false })
+  facebookConnected!: boolean;
+
+  @Column({ name: 'facebook_page_name', type: 'varchar', nullable: true })
+  facebookPageName?: string;
+
+  @Column({ name: 'facebook_form_id', type: 'varchar', nullable: true })
+  facebookFormId?: string;
+
 }

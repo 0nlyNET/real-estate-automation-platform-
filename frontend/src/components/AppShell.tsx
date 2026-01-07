@@ -13,11 +13,11 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard" },
-  { href: "/leads", label: "Leads" },
   { href: "/inbox", label: "Inbox" },
-  { href: "/reporting", label: "Reporting" },
+  { href: "/leads", label: "Pipeline" },
+  { href: "/integrations", label: "Integrations" },
+  { href: "/plan", label: "Plan" },
   { href: "/settings", label: "Settings" },
-  { href: "/billing", label: "Plan" },
 ];
 
 export default function AppShell(props: {

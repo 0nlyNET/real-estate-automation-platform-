@@ -12,6 +12,7 @@ import { LeadEvent } from './lead-event.entity';
 import { TenantsService } from '../tenants/tenants.service';
 import { MessagingService } from '../messaging/messaging.service';
 import { SequencesService } from '../sequences/sequences.service';
+import { IntegrationsService } from '../integrations/integrations.service';
 
 @Injectable()
 export class LeadsService {
@@ -27,6 +28,7 @@ export class LeadsService {
     private readonly tenantsService: TenantsService,
     private readonly messagingService: MessagingService,
     private readonly sequencesService: SequencesService,
+    private readonly integrationsService: IntegrationsService,
   ) {}
 
   // -------------------------
@@ -157,6 +159,21 @@ export class LeadsService {
 
     await this.logLeadEvent(saved, 'created', payload as any);
 
+    // Webhooks (Phase 1)
+    try {
+      await this.integrationsService.fireWebhook(saved.tenantId, 'lead_created', {
+        id: saved.id,
+        fullName: saved.fullName,
+        email: saved.email,
+        phone: saved.phone,
+        source: saved.source,
+        stage: saved.stage,
+        temperature: saved.temperature,
+      });
+    } catch (e) {
+      // swallow
+    }
+
     // Automation hooks
     await this.messagingService.queueInstantResponses(saved);
     await this.sequencesService.startForLead(saved);
@@ -214,6 +231,21 @@ export class LeadsService {
 
     const saved = await this.leadsRepository.save(lead as Lead);
     await this.logLeadEvent(saved, 'created', payload as any);
+
+    // Webhooks (Phase 1)
+    try {
+      await this.integrationsService.fireWebhook(saved.tenantId, 'lead_created', {
+        id: saved.id,
+        fullName: saved.fullName,
+        email: saved.email,
+        phone: saved.phone,
+        source: saved.source,
+        stage: saved.stage,
+        temperature: saved.temperature,
+      });
+    } catch (e) {
+      // swallow
+    }
 
     const trigger = (payload as any).triggerAutomation !== false;
     if (trigger) {
