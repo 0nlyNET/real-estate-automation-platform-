@@ -2,27 +2,28 @@ import Head from "next/head";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/router";
+
 import PublicHeader from "../../components/PublicHeader";
 import Footer from "../../components/Footer";
 import PasswordField from "../../components/PasswordField";
+
 import { api } from "../../lib/api";
 import { friendlyAuthError } from "../../lib/friendlyError";
 
 type FieldErrors = {
-  fullName?: string;
-  email?: string;
-  brokerage?: string;
   password?: string;
   confirmPassword?: string;
 };
 
 export default function SignupPage() {
   const router = useRouter();
+
   const [fullName, setFullName] = useState("");
   const [brokerage, setBrokerage] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -41,6 +42,7 @@ export default function SignupPage() {
 
     setLoading(true);
     setError("");
+
     try {
       await api.post("/auth/register", {
         email: email.trim(),
@@ -48,6 +50,7 @@ export default function SignupPage() {
         brokerage: brokerage.trim() || undefined,
         fullName: fullName.trim() || undefined,
       });
+
       router.push("/login");
     } catch (err: any) {
       setError(friendlyAuthError(err));
@@ -77,6 +80,18 @@ export default function SignupPage() {
               <p className="muted" style={{ margin: "6px 0 0" }}>
                 Add a lead and watch instant texting + follow-ups kick in.
               </p>
+
+              {error ? (
+                <div
+                  className="card"
+                  style={{ marginTop: 12, padding: 12, borderColor: "rgba(255,80,80,.25)", background: "rgba(255,80,80,.06)" }}
+                >
+                  <div style={{ fontWeight: 800 }}>Couldn’t create your account</div>
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    {error}
+                  </div>
+                </div>
+              ) : null}
 
               <form onSubmit={onSubmit} style={{ display: "grid", gap: 12, marginTop: 16 }}>
                 <div className="grid2">
@@ -110,10 +125,52 @@ export default function SignupPage() {
 
                 <div className="grid2">
                   <div>
-                  <PasswordField label="Password" value={password} onChange={setPassword} name="password" placeholder="At least 8 characters" />
+                    <PasswordField
+                      label="Password"
+                      value={password}
+                      onChange={setPassword}
+                      name="password"
+                      placeholder="At least 8 characters"
+                    />
+                    {fieldErrors.password ? (
+                      <div className="muted" style={{ marginTop: 6, color: "rgba(255,180,180,.9)" }}>
+                        {fieldErrors.password}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <PasswordField
+                      label="Confirm password"
+                      value={confirmPassword}
+                      onChange={setConfirmPassword}
+                      name="confirmPassword"
+                      placeholder="Repeat password"
+                    />
+                    {fieldErrors.confirmPassword ? (
+                      <div className="muted" style={{ marginTop: 6, color: "rgba(255,180,180,.9)" }}>
+                        {fieldErrors.confirmPassword}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
+
+                <button type="submit" className="btn" disabled={!canSubmit} style={{ width: "100%" }}>
+                  {loading ? "Creating account…" : "Create account"}
+                </button>
+
+                <div className="muted" style={{ textAlign: "center" }}>
+                  Already have an account?{" "}
+                  <Link href="/login" style={{ color: "var(--text)" }}>
+                    Log in
+                  </Link>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
+
+        <Footer />
       </main>
     </>
   );
