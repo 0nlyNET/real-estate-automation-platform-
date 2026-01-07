@@ -10,6 +10,7 @@ import { LeadsService } from './leads.service';
 import { TenantsModule } from '../tenants/tenants.module';
 import { MessagingModule } from '../messaging/messaging.module';
 import { MailModule } from '../../mail/mail.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { MailModule } from '../../mail/mail.module';
     MessagingModule,
     SequencesModule,
     MailModule,
+    IntegrationsModule,
   ],
   controllers: [LeadsController],
   providers: [LeadsService],

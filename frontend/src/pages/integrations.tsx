@@ -25,7 +25,7 @@ export default function IntegrationsPage() {
   });
   const authed = !!getToken();
 
-  const isPro = plan.plan === "Pro" || plan.plan === "Enterprise";
+  const isPro = plan.planName === "Pro" || plan.planName === "Enterprise";
   const canWebhooks = isPro;
 
   useEffect(() => {
