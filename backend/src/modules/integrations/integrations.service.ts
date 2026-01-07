@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DeepPartial, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 
@@ -14,10 +14,11 @@ export class IntegrationsService {
   ) {}
 
   async getOrCreateSettings(tenantId: string): Promise<TenantSettings> {
-    let s = await this.settingsRepo.findOne({ where: { tenantId } });
+    // Explicit typing avoids TypeORM overload confusion (array vs single entity).
+    let s: TenantSettings | null = await this.settingsRepo.findOne({ where: { tenantId } });
     if (!s) {
-      s = this.settingsRepo.create({ tenantId } as any);
-      s = await this.settingsRepo.save(s);
+      const created = this.settingsRepo.create({ tenantId } as DeepPartial<TenantSettings>);
+      s = await this.settingsRepo.save(created);
     }
     return s;
   }
