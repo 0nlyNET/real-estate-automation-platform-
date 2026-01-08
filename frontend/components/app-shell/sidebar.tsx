@@ -5,39 +5,41 @@ import type React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
-  Home,
-  Building2,
+  LayoutDashboard,
   Users,
-  Calendar,
+  Inbox,
+  Zap,
   FileText,
   BarChart3,
   Settings,
-  Zap,
-  MessageSquare,
-  FolderOpen,
+  Plug,
   ChevronDown,
+  CreditCard,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { useState } from "react"
+import { Logo } from "@/components/logo"
 
 const mainNavItems = [
-  { label: "Dashboard", href: "/", icon: Home },
-  { label: "Properties", href: "/properties", icon: Building2 },
-  { label: "Contacts", href: "/contacts", icon: Users },
-  { label: "Calendar", href: "/calendar", icon: Calendar },
-  { label: "Documents", href: "/documents", icon: FileText },
+  { label: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
+  { label: "Leads", href: "/app/leads", icon: Users },
+  { label: "Inbox", href: "/app/inbox", icon: Inbox },
 ]
 
 const automationItems = [
-  { label: "Workflows", href: "/workflows", icon: Zap },
-  { label: "Messages", href: "/messages", icon: MessageSquare },
-  { label: "Templates", href: "/templates", icon: FolderOpen },
+  { label: "Automations", href: "/app/automations", icon: Zap },
+  { label: "Templates", href: "/app/templates", icon: FileText },
 ]
 
 const analyticsItems = [
-  { label: "Reports", href: "/reports", icon: BarChart3 },
-  { label: "Settings", href: "/settings", icon: Settings },
+  { label: "Reporting", href: "/app/reports", icon: BarChart3 },
+  { label: "Integrations", href: "/app/integrations", icon: Plug },
+]
+
+const settingsItems = [
+  { label: "Settings", href: "/app/settings", icon: Settings },
+  { label: "Billing", href: "/app/billing", icon: CreditCard },
 ]
 
 interface SidebarProps {
@@ -57,7 +59,7 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
     item: { label: string; href: string; icon: React.ElementType }
     collapsed: boolean
   }) => {
-    const isActive = pathname === item.href
+    const isActive = pathname === item.href || pathname.startsWith(item.href + "/")
     const Icon = item.icon
 
     return (
@@ -67,7 +69,7 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
         className={cn(
           "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200",
           isActive
-            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+            ? "bg-sidebar-accent text-sidebar-primary"
             : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
         )}
       >
@@ -79,12 +81,8 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
 
   return (
     <div className="flex h-full flex-col bg-sidebar">
-      {/* Logo */}
-      <div className="flex h-16 items-center gap-2 border-b border-sidebar-border px-4">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-          <Building2 className="h-4 w-4 text-primary-foreground" />
-        </div>
-        {!isCollapsed && <span className="text-lg font-semibold text-sidebar-foreground">PropFlow</span>}
+      <div className="flex h-16 items-center border-b border-sidebar-border px-4">
+        <Logo href="/app/dashboard" size="md" showText={!isCollapsed} />
       </div>
 
       {/* Navigation */}
@@ -115,11 +113,11 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
         {!isCollapsed && (
           <Collapsible open={analyticsOpen} onOpenChange={setAnalyticsOpen} className="mt-6">
             <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-sidebar-foreground">
-              Analytics
+              Analytics & Settings
               <ChevronDown className={cn("h-3 w-3 transition-transform", analyticsOpen && "rotate-180")} />
             </CollapsibleTrigger>
             <CollapsibleContent className="space-y-1 pt-1">
-              {analyticsItems.map((item) => (
+              {[...analyticsItems, ...settingsItems].map((item) => (
                 <NavItem key={item.href} item={item} collapsed={isCollapsed} />
               ))}
             </CollapsibleContent>
@@ -128,7 +126,7 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
 
         {isCollapsed && (
           <div className="mt-6 space-y-1">
-            {[...automationItems, ...analyticsItems].map((item) => (
+            {[...automationItems, ...analyticsItems, ...settingsItems].map((item) => (
               <NavItem key={item.href} item={item} collapsed={isCollapsed} />
             ))}
           </div>
