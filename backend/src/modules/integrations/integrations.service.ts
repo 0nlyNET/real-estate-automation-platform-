@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DeepPartial, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { TenantSettings } from '../settings/tenant-settings.entity';
+import { encryptSecret, canEncrypt } from '../../common/secrets';
 
 @Injectable()
 export class IntegrationsService {
@@ -134,4 +135,67 @@ export class IntegrationsService {
     await this.settingsRepo.save(settings);
     return { ok: true };
   }
+
+  // --------------------------
+  // BYO providers (Twilio / SendGrid)
+  // --------------------------
+
+  async setTwilio(tenantId: string, payload: {
+    accountSid: string;
+    authToken: string;
+    fromNumber?: string;
+    messagingServiceSid?: string;
+  }) {
+    const settings = await this.getOrCreateSettings(tenantId);
+    if (!canEncrypt()) {
+      throw new Error('SECRET_ENCRYPTION_KEY not configured');
+    }
+
+    settings.twilioAccountSid = payload.accountSid?.trim();
+    settings.twilioAuthTokenEnc = encryptSecret(payload.authToken?.trim());
+    settings.twilioFromNumber = payload.fromNumber?.trim() || undefined;
+    settings.twilioMessagingServiceSid = payload.messagingServiceSid?.trim() || undefined;
+    await this.settingsRepo.save(settings);
+    return { ok: true };
+  }
+
+  async clearTwilio(tenantId: string) {
+    const settings = await this.getOrCreateSettings(tenantId);
+    settings.twilioAccountSid = undefined;
+    settings.twilioAuthTokenEnc = undefined;
+    settings.twilioFromNumber = undefined;
+    settings.twilioMessagingServiceSid = undefined;
+    await this.settingsRepo.save(settings);
+    return { ok: true };
+  }
+
+  async setSendgrid(tenantId: string, payload: { apiKey: string; fromEmail: string; fromName?: string }) {
+    const settings = await this.getOrCreateSettings(tenantId);
+    if (!canEncrypt()) {
+      throw new Error('SECRET_ENCRYPTION_KEY not configured');
+    }
+    settings.sendgridApiKeyEnc = encryptSecret(payload.apiKey?.trim());
+    settings.sendgridFromEmail = payload.fromEmail?.trim();
+    settings.sendgridFromName = payload.fromName?.trim() || undefined;
+    await this.settingsRepo.save(settings);
+    return { ok: true };
+  }
+
+  async clearSendgrid(tenantId: string) {
+    const settings = await this.getOrCreateSettings(tenantId);
+    settings.sendgridApiKeyEnc = undefined;
+    settings.sendgridFromEmail = undefined;
+    settings.sendgridFromName = undefined;
+    await this.settingsRepo.save(settings);
+    return { ok: true };
+  }
+
+  async setLeadSource(tenantId: string, payload: { leadSource: TenantSettings['leadSource']; otherLabel?: string }) {
+    const settings = await this.getOrCreateSettings(tenantId);
+    settings.leadSource = payload.leadSource;
+    settings.leadSourceOtherLabel = payload.otherLabel?.trim() || undefined;
+    await this.settingsRepo.save(settings);
+    return { ok: true };
+  }
+
 }

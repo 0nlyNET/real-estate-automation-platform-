@@ -156,3 +156,5 @@ out
 
 admin-ui/
 
+*.zip
+*.bak

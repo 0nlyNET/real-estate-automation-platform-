@@ -1,71 +1,60 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { TerminusModule } from '@nestjs/terminus';
-import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
-import ormconfig from './ormconfig';
-
-import { HealthModule } from './modules/health/health.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { UsersModule } from './modules/users/users.module';
-import { LeadsModule } from './modules/leads/leads.module';
-import { MessagingModule } from './modules/messaging/messaging.module';
-import { SequencesModule } from './modules/sequences/sequences.module';
-import { CrmModule } from './modules/crm/crm.module';
-import { CalendarModule } from './modules/calendar/calendar.module';
-import { SettingsModule } from './modules/settings/settings.module';
-import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { MeModule } from './modules/me/me.module';
-import { StatsModule } from './modules/stats/stats.module';
-import { IntegrationsModule } from './modules/integrations/integrations.module';
+import { BillingModule } from './modules/billing/billing.module';
+import { AppController } from './app.controller';
+
+function buildDatabaseConfig() {
+  const url = process.env.DATABASE_URL;
+  if (url) {
+    // Railway/Postgres style
+    const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
+    return {
+      type: 'postgres' as const,
+      url,
+      autoLoadEntities: true,
+      synchronize: true,
+      ssl: isLocal ? false : { rejectUnauthorized: false },
+    };
+  }
+
+  // Local docker-compose style
+  return {
+    type: 'postgres' as const,
+    host: process.env.DB_HOST || 'localhost',
+    port: Number(process.env.DB_PORT || 5432),
+    username: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD || 'postgres',
+    database: process.env.DB_NAME || 'real_estate',
+    autoLoadEntities: true,
+    synchronize: true,
+  };
+}
 
 @Module({
   imports: [
-    // ENV
-    ConfigModule.forRoot({ isGlobal: true }),
-
-    // RATE LIMITING (global baseline)
-    ThrottlerModule.forRoot([
-      {
-        ttl: Number(process.env.RATE_LIMIT_TTL ?? 60),
-        limit: Number(process.env.RATE_LIMIT_LIMIT ?? 60),
-      },
-    ]),
-
-    // DATABASE
-    TypeOrmModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: ormconfig,
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: [
+        // Prefer backend/.env, but allow root .env
+        'backend/.env',
+        '.env',
+      ],
     }),
 
-    // HEALTH
-    TerminusModule,
-    HealthModule,
+    TypeOrmModule.forRoot(buildDatabaseConfig()),
 
-    // CORE MODULES
     TenantsModule,
     UsersModule,
     AuthModule,
-    LeadsModule,
-    MessagingModule,
-    SequencesModule,
-    CrmModule,
-    CalendarModule,
-    SettingsModule,
-    IntegrationsModule,
-    AuditModule,
     MeModule,
-    StatsModule,
+    BillingModule,
   ],
-  providers: [
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerGuard,
-    },
-  ],
+  controllers: [AppController],
 })
 export class AppModule {}

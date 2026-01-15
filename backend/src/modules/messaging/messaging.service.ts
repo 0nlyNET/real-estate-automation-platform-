@@ -7,9 +7,11 @@ import axios from 'axios';
 import { Message } from './message.entity';
 import { Lead } from '../leads/lead.entity';
 import { Tenants } from '../tenants/tenant.entity';
+import { TenantSettings } from '../settings/tenant-settings.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { SequencesService } from '../sequences/sequences.service';
 import { isWithinQuietHours, nextAllowedSendTime } from '../../common/time';
+import { decryptSecret } from '../../common/secrets';
 
 @Injectable()
 export class MessagingService implements OnModuleInit {
@@ -22,6 +24,8 @@ export class MessagingService implements OnModuleInit {
     private readonly leadRepository: Repository<Lead>,
     @InjectRepository(Tenants)
     private readonly tenantRepository: Repository<Tenants>,
+    @InjectRepository(TenantSettings)
+    private readonly settingsRepository: Repository<TenantSettings>,
     @InjectRepository(LeadEvent)
     private readonly leadEventRepository: Repository<LeadEvent>,
     private readonly sequencesService: SequencesService,
@@ -34,6 +38,41 @@ export class MessagingService implements OnModuleInit {
         this.logger.error(`processPendingOutbound failed: ${e?.message ?? e}`),
       );
     }, 5_000);
+  }
+
+  private async getProviderConfig(tenantId: string) {
+    const settings = await this.settingsRepository.findOne({ where: { tenantId } as any });
+    const out: {
+      sendgrid?: { apiKey?: string; fromEmail?: string; fromName?: string };
+      twilio?: { accountSid?: string; authToken?: string; fromNumber?: string; messagingServiceSid?: string };
+    } = {};
+
+    if (settings?.sendgridApiKeyEnc || settings?.sendgridFromEmail) {
+      try {
+        out.sendgrid = {
+          apiKey: settings.sendgridApiKeyEnc ? decryptSecret(settings.sendgridApiKeyEnc) : undefined,
+          fromEmail: settings.sendgridFromEmail || undefined,
+          fromName: settings.sendgridFromName || undefined,
+        };
+      } catch {
+        // ignore invalid encryption config
+      }
+    }
+
+    if (settings?.twilioAccountSid || settings?.twilioAuthTokenEnc) {
+      try {
+        out.twilio = {
+          accountSid: settings.twilioAccountSid || undefined,
+          authToken: settings.twilioAuthTokenEnc ? decryptSecret(settings.twilioAuthTokenEnc) : undefined,
+          fromNumber: settings.twilioFromNumber || undefined,
+          messagingServiceSid: settings.twilioMessagingServiceSid || undefined,
+        };
+      } catch {
+        // ignore
+      }
+    }
+
+    return out;
   }
 
   // --------------------------
@@ -228,8 +267,12 @@ export class MessagingService implements OnModuleInit {
   }
 
   private async sendEmail(msg: Message) {
-    const apiKey = process.env.SENDGRID_API_KEY;
-    const from = process.env.MAIL_FROM_EMAIL;
+    const tenantId = msg.lead?.tenantId;
+    const cfg = tenantId ? await this.getProviderConfig(tenantId) : {};
+
+    const apiKey = cfg.sendgrid?.apiKey || process.env.SENDGRID_API_KEY;
+    const fromEmail = cfg.sendgrid?.fromEmail || process.env.MAIL_FROM_EMAIL || process.env.SENDGRID_FROM_EMAIL;
+    const fromName = cfg.sendgrid?.fromName || process.env.SENDGRID_FROM_NAME || 'RealtyTechAI';
 
     const to = msg.lead?.email;
     if (!to) {
@@ -239,21 +282,25 @@ export class MessagingService implements OnModuleInit {
       return;
     }
 
-    if (!apiKey || !from) throw new Error('Missing SENDGRID_API_KEY or MAIL_FROM_EMAIL');
+    if (!apiKey || !fromEmail) throw new Error('Missing SendGrid config');
 
     SendgridMail.setApiKey(apiKey);
     await SendgridMail.send({
       to,
-      from,
+      from: { email: fromEmail, name: fromName },
       subject: 'Quick follow-up',
       text: msg.body,
     });
   }
 
   private async sendSms(msg: Message) {
-    const sid = process.env.TWILIO_ACCOUNT_SID;
-    const token = process.env.TWILIO_AUTH_TOKEN;
-    const from = process.env.TWILIO_FROM_NUMBER;
+    const tenantId = msg.lead?.tenantId;
+    const cfg = tenantId ? await this.getProviderConfig(tenantId) : {};
+
+    const sid = cfg.twilio?.accountSid || process.env.TWILIO_ACCOUNT_SID;
+    const token = cfg.twilio?.authToken || process.env.TWILIO_AUTH_TOKEN;
+    const from = cfg.twilio?.fromNumber || process.env.TWILIO_FROM_NUMBER;
+    const messagingServiceSid = cfg.twilio?.messagingServiceSid;
 
     const to = msg.lead?.phone;
     if (!to) {
@@ -263,15 +310,14 @@ export class MessagingService implements OnModuleInit {
       return;
     }
 
-    if (!sid || !token || !from) {
-      throw new Error('Missing TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER');
-    }
+    if (!sid || !token) throw new Error('Missing Twilio config');
+    if (!from && !messagingServiceSid) throw new Error('Missing Twilio From number or Messaging Service SID');
 
     const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`;
     const data = new URLSearchParams({
-      From: from,
       To: to,
       Body: msg.body,
+      ...(messagingServiceSid ? { MessagingServiceSid: messagingServiceSid } : { From: from as string }),
     });
 
     const resp = await axios.post(url, data, {

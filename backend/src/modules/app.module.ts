@@ -1,3 +1,4 @@
+import { join } from 'path';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -14,11 +15,15 @@ import { CalendarModule } from './calendar/calendar.module';
 import { SettingsModule } from './settings/settings.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
+import { BillingModule } from './billing/billing.module';
 
 @Module({
   imports: [
     // ENV
-    ConfigModule.forRoot({ isGlobal: true }),
+ConfigModule.forRoot({
+  isGlobal: true,
+  envFilePath: join(process.cwd(), '.env'),
+}),
 
     // DATABASE (Railway Postgres)
     TypeOrmModule.forRoot({
@@ -46,6 +51,7 @@ import { AuthModule } from './auth/auth.module';
     SettingsModule,
     AuditModule,
     AuthModule,
+    BillingModule,
 
     // ❌ QueueModule / Redis intentionally removed for Railway
   ],

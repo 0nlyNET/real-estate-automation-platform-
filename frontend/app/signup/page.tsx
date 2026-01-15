@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast"
 import { Eye, EyeOff, Loader2, ArrowRight, Check, X } from "lucide-react"
 import { Footer } from "@/components/ui/footer"
 import { Logo } from "@/components/logo"
+import { apiFetch } from "@/lib/api"
 
 const passwordRequirements = [
   { label: "At least 8 characters", test: (p: string) => p.length >= 8 },
@@ -76,8 +77,23 @@ export default function SignupPage() {
 
     setLoading(true)
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    try {
+      const res = await apiFetch<{ accessToken: string }>("/auth/register", {
+        method: "POST",
+        json: {
+          email: formData.email,
+          password: formData.password,
+          brokerage: "",
+        },
+      })
+
+      localStorage.setItem("rta_token", res.accessToken)
+      localStorage.setItem("rta_pending_email", formData.email)
+    } catch (err: any) {
+      setLoading(false)
+      setError(err?.message || "Signup failed")
+      return
+    }
 
     toast({
       title: "Account created!",

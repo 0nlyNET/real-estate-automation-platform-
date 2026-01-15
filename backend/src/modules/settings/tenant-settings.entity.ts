@@ -43,4 +43,33 @@ export class TenantSettings extends BaseEntity {
   @Column({ name: 'facebook_form_id', type: 'varchar', nullable: true })
   facebookFormId?: string;
 
+  // -------- Messaging providers (Bring Your Own) --------
+  @Column({ name: 'twilio_account_sid', type: 'varchar', nullable: true })
+  twilioAccountSid?: string;
+
+  @Column({ name: 'twilio_auth_token_enc', type: 'varchar', nullable: true })
+  twilioAuthTokenEnc?: string;
+
+  @Column({ name: 'twilio_from_number', type: 'varchar', nullable: true })
+  twilioFromNumber?: string;
+
+  @Column({ name: 'twilio_messaging_service_sid', type: 'varchar', nullable: true })
+  twilioMessagingServiceSid?: string;
+
+  @Column({ name: 'sendgrid_api_key_enc', type: 'varchar', nullable: true })
+  sendgridApiKeyEnc?: string;
+
+  @Column({ name: 'sendgrid_from_email', type: 'varchar', nullable: true })
+  sendgridFromEmail?: string;
+
+  @Column({ name: 'sendgrid_from_name', type: 'varchar', nullable: true })
+  sendgridFromName?: string;
+
+  // Lead source selection (MVP)
+  @Column({ name: 'lead_source', type: 'varchar', nullable: true })
+  leadSource?: 'zapier_webhook' | 'facebook_lead_ads' | 'website_form' | 'other';
+
+  @Column({ name: 'lead_source_other_label', type: 'varchar', nullable: true })
+  leadSourceOtherLabel?: string;
+
 }

@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
 import { Loader2, ArrowRight, ArrowLeft, CheckCircle2 } from "lucide-react"
 import { Footer } from "@/components/ui/footer"
+import { apiFetch } from "@/lib/api"
 
 export default function ForgotPasswordPage() {
   const { toast } = useToast()
@@ -32,8 +33,14 @@ export default function ForgotPasswordPage() {
 
     setLoading(true)
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    try {
+      await apiFetch<{ ok: boolean }>("/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      })
+    } catch {
+      // Always show success so users can't enumerate accounts.
+    }
 
     setLoading(false)
     setSent(true)

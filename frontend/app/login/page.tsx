@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast"
 import { Eye, EyeOff, Loader2, ArrowRight } from "lucide-react"
 import { Footer } from "@/components/ui/footer"
 import { Logo } from "@/components/logo"
+import { apiFetch } from "@/lib/api"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -35,8 +36,18 @@ export default function LoginPage() {
       return
     }
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    try {
+      const res = await apiFetch<{ accessToken: string }>("/auth/login", {
+        method: "POST",
+        json: { email, password },
+      })
+      localStorage.setItem("rta_token", res.accessToken)
+      localStorage.setItem("rta_pending_email", email)
+    } catch (err: any) {
+      setLoading(false)
+      setError(err?.message || "Login failed")
+      return
+    }
 
     // Mock success
     toast({

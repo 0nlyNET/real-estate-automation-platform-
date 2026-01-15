@@ -54,4 +54,47 @@ export class IntegrationsController {
     const tenantId = this.tenantId(req);
     return this.integrations.selectFacebookFormStub(tenantId, body.formId);
   }
+
+  // BYO Twilio / SendGrid (MVP)
+  @Put('twilio')
+  async setTwilio(@Req() req: any, @Body() body: any) {
+    const tenantId = this.tenantId(req);
+    return this.integrations.setTwilio(tenantId, {
+      accountSid: body.accountSid,
+      authToken: body.authToken,
+      fromNumber: body.fromNumber,
+      messagingServiceSid: body.messagingServiceSid,
+    });
+  }
+
+  @Post('twilio/clear')
+  async clearTwilio(@Req() req: any) {
+    const tenantId = this.tenantId(req);
+    return this.integrations.clearTwilio(tenantId);
+  }
+
+  @Put('sendgrid')
+  async setSendgrid(@Req() req: any, @Body() body: any) {
+    const tenantId = this.tenantId(req);
+    return this.integrations.setSendgrid(tenantId, {
+      apiKey: body.apiKey,
+      fromEmail: body.fromEmail,
+      fromName: body.fromName,
+    });
+  }
+
+  @Post('sendgrid/clear')
+  async clearSendgrid(@Req() req: any) {
+    const tenantId = this.tenantId(req);
+    return this.integrations.clearSendgrid(tenantId);
+  }
+
+  @Put('lead-source')
+  async setLeadSource(@Req() req: any, @Body() body: any) {
+    const tenantId = this.tenantId(req);
+    return this.integrations.setLeadSource(tenantId, {
+      leadSource: body.leadSource,
+      otherLabel: body.otherLabel,
+    });
+  }
 }

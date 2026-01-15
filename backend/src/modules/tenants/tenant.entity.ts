@@ -1,37 +1,34 @@
-import { Column, Entity, OneToMany } from 'typeorm';
-import { BaseEntity } from '../../common/base.entity';
+import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
 import { User } from '../users/user.entity';
-import { Lead } from '../leads/lead.entity';
-import { Credential } from '../settings/credential.entity';
 
-@Entity({ name: 'tenants' })
-export class Tenants extends BaseEntity {
-  @Column({ unique: true })
+export type Plan = 'trial' | 'pro' | 'teams';
+
+@Entity('tenants')
+export class Tenant {
+  @PrimaryGeneratedColumn('uuid')
+  id!: string;
+
+  @Column({ type: 'varchar', length: 200, default: 'My Workspace' })
   name!: string;
 
-  @Column({ unique: true })
-  slug!: string;
+  @Column({ type: 'varchar', length: 32, default: 'trial' })
+  plan!: Plan;
 
-  @Column({ name: 'timezone', default: 'America/New_York' })
-  timezone!: string;
+  @Column({ type: 'varchar', length: 32, default: 'trialing' })
+  status!: string;
 
-  @Column({ name: 'quiet_hours_start', nullable: true })
-  quietHoursStart?: string;
+  @Column({ type: 'timestamptz', nullable: true })
+  trialEndsAt!: Date | null;
 
-  @Column({ name: 'quiet_hours_end', nullable: true })
-  quietHoursEnd?: string;
-@Column({ name: 'notification_email', nullable: true })
-notificationEmail?: string;
+  @Column({ type: 'timestamptz', nullable: true })
+  currentPeriodEnd!: Date | null;
 
-@Column({ name: 'booking_link', nullable: true })
-bookingLink?: string;
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  stripeCustomerId!: string | null;
 
-  @OneToMany(() => User, (user: any) => user.tenant)
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  stripeSubscriptionId!: string | null;
+
+  @OneToMany(() => User, (u) => u.tenant)
   users!: User[];
-
-  @OneToMany(() => Lead, (lead) => lead.tenant)
-  leads!: Lead[];
-
-  @OneToMany(() => Credential, (credential) => credential.tenant)
-  credentials!: Credential[];
 }

@@ -21,46 +21,15 @@ import {
 } from "lucide-react"
 
 const stats = [
-  { label: "New Leads Today", value: "12", change: "+3", icon: Users, trend: "up" },
-  { label: "Unread Messages", value: "8", change: "+5", icon: MessageSquare, trend: "up" },
-  { label: "Avg Response Time", value: "32s", change: "-8s", icon: Clock, trend: "up" },
-  { label: "Conversion Rate", value: "18.5%", change: "+2.1%", icon: TrendingUp, trend: "up" },
+  { label: "New Leads Today", value: "0", change: "", icon: Users, trend: "flat" },
+  { label: "Unread Messages", value: "0", change: "", icon: MessageSquare, trend: "flat" },
+  { label: "Avg Response Time", value: "0s", change: "", icon: Clock, trend: "flat" },
+  { label: "Conversion Rate", value: "0%", change: "", icon: TrendingUp, trend: "flat" },
 ]
 
-const nextBestActions = [
-  {
-    id: 1,
-    type: "urgent",
-    title: "3 leads waiting for response",
-    description: "Leads from Facebook Ads haven't been contacted yet",
-    action: "Respond now",
-    href: "/app/inbox",
-  },
-  {
-    id: 2,
-    type: "reminder",
-    title: "Follow up with Sarah Johnson",
-    description: "Scheduled for today at 2:00 PM",
-    action: "View lead",
-    href: "/app/leads",
-  },
-  {
-    id: 3,
-    type: "suggestion",
-    title: "Enable auto-reply for weekends",
-    description: "You missed 4 leads last weekend",
-    action: "Setup now",
-    href: "/app/automations",
-  },
-]
+const nextBestActions: any[] = []
 
-const recentActivity = [
-  { id: 1, type: "lead", message: "New lead: Mike Chen from Facebook Ads", time: "5 min ago" },
-  { id: 2, type: "message", message: "John Smith replied to your message", time: "12 min ago" },
-  { id: 3, type: "booking", message: "Appointment booked with Lisa Park", time: "1 hour ago" },
-  { id: 4, type: "automation", message: "Follow-up sequence completed for 3 leads", time: "2 hours ago" },
-  { id: 5, type: "lead", message: "New lead: Emily Davis from website form", time: "3 hours ago" },
-]
+const recentActivity: any[] = []
 
 const quickActions = [
   { label: "Send Message", icon: Send, href: "/app/inbox" },
@@ -137,9 +106,7 @@ export default function DashboardPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="text-2xl font-bold text-card-foreground">{stat.value}</div>
-                    <p className="text-xs text-muted-foreground">
-                      <span className="text-primary">{stat.change}</span> from yesterday
-                    </p>
+                    <p className="text-xs text-muted-foreground">No data yet</p>
                   </CardContent>
                 </Card>
               ))}
@@ -165,40 +132,16 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   ))
-                : nextBestActions.map((action) => (
-                    <div
-                      key={action.id}
-                      className="flex items-start gap-4 rounded-lg border border-border bg-secondary/30 p-4 transition-all hover:border-primary/50 hover:bg-secondary/50"
-                    >
-                      <div
-                        className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                          action.type === "urgent"
-                            ? "bg-destructive/10 text-destructive"
-                            : action.type === "reminder"
-                              ? "bg-yellow-500/10 text-yellow-500"
-                              : "bg-primary/10 text-primary"
-                        }`}
-                      >
-                        {action.type === "urgent" ? (
-                          <AlertCircle className="h-5 w-5" />
-                        ) : action.type === "reminder" ? (
-                          <Clock className="h-5 w-5" />
-                        ) : (
-                          <Zap className="h-5 w-5" />
-                        )}
-                      </div>
-                      <div className="flex-1">
-                        <h4 className="text-sm font-medium text-foreground">{action.title}</h4>
-                        <p className="text-xs text-muted-foreground">{action.description}</p>
-                      </div>
-                      <Button size="sm" variant="outline" asChild className="bg-transparent shrink-0">
-                        <Link href={action.href}>
-                          {action.action}
-                          <ArrowRight className="ml-1 h-3 w-3" />
-                        </Link>
-                      </Button>
-                    </div>
-                  ))}
+                : nextBestActions.length ? (
+                  nextBestActions.map((action) => (
+                    <div key={action.id} />
+                  ))
+                ) : (
+                  <div className="rounded-lg border border-border p-4 text-sm text-muted-foreground">
+                    No actions yet. Connect an integration and add your first lead to see recommendations.
+                  </div>
+                )
+              }
             </CardContent>
           </Card>
 
@@ -224,28 +167,16 @@ export default function DashboardPage() {
                         </div>
                       </div>
                     ))
-                  : recentActivity.map((activity) => (
-                      <div
-                        key={activity.id}
-                        className="flex items-center gap-4 rounded-lg p-2 transition-colors hover:bg-secondary/50"
-                      >
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10">
-                          {activity.type === "lead" ? (
-                            <Users className="h-4 w-4 text-primary" />
-                          ) : activity.type === "message" ? (
-                            <MessageSquare className="h-4 w-4 text-primary" />
-                          ) : activity.type === "booking" ? (
-                            <Calendar className="h-4 w-4 text-primary" />
-                          ) : (
-                            <CheckCircle2 className="h-4 w-4 text-primary" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="truncate text-sm text-foreground">{activity.message}</p>
-                          <p className="text-xs text-muted-foreground">{activity.time}</p>
-                        </div>
-                      </div>
-                    ))}
+                  : recentActivity.length ? (
+                  recentActivity.map((activity) => (
+                    <div key={activity.id} />
+                  ))
+                ) : (
+                  <div className="rounded-lg border border-border p-4 text-sm text-muted-foreground">
+                    No activity yet.
+                  </div>
+                )
+              }
               </div>
             </CardContent>
           </Card>
