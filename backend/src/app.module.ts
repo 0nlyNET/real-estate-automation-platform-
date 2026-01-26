@@ -44,32 +44,39 @@ import { TenantQuietHours } from './modules/compliance/tenant-quiet-hours.entity
 
 function buildDatabaseConfig() {
   const url = process.env.DATABASE_URL;
+
+  const entities = [
+    Tenant,
+    User,
+    Team,
+    Lead,
+    LeadEvent,
+    Message,
+    Sequence,
+    SequenceEnrollment,
+    SequenceStep,
+    Credential,
+    TenantSettings,
+
+    RoutingRule,
+    RoutingAssignmentLog,
+    AgentPresence,
+    ComplianceOptOut,
+    ComplianceEvent,
+    TenantQuietHours,
+  ];
+
+  // Safety: never let production auto-sync schema.
+  // If you need sync locally, set TYPEORM_SYNC=true.
   if (url) {
     const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
+    const allowSync = process.env.TYPEORM_SYNC === 'true' && isLocal;
+
     return {
       type: 'postgres' as const,
       url,
-      entities: [
-        Tenant,
-        User,
-        Team,
-        Lead,
-        LeadEvent,
-        Message,
-        Sequence,
-        SequenceEnrollment,
-        SequenceStep,
-        Credential,
-        TenantSettings,
-
-        RoutingRule,
-        RoutingAssignmentLog,
-        AgentPresence,
-        ComplianceOptOut,
-        ComplianceEvent,
-        TenantQuietHours,
-      ],
-      synchronize: true,
+      entities,
+      synchronize: allowSync,
       ssl: isLocal ? false : { rejectUnauthorized: false },
     };
   }
@@ -81,27 +88,8 @@ function buildDatabaseConfig() {
     username: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
     database: process.env.DB_NAME || 'real_estate',
-    entities: [
-      Tenant,
-      User,
-      Team,
-      Lead,
-      LeadEvent,
-      Message,
-      Sequence,
-      SequenceEnrollment,
-      SequenceStep,
-      Credential,
-      TenantSettings,
-
-      RoutingRule,
-      RoutingAssignmentLog,
-      AgentPresence,
-      ComplianceOptOut,
-      ComplianceEvent,
-      TenantQuietHours,
-    ],
-    synchronize: true,
+    entities,
+    synchronize: process.env.TYPEORM_SYNC === 'true',
   };
 }
 

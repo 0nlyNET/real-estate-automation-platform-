@@ -25,7 +25,8 @@ import { WebhooksModule } from './webhooks/webhooks.module';
       type: 'postgres',
       url: process.env.DATABASE_URL,
       autoLoadEntities: true,
-      synchronize: true,
+      // Safety: never sync schema unless you explicitly opt in.
+      synchronize: process.env.TYPEORM_SYNC === 'true',
       ssl: process.env.DATABASE_SSL === 'false'
         ? false
         : { rejectUnauthorized: false },
