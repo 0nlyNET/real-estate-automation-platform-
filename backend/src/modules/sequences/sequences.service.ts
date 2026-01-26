@@ -11,7 +11,7 @@ import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 
 import { Message } from '../messaging/message.entity';
-import { Tenants } from '../tenants/tenant.entity';
+import { Tenant } from '../tenants/tenant.entity';
 
 import { isWithinQuietHours, nextAllowedSendTime } from '../../common/time';
 
@@ -31,8 +31,8 @@ export class SequencesService implements OnModuleInit {
     private readonly messageRepository: Repository<Message>,
     @InjectRepository(LeadEvent)
     private readonly leadEventRepository: Repository<LeadEvent>,
-    @InjectRepository(Tenants)
-    private readonly tenantRepository: Repository<Tenants>,
+    @InjectRepository(Tenant)
+    private readonly tenantRepository: Repository<Tenant>,
     @InjectRepository(TenantSettings)
     private readonly tenantSettingsRepository: Repository<TenantSettings>,
     @InjectRepository(Lead)

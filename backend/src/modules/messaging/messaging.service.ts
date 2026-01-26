@@ -6,7 +6,7 @@ import axios from 'axios';
 
 import { Message } from './message.entity';
 import { Lead } from '../leads/lead.entity';
-import { Tenants } from '../tenants/tenant.entity';
+import { Tenant } from '../tenants/tenant.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { SequencesService } from '../sequences/sequences.service';
@@ -22,8 +22,8 @@ export class MessagingService implements OnModuleInit {
     private readonly messageRepository: Repository<Message>,
     @InjectRepository(Lead)
     private readonly leadRepository: Repository<Lead>,
-    @InjectRepository(Tenants)
-    private readonly tenantRepository: Repository<Tenants>,
+    @InjectRepository(Tenant)
+    private readonly tenantRepository: Repository<Tenant>,
     @InjectRepository(TenantSettings)
     private readonly settingsRepository: Repository<TenantSettings>,
     @InjectRepository(LeadEvent)
@@ -96,6 +96,7 @@ export class MessagingService implements OnModuleInit {
       const body = `Hey ${lead.fullName}, thanks for reaching out. Here’s my booking link: ${bookingLink}`;
 
       const now = new Date();
+      const timeZone = tenant.timezone || 'America/New_York';
 
       const hasQuietHours =
         !!tenant.timezone && !!tenant.quietHoursStart && !!tenant.quietHoursEnd;
@@ -104,7 +105,7 @@ export class MessagingService implements OnModuleInit {
         hasQuietHours &&
         isWithinQuietHours({
           now,
-          timeZone: tenant.timezone,
+          timeZone,
           quietStart: tenant.quietHoursStart,
           quietEnd: tenant.quietHoursEnd,
         });
@@ -112,7 +113,7 @@ export class MessagingService implements OnModuleInit {
       const scheduledAt = inQuiet
         ? nextAllowedSendTime({
             now,
-            timeZone: tenant.timezone,
+            timeZone,
             quietStart: tenant.quietHoursStart,
             quietEnd: tenant.quietHoursEnd,
           })
@@ -328,7 +329,7 @@ export class MessagingService implements OnModuleInit {
     msg.providerMessageId = resp.data?.sid;
   }
 
-  private async loadTenantForLead(lead: Lead): Promise<Tenants | null> {
+  private async loadTenantForLead(lead: Lead): Promise<Tenant | null> {
     if ((lead as any).tenant) return (lead as any).tenant;
     const tenantId = (lead as any).tenantId;
     if (!tenantId) return null;

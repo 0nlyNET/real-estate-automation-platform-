@@ -7,6 +7,19 @@ export type ApiFetchOptions = RequestInit & {
   auth?: boolean
 }
 
+export class ApiError extends Error {
+  status: number
+  url: string
+  detail?: string
+
+  constructor(params: { status: number; url: string; message: string; detail?: string }) {
+    super(params.message)
+    this.status = params.status
+    this.url = params.url
+    this.detail = params.detail
+  }
+}
+
 function getToken() {
   if (typeof window === "undefined") return null
   return localStorage.getItem("rta_token")
@@ -18,15 +31,26 @@ export async function apiFetch<T = any>(path: string, options: ApiFetchOptions =
 
   const token = auth ? getToken() : null
 
-  const res = await fetch(`${API_BASE_URL}${urlPath}`, {
-    ...rest,
-    headers: {
-      ...(json ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(headers || {}),
-    },
-    body: json ? JSON.stringify(json) : rest.body,
-  })
+  let res: Response
+  const fullUrl = `${API_BASE_URL}${urlPath}`
+  try {
+    res = await fetch(fullUrl, {
+      ...rest,
+      headers: {
+        ...(json ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(headers || {}),
+      },
+      body: json ? JSON.stringify(json) : rest.body,
+    })
+  } catch (error) {
+    throw new ApiError({
+      status: 0,
+      url: fullUrl,
+      message: "Network/CORS error",
+      detail: error instanceof Error ? error.message : undefined,
+    })
+  }
 
   const text = await res.text().catch(() => "")
   let data: any = null
@@ -43,7 +67,13 @@ export async function apiFetch<T = any>(path: string, options: ApiFetchOptions =
     const msg =
       (data && (data.message || data.error)) ||
       `Request failed: ${res.status}`
-    throw new Error(Array.isArray(msg) ? msg.join(", ") : msg)
+    const message = Array.isArray(msg) ? msg.join(", ") : msg
+    throw new ApiError({
+      status: res.status,
+      url: fullUrl,
+      message,
+      detail: typeof data === "string" ? data : undefined,
+    })
   }
 
   return data as T

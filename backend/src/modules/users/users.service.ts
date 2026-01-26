@@ -33,6 +33,7 @@ export class UsersService {
       isEmailVerified: false,
       emailVerifyToken: verifyToken,
       emailVerifyTokenExpiresAt: expires,
+      role: 'USER',
       tenant: params.tenant,
     });
 

@@ -8,6 +8,9 @@ import { AuthModule } from './modules/auth/auth.module';
 import { MeModule } from './modules/me/me.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { AppController } from './app.controller';
+import { AgencyApplicationsModule } from './modules/agency-applications/agency-applications.module';
+import { AgencyApplication } from './modules/agency-applications/agency-application.entity';
+import { AgencyModule } from './modules/agency/agency.module';
 
 function buildDatabaseConfig() {
   const url = process.env.DATABASE_URL;
@@ -17,6 +20,7 @@ function buildDatabaseConfig() {
     return {
       type: 'postgres' as const,
       url,
+      entities: [AgencyApplication],
       autoLoadEntities: true,
       synchronize: true,
       ssl: isLocal ? false : { rejectUnauthorized: false },
@@ -31,6 +35,7 @@ function buildDatabaseConfig() {
     username: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
     database: process.env.DB_NAME || 'real_estate',
+    entities: [AgencyApplication],
     autoLoadEntities: true,
     synchronize: true,
   };
@@ -54,6 +59,8 @@ function buildDatabaseConfig() {
     AuthModule,
     MeModule,
     BillingModule,
+    AgencyApplicationsModule,
+    AgencyModule,
   ],
   controllers: [AppController],
 })

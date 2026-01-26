@@ -7,6 +7,18 @@ export class MeController {
   constructor(private readonly tenants: TenantsService) {}
 
   @UseGuards(JwtAuthGuard)
+  @Get()
+  profile(@Req() req: any) {
+    return {
+      userId: req.user?.userId,
+      tenantId: req.user?.tenantId,
+      email: req.user?.email,
+      role: req.user?.role || 'USER',
+      impersonatorId: req.user?.impersonatorId || null,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('plan')
   async plan(@Req() req: any) {
     const tenantId = req.user?.tenantId;

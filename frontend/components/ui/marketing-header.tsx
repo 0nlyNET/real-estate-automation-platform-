@@ -9,9 +9,9 @@ import { cn } from "@/lib/utils"
 import { Logo } from "@/components/logo"
 
 const navItems = [
-  { label: "Features", href: "/features" },
-  { label: "Use Cases", href: "/use-cases" },
-  { label: "Pricing", href: "/pricing" },
+  { label: "Services", href: "/services" },
+  { label: "Case Studies", href: "/case-studies" },
+  { label: "Apply", href: "/apply" },
   { label: "Contact", href: "/contact" },
 ]
 
@@ -43,10 +43,10 @@ export function MarketingHeader() {
 
         <div className="hidden items-center gap-3 md:flex">
           <Button variant="ghost" asChild className="text-muted-foreground hover:text-foreground">
-            <Link href="/login">Log in</Link>
+            <Link href="/login">Client login</Link>
           </Button>
           <Button asChild className="bg-primary text-primary-foreground hover:bg-primary/90">
-            <Link href="/signup">Start free trial</Link>
+            <Link href="/book">Book a call</Link>
           </Button>
         </div>
 
@@ -75,10 +75,10 @@ export function MarketingHeader() {
             ))}
             <div className="mt-4 flex flex-col gap-2 border-t border-border pt-4">
               <Button variant="ghost" asChild className="justify-start text-muted-foreground">
-                <Link href="/login">Log in</Link>
+                <Link href="/login">Client login</Link>
               </Button>
               <Button asChild className="bg-primary text-primary-foreground">
-                <Link href="/signup">Start free trial</Link>
+                <Link href="/book">Book a call</Link>
               </Button>
             </div>
           </nav>

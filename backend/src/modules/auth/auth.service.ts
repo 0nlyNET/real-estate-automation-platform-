@@ -15,7 +15,12 @@ export class AuthService {
     const tenant = await this.tenants.createTrialTenant(params.brokerage || 'My Workspace');
     const { user, verifyToken } = await this.users.createUser({ email: params.email, password: params.password, tenant });
 
-    const accessToken = await this.jwt.signAsync({ sub: user.id, tenantId: tenant.id, email: user.email });
+    const accessToken = await this.jwt.signAsync({
+      sub: user.id,
+      tenantId: tenant.id,
+      email: user.email,
+      role: user.role,
+    });
 
     // Dev-friendly verify link (useful even if you don't have SendGrid wired yet)
     const frontend = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -33,7 +38,12 @@ export class AuthService {
     const ok = await this.users.validatePassword(user, params.password);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
 
-    const accessToken = await this.jwt.signAsync({ sub: user.id, tenantId: user.tenant.id, email: user.email });
+    const accessToken = await this.jwt.signAsync({
+      sub: user.id,
+      tenantId: user.tenant.id,
+      email: user.email,
+      role: user.role,
+    });
     return { accessToken };
   }
 
