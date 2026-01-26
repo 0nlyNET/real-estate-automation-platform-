@@ -1,43 +1,61 @@
-import { Body, Controller, Headers, Post, Req, UseGuards } from '@nestjs/common';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Response } from 'express';
+import Stripe from 'stripe';
 import { BillingService } from './billing.service';
-import { CheckoutSessionDto, PortalSessionDto } from './dto/billing.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { TenantsService } from '../tenants/tenants.service';
+import { applyStripeEventToTenant } from './webhook-updates';
 
 @Controller('billing')
 export class BillingController {
-  constructor(private readonly billing: BillingService) {}
+  private stripe: Stripe;
+
+  constructor(
+    private readonly billing: BillingService,
+    private readonly tenants: TenantsService,
+  ) {
+    this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+      apiVersion: '2024-06-20',
+    });
+  }
 
   @UseGuards(JwtAuthGuard)
   @Post('checkout-session')
-  async checkout(@Req() req: any, @Body() dto: CheckoutSessionDto) {
-    const frontend = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
-    const successUrl = `${frontend}/app/billing?status=success`;
-    const cancelUrl = `${frontend}/app/billing?status=cancel`;
-
-    return await this.billing.createCheckoutSession({
-      tenantId: req.user.tenantId,
-      userEmail: req.user.email,
-      plan: dto.plan,
-      interval: dto.interval,
-      successUrl,
-      cancelUrl,
-    });
+  async checkoutSession(@Req() req: any) {
+    const tenantId = req.user?.tenantId;
+    return await this.billing.createCheckoutSession(tenantId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Post('portal-session')
-  async portal(@Req() req: any, @Body() dto: PortalSessionDto) {
-    const fallback = (process.env.STRIPE_PORTAL_RETURN_URL || (process.env.FRONTEND_URL || 'http://localhost:3000') + '/app/billing').toString();
-    return await this.billing.createPortalSession({
-      tenantId: req.user.tenantId,
-      returnUrl: dto.returnUrl || fallback,
-    });
+  async portalSession(@Req() req: any) {
+    const tenantId = req.user?.tenantId;
+    return await this.billing.createPortalSession(tenantId);
   }
 
-  // Stripe webhook: rawBody enabled in main.ts (NestFactory.create(..., { rawBody: true }))
   @Post('webhook')
-  async webhook(@Req() req: any, @Headers('stripe-signature') signature: string) {
-    const raw: Buffer = req.rawBody;
-    return await this.billing.handleWebhook(raw, signature);
+  async webhook(@Req() req: any, @Res() res: Response) {
+    const sig = req.headers['stripe-signature'];
+    const whsec = process.env.STRIPE_WEBHOOK_SECRET || '';
+
+    let event: Stripe.Event;
+
+    try {
+      event = this.stripe.webhooks.constructEvent(req.body, sig as string, whsec);
+    } catch (err: any) {
+      return res.status(400).send(`Webhook Error: ${err?.message || 'Invalid signature'}`);
+    }
+
+    try {
+      if (typeof (this.billing as any).handleWebhookEvent === 'function') {
+        await (this.billing as any).handleWebhookEvent(event);
+      }
+    } catch {}
+
+    try {
+      await applyStripeEventToTenant(event, this.tenants);
+    } catch {}
+
+    return res.json({ received: true });
   }
 }

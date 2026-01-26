@@ -1,13 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Tenant, Plan } from './tenant.entity';
+import { Tenant, Plan, TenantStatus } from './tenant.entity';
+import { mapStripeStatusToTenantStatus, toDateOrNull } from './stripe-billing-update';
 
 @Injectable()
 export class TenantsService {
-  constructor(
-    @InjectRepository(Tenant) private readonly repo: Repository<Tenant>,
-  ) {}
+  constructor(@InjectRepository(Tenant) private readonly repo: Repository<Tenant>) {}
 
   async createTrialTenant(name?: string): Promise<Tenant> {
     const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
@@ -15,10 +14,15 @@ export class TenantsService {
       name: name?.trim() || 'My Workspace',
       plan: 'trial',
       status: 'trialing',
+      billingInterval: 'month',
       trialEndsAt,
       currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+      cancelAt: null,
       stripeCustomerId: null,
       stripeSubscriptionId: null,
+      stripeSubscriptionStatus: null,
+      stripePriceId: null,
     });
     return await this.repo.save(tenant);
   }
@@ -27,7 +31,25 @@ export class TenantsService {
     return await this.repo.findOne({ where: { id } });
   }
 
-  async updateBilling(tenantId: string, patch: Partial<Pick<Tenant, 'plan' | 'status' | 'trialEndsAt' | 'currentPeriodEnd' | 'stripeCustomerId' | 'stripeSubscriptionId'>>): Promise<Tenant> {
+  async updateBilling(
+    tenantId: string,
+    patch: Partial<
+      Pick<
+        Tenant,
+        | 'plan'
+        | 'status'
+        | 'trialEndsAt'
+        | 'currentPeriodEnd'
+        | 'cancelAtPeriodEnd'
+        | 'cancelAt'
+        | 'stripeCustomerId'
+        | 'stripeSubscriptionId'
+        | 'stripeSubscriptionStatus'
+        | 'stripePriceId'
+        | 'billingInterval'
+      >
+    >,
+  ): Promise<Tenant> {
     await this.repo.update({ id: tenantId }, patch);
     const updated = await this.findById(tenantId);
     if (!updated) throw new Error('Tenant not found');
@@ -38,7 +60,13 @@ export class TenantsService {
     await this.repo.update({ id: tenantId }, { stripeCustomerId });
   }
 
-  async setPlan(tenantId: string, plan: Plan, status: string, currentPeriodEnd: Date | null, stripeSubscriptionId?: string | null): Promise<void> {
+  async setPlan(
+    tenantId: string,
+    plan: Plan,
+    status: TenantStatus,
+    currentPeriodEnd: Date | null,
+    stripeSubscriptionId?: string | null,
+  ): Promise<void> {
     await this.repo.update(
       { id: tenantId },
       {
@@ -47,6 +75,43 @@ export class TenantsService {
         currentPeriodEnd,
         trialEndsAt: null,
         stripeSubscriptionId: stripeSubscriptionId ?? null,
+      },
+    );
+  }
+
+  async setPastDue(tenantId: string): Promise<void> {
+    await this.repo.update({ id: tenantId }, { status: 'past_due' });
+  }
+
+  async setActive(tenantId: string): Promise<void> {
+    await this.repo.update({ id: tenantId }, { status: 'active' });
+  }
+
+  async updateFromStripeSubscription(
+    tenantId: string,
+    subscription: {
+      id?: string | null;
+      status?: string | null;
+      current_period_end?: number | null;
+      cancel_at?: number | null;
+      cancel_at_period_end?: boolean | null;
+    },
+  ): Promise<void> {
+    const stripeStatus = String(subscription.status || '');
+    const status = mapStripeStatusToTenantStatus(stripeStatus);
+
+    const currentPeriodEnd = toDateOrNull(subscription.current_period_end);
+    const cancelAt = toDateOrNull(subscription.cancel_at);
+
+    await this.repo.update(
+      { id: tenantId },
+      {
+        stripeSubscriptionId: subscription.id || null,
+        stripeSubscriptionStatus: stripeStatus || null,
+        status,
+        currentPeriodEnd,
+        cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
+        cancelAt,
       },
     );
   }

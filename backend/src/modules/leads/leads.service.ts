@@ -13,6 +13,9 @@ import { TenantsService } from '../tenants/tenants.service';
 import { MessagingService } from '../messaging/messaging.service';
 import { SequencesService } from '../sequences/sequences.service';
 import { IntegrationsService } from '../integrations/integrations.service';
+import { UserRole, hasAtLeastRole } from '../../common/rbac';
+import { User } from '../users/user.entity';
+import { TenantSettings } from '../settings/tenant-settings.entity';
 
 @Injectable()
 export class LeadsService {
@@ -24,6 +27,12 @@ export class LeadsService {
 
     @InjectRepository(LeadEvent)
     private readonly leadEventsRepository: Repository<LeadEvent>,
+
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+
+    @InjectRepository(TenantSettings)
+    private readonly tenantSettingsRepository: Repository<TenantSettings>,
 
     private readonly tenantsService: TenantsService,
     private readonly messagingService: MessagingService,
@@ -74,6 +83,50 @@ export class LeadsService {
     return Math.max(0, Math.min(100, Math.floor(n)));
   }
 
+
+  private async getTenantSettings(tenantId: string): Promise<TenantSettings | null> {
+    try {
+      return await this.tenantSettingsRepository.findOne({ where: { tenantId } as any });
+    } catch {
+      return null;
+    }
+  }
+
+  private async pickRoundRobinAssignee(tenantId: string, teamId: string | null | undefined): Promise<string | null> {
+    // Eligible users: active users in tenant with role agent/admin/owner
+    const qb = this.usersRepository
+      .createQueryBuilder("u")
+      .where("u.tenantId = :tenantId", { tenantId })
+      .andWhere("u.isActive = true")
+      .orderBy("u.createdAt", "ASC");
+
+    if (teamId) {
+      qb.andWhere("u.teamId = :teamId", { teamId });
+    }
+
+    const users = await qb.getMany();
+    const eligible = users.filter((u: any) => {
+      const r = String((u as any).role || "agent").toLowerCase();
+      return r === "owner" || r === "admin" || r === "agent" || r === "tc";
+    });
+
+    if (!eligible.length) return null;
+
+    const settings = await this.getTenantSettings(tenantId);
+    const last = settings?.roundRobinLastUserId || null;
+
+    const idx = last ? eligible.findIndex((u: any) => (u as any).id === last) : -1;
+    const next = eligible[(idx + 1 + eligible.length) % eligible.length];
+
+    // Persist last assigned
+    if (settings) {
+      (settings as any).roundRobinLastUserId = (next as any).id;
+      await this.tenantSettingsRepository.save(settings);
+    }
+
+    return (next as any).id;
+  }
+
   private async requireTenant(tenantId?: string) {
     if (!tenantId) throw new Error('Missing tenant');
     const tenant = await this.tenantsService.findById(tenantId);
@@ -115,11 +168,11 @@ export class LeadsService {
   async intake(tenantId: string, payload: IntakeLeadDto): Promise<Lead> {
     const tenant = await this.requireTenant(tenantId);
 
-    const fullName = this.normalizeName(payload.fullName);
+    const fullName = this.normalizeName(payload.fullName ?? undefined);
     if (!fullName) throw new Error('fullName is required');
 
-    const email = this.normalizeEmail(payload.email);
-    const phone = this.normalizePhone(payload.phone);
+    const email = this.normalizeEmail(payload.email ?? undefined);
+    const phone = this.normalizePhone(payload.phone ?? undefined);
 
     const existing = await this.findDuplicateLead({ tenantId: tenant.id, email, phone });
     if (existing) {
@@ -127,6 +180,12 @@ export class LeadsService {
       await this.logLeadEvent(existing, 'deduped', payload as any);
       return existing;
     }
+
+    // Teams/Brokerages: lead routing (round robin)
+    const settings = await this.getTenantSettings(tenant.id);
+    const shouldRoute = Boolean((settings as any)?.roundRobinEnabled) && ['teams','enterprise'].includes(String(tenant.plan));
+    const teamId = (settings as any)?.roundRobinTeamId || null;
+    const assigneeUserId = shouldRoute ? await this.pickRoundRobinAssignee(tenant.id, teamId) : null;
 
     const lead = this.leadsRepository.create({
       tenant,
@@ -188,16 +247,31 @@ export class LeadsService {
   async createLead(tenantId: string | undefined, payload: CreateLeadDto): Promise<Lead> {
     const tenant = await this.requireTenant(tenantId);
 
-    const fullName = this.normalizeName(payload.fullName);
+    const fullName = this.normalizeName(payload.fullName ?? undefined);
     if (!fullName) throw new Error('fullName is required');
 
-    const email = this.normalizeEmail(payload.email);
-    const phone = this.normalizePhone(payload.phone);
+    const email = this.normalizeEmail(payload.email ?? undefined);
+    const phone = this.normalizePhone(payload.phone ?? undefined);
 
     const existing = await this.findDuplicateLead({ tenantId: tenant.id, email, phone });
     if (existing) {
       await this.logLeadEvent(existing, 'deduped', payload as any);
       return existing;
+    }
+
+
+    let teamId = this.normalizeString((payload as any).assignedToTeamId ?? undefined) || null;
+    let assigneeUserId = this.normalizeString((payload as any).assignedToUserId ?? undefined) || null;
+
+    // Teams/Enterprise: if no manual assignee, apply round robin routing when enabled.
+    if (!assigneeUserId && ['teams', 'enterprise'].includes(String(tenant.plan))) {
+      const settings = await this.getTenantSettings(tenant.id);
+      const shouldRoute = Boolean((settings as any)?.roundRobinEnabled);
+      const rrTeamId = (settings as any)?.roundRobinTeamId || null;
+      if (shouldRoute) {
+        if (!teamId) teamId = rrTeamId;
+        assigneeUserId = await this.pickRoundRobinAssignee(tenant.id, teamId);
+      }
     }
 
     const lead = this.leadsRepository.create({
@@ -260,23 +334,41 @@ export class LeadsService {
   // Protected: agent updates lead
   // -------------------------
 
-  async updateLead(tenantId: string | undefined, id: string, payload: UpdateLeadDto): Promise<Lead> {
+  async updateLead(tenantId: string | undefined, id: string, payload: UpdateLeadDto, ctx?: { userId?: string; role?: UserRole }): Promise<Lead> {
     if (!tenantId) throw new Error('Missing tenant');
 
     const lead = await this.leadsRepository.findOne({ where: { id, tenantId } });
     if (!lead) throw new Error('Lead not found');
 
+    const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : true;
+    if (!canSeeAll && ctx?.userId && lead.assignedToUserId && lead.assignedToUserId !== ctx.userId) {
+      throw new Error('Forbidden');
+    }
+
     if (payload.fullName !== undefined) {
-      const v = this.normalizeName(payload.fullName);
+      const v = this.normalizeName(payload.fullName ?? undefined);
       if (v) lead.fullName = v;
     }
 
-    if (payload.email !== undefined) lead.email = this.normalizeEmail(payload.email);
-    if (payload.phone !== undefined) lead.phone = this.normalizePhone(payload.phone);
+    if (payload.email !== undefined) {
+      lead.email = payload.email === null ? null as any : (this.normalizeEmail(payload.email ?? undefined) as any);
+    }
+    if (payload.phone !== undefined) {
+      lead.phone = payload.phone === null ? null as any : (this.normalizePhone(payload.phone ?? undefined) as any);
+    }
 
-    if (payload.source !== undefined) lead.source = this.normalizeString(payload.source);
-    if (payload.location !== undefined) lead.location = this.normalizeString(payload.location);
-    if (payload.propertyInterest !== undefined) lead.propertyInterest = this.normalizeString(payload.propertyInterest);
+    if ((payload as any).source !== undefined) {
+      if ((payload as any).source === null) lead.source = null as any;
+      else lead.source = this.normalizeString((payload as any).source ?? undefined) as any;
+    }
+    if ((payload as any).location !== undefined) {
+      if ((payload as any).location === null) lead.location = null as any;
+      else lead.location = this.normalizeString((payload as any).location ?? undefined) as any;
+    }
+    if ((payload as any).propertyInterest !== undefined) {
+      if ((payload as any).propertyInterest === null) lead.propertyInterest = null as any;
+      else lead.propertyInterest = this.normalizeString((payload as any).propertyInterest ?? undefined) as any;
+    }
 
     if (payload.leadType !== undefined) lead.leadType = payload.leadType as any;
     if (payload.temperature !== undefined) lead.temperature = payload.temperature as any;
@@ -415,7 +507,8 @@ export class LeadsService {
         phone,
         tenant,
         tenantId: tenant.id,
-        lastActivityAt: new Date(),
+
+      lastActivityAt: new Date(),
         nextFollowUpAt: i % 3 === 0 ? new Date() : undefined,
       } as Partial<Lead>);
 
@@ -433,18 +526,25 @@ export class LeadsService {
   // Protected: list and get
   // -------------------------
 
-  async listLeads(params: { tenantId?: string; take: number; skip: number }): Promise<Lead[]> {
+  async listLeads(params: { tenantId?: string; userId?: string; role?: UserRole; take: number; skip: number }): Promise<Lead[]> {
     if (!params.tenantId) return [];
 
+    const canSeeAll = params.role ? hasAtLeastRole(params.role, 'admin') : true;
+    const where: any = { tenantId: params.tenantId };
+    if (!canSeeAll && params.userId) {
+      // Agents/TCs see only leads assigned to them.
+      where.assignedToUserId = params.userId;
+    }
+
     return this.leadsRepository.find({
-      where: { tenantId: params.tenantId },
+      where,
       order: { createdAt: 'DESC' },
       take: params.take,
       skip: params.skip,
     });
   }
 
-  async getLeadById(tenantId: string | undefined, id: string): Promise<Lead> {
+  async getLeadById(tenantId: string | undefined, id: string, ctx?: { userId?: string; role?: UserRole }): Promise<Lead> {
     if (!tenantId) throw new Error('Missing tenant');
 
     const lead = await this.leadsRepository.findOne({
@@ -453,6 +553,32 @@ export class LeadsService {
 
     if (!lead) throw new Error('Lead not found');
 
+    const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : true;
+    if (!canSeeAll && ctx?.userId && lead.assignedToUserId && lead.assignedToUserId !== ctx.userId) {
+      throw new Error('Forbidden');
+    }
+
     return lead;
+  }
+
+  async assignLead(params: { tenantId: string | undefined; leadId: string; assignedToUserId?: string | null; assignedToTeamId?: string | null; assignedToLabel?: string | null }) {
+    if (!params.tenantId) throw new Error('Missing tenant');
+    const lead = await this.leadsRepository.findOne({ where: { id: params.leadId, tenantId: params.tenantId } });
+    if (!lead) throw new Error('Lead not found');
+
+    lead.assignedToUserId = params.assignedToUserId ?? null;
+    lead.assignedToTeamId = params.assignedToTeamId ?? null;
+    if (params.assignedToLabel !== undefined) {
+      lead.assignedTo = params.assignedToLabel ?? undefined;
+    }
+
+    lead.lastActivityAt = new Date();
+    const saved = await this.leadsRepository.save(lead);
+    await this.logLeadEvent(saved, 'assigned', {
+      assignedToUserId: saved.assignedToUserId,
+      assignedToTeamId: saved.assignedToTeamId,
+      assignedTo: saved.assignedTo,
+    });
+    return saved;
   }
 }

@@ -15,11 +15,15 @@ import {
   Plug,
   ChevronDown,
   CreditCard,
+  Shield,
+  Route,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Logo } from "@/components/logo"
+import { fetchMePlan, type PlanName } from "@/lib/plan"
+import { canUseTeams, canUseBrokerage } from "@/lib/access"
 
 const mainNavItems = [
   { label: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
@@ -38,6 +42,9 @@ const analyticsItems = [
 ]
 
 const settingsItems = [
+  { label: "Team", href: "/app/team", icon: Users, gate: "teams" as const },
+  { label: "Routing", href: "/app/routing", icon: Route, gate: "teams" as const },
+  { label: "Compliance", href: "/app/compliance", icon: Shield, gate: "enterprise" as const },
   { label: "Settings", href: "/app/settings", icon: Settings },
   { label: "Billing", href: "/app/billing", icon: CreditCard },
 ]
@@ -51,13 +58,41 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
   const pathname = usePathname()
   const [automationOpen, setAutomationOpen] = useState(true)
   const [analyticsOpen, setAnalyticsOpen] = useState(true)
+  const [plan, setPlan] = useState<PlanName>("pro")
+  const [hasTeams, setHasTeams] = useState(false)
+  const [hasEnterprise, setHasEnterprise] = useState(false)
+
+  useEffect(() => {
+    let mounted = true
+    fetchMePlan()
+      .then((d) => {
+        if (!mounted) return
+        const p = ((d?.plan as any) || "pro") as PlanName
+        setPlan(p)
+        setHasTeams(canUseTeams(p))
+        setHasEnterprise(canUseBrokerage(p))
+      })
+      .catch(() => {
+        if (!mounted) return
+        setPlan("pro")
+        setHasTeams(false)
+        setHasEnterprise(false)
+      })
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const NavItem = ({
     item,
     collapsed,
+    locked,
+    badge,
   }: {
     item: { label: string; href: string; icon: React.ElementType }
     collapsed: boolean
+    locked?: boolean
+    badge?: string
   }) => {
     const isActive = pathname === item.href || pathname.startsWith(item.href + "/")
     const Icon = item.icon
@@ -71,13 +106,27 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
           isActive
             ? "bg-sidebar-accent text-sidebar-primary"
             : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+          locked && "opacity-70",
         )}
       >
         <Icon className="h-4 w-4 shrink-0" />
-        {!collapsed && <span>{item.label}</span>}
+        {!collapsed && (
+          <div className="flex w-full items-center justify-between">
+            <span>{item.label}</span>
+            {locked && badge ? <span className="text-[11px] rounded bg-muted px-2 py-0.5">{badge}</span> : null}
+          </div>
+        )}
       </Link>
     )
   }
+
+  const isLocked = (gate?: "teams" | "enterprise") => {
+    if (!gate) return { locked: false, badge: "" }
+    if (gate === "teams") return { locked: !hasTeams, badge: "Teams" }
+    return { locked: !hasEnterprise, badge: "Enterprise" }
+  }
+
+  const analyticsAndSettingsItems = [...analyticsItems, ...settingsItems]
 
   return (
     <div className="flex h-full flex-col bg-sidebar">
@@ -85,16 +134,13 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
         <Logo href="/app/dashboard" size="md" showText={!isCollapsed} />
       </div>
 
-      {/* Navigation */}
       <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-        {/* Main Navigation */}
         <div className="space-y-1">
           {mainNavItems.map((item) => (
             <NavItem key={item.href} item={item} collapsed={isCollapsed} />
           ))}
         </div>
 
-        {/* Automation Section */}
         {!isCollapsed && (
           <Collapsible open={automationOpen} onOpenChange={setAutomationOpen} className="mt-6">
             <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-sidebar-foreground">
@@ -109,7 +155,6 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
           </Collapsible>
         )}
 
-        {/* Analytics Section */}
         {!isCollapsed && (
           <Collapsible open={analyticsOpen} onOpenChange={setAnalyticsOpen} className="mt-6">
             <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-sidebar-foreground">
@@ -117,32 +162,48 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
               <ChevronDown className={cn("h-3 w-3 transition-transform", analyticsOpen && "rotate-180")} />
             </CollapsibleTrigger>
             <CollapsibleContent className="space-y-1 pt-1">
-              {[...analyticsItems, ...settingsItems].map((item) => (
-                <NavItem key={item.href} item={item} collapsed={isCollapsed} />
-              ))}
+              {analyticsAndSettingsItems.map((item: any) => {
+                const { locked, badge } = isLocked(item.gate)
+                return (
+                  <NavItem
+                    key={item.href}
+                    item={item}
+                    collapsed={isCollapsed}
+                    locked={locked}
+                    badge={badge}
+                  />
+                )
+              })}
             </CollapsibleContent>
           </Collapsible>
         )}
 
         {isCollapsed && (
           <div className="mt-6 space-y-1">
-            {[...automationItems, ...analyticsItems, ...settingsItems].map((item) => (
-              <NavItem key={item.href} item={item} collapsed={isCollapsed} />
-            ))}
+            {[...automationItems, ...analyticsAndSettingsItems].map((item: any) => {
+              const { locked, badge } = isLocked(item.gate)
+              return (
+                <NavItem
+                  key={item.href}
+                  item={item}
+                  collapsed={isCollapsed}
+                  locked={locked}
+                  badge={badge}
+                />
+              )
+            })}
           </div>
         )}
       </nav>
 
-      {/* Footer */}
       <div className="border-t border-sidebar-border p-3">
         <div className={cn("rounded-lg bg-sidebar-accent/50 p-3", isCollapsed && "p-2")}>
           {!isCollapsed ? (
             <>
-              <p className="text-xs font-medium text-sidebar-foreground">Pro Plan</p>
-              <p className="mt-1 text-xs text-muted-foreground">15 days remaining</p>
-              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-sidebar-border">
-                <div className="h-full w-1/2 rounded-full bg-primary" />
-              </div>
+              <p className="text-xs font-medium text-sidebar-foreground">{String(plan).toUpperCase()} Plan</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {hasTeams ? "Team features unlocked" : "Single-user workspace"}
+              </p>
             </>
           ) : (
             <div className="flex items-center justify-center">

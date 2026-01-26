@@ -10,6 +10,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
+import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
 
 import { LeadsService } from './leads.service';
 import { IntakeLeadDto } from './dto/intake-lead.dto';
@@ -36,6 +38,8 @@ export class LeadsController {
   ) {
     return this.leadsService.listLeads({
       tenantId: req.user?.tenantId,
+      userId: req.user?.userId,
+      role: req.user?.role,
       take: take ? parseInt(take, 10) : 50,
       skip: skip ? parseInt(skip, 10) : 0,
     });
@@ -56,13 +60,28 @@ export class LeadsController {
   @UseGuards(JwtAuthGuard)
   @Get('leads/:id')
   getOne(@Req() req: any, @Param('id') id: string) {
-    return this.leadsService.getLeadById(req.user?.tenantId, id);
+    return this.leadsService.getLeadById(req.user?.tenantId, id, { userId: req.user?.userId, role: req.user?.role });
   }
 
   @UseGuards(JwtAuthGuard)
   @Patch('leads/:id')
   update(@Req() req: any, @Param('id') id: string, @Body() payload: UpdateLeadDto) {
-    return this.leadsService.updateLead(req.user?.tenantId, id, payload);
+    return this.leadsService.updateLead(req.user?.tenantId, id, payload, { userId: req.user?.userId, role: req.user?.role });
+  }
+
+  // Teams/Brokerages: assign a lead to a specific agent (or clear assignment)
+  @UseGuards(JwtAuthGuard, TeamsPlanGuard, RolesGuard)
+  @RequireTeamsPlan()
+  @RequireRole('admin')
+  @Post('leads/:id/assign')
+  assign(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+    return this.leadsService.assignLead({
+      tenantId: req.user?.tenantId,
+      leadId: id,
+      assignedToUserId: body?.assignedToUserId ?? null,
+      assignedToTeamId: body?.assignedToTeamId ?? null,
+      assignedToLabel: body?.assignedTo ?? null,
+    });
   }
 }
 

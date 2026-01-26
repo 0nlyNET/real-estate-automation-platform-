@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { TenantSettings } from '../settings/tenant-settings.entity';
+import { Credential } from '../settings/credential.entity';
 import { IntegrationsController } from './integrations.controller';
 import { IntegrationsService } from './integrations.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([TenantSettings])],
+  imports: [TypeOrmModule.forFeature([Credential])],
   controllers: [IntegrationsController],
   providers: [IntegrationsService],
   exports: [IntegrationsService],

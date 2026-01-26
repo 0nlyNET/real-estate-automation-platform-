@@ -11,7 +11,7 @@ import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 
 import { Message } from '../messaging/message.entity';
-import { Tenants } from '../tenants/tenant.entity';
+import { Tenant } from '../tenants/tenant.entity';
 
 import { isWithinQuietHours, nextAllowedSendTime } from '../../common/time';
 
@@ -31,8 +31,8 @@ export class SequencesService implements OnModuleInit {
     private readonly messageRepository: Repository<Message>,
     @InjectRepository(LeadEvent)
     private readonly leadEventRepository: Repository<LeadEvent>,
-    @InjectRepository(Tenants)
-    private readonly tenantRepository: Repository<Tenants>,
+    @InjectRepository(Tenant)
+    private readonly tenantRepository: Repository<Tenant>,
     @InjectRepository(TenantSettings)
     private readonly tenantSettingsRepository: Repository<TenantSettings>,
     @InjectRepository(Lead)
@@ -118,6 +118,188 @@ export class SequencesService implements OnModuleInit {
     }
   }
 
+  // --- API helpers for the Automations UI (minimal, DB-backed) ---
+  async listSequences(tenantId: string) {
+    const rows = await this.sequenceRepository.find({
+      where: { tenantId } as any,
+      relations: ['steps'],
+      order: { createdAt: 'DESC' } as any,
+    });
+
+    return rows.map((s: any) => ({
+      id: s.id,
+      name: s.name || 'Untitled automation',
+      description: s.description || null,
+      active: Boolean(s.active),
+      leadType: s.leadType || null,
+      temperature: s.temperature || null,
+      stepsCount: Array.isArray(s.steps) ? s.steps.length : 0,
+      createdAt: s.createdAt || null,
+    }));
+  }
+
+  async toggleSequence(tenantId: string, id: string) {
+    const seq = await this.sequenceRepository.findOne({ where: { id, tenantId } as any });
+    if (!seq) return { ok: false, message: 'Not found' };
+    (seq as any).active = !Boolean((seq as any).active);
+    await this.sequenceRepository.save(seq);
+    return { ok: true, active: (seq as any).active };
+  }
+
+  /**
+   * FIXED: save a single Sequence entity so return has saved.id (not Sequence[])
+   */
+  async createSequence(tenantId: string, payload: any) {
+    const entity = this.sequenceRepository.create({
+      tenantId,
+      name: String(payload?.name || '').trim() || 'New automation',
+      description: payload?.description ? String(payload.description).trim() : null,
+      leadType: payload?.leadType ? String(payload.leadType).trim() : null,
+      temperature: payload?.temperature ? String(payload.temperature).trim() : null,
+      active: payload?.active === false ? false : true,
+      steps: Array.isArray(payload?.steps) ? payload.steps : [],
+    } as any);
+
+    const saved = await this.sequenceRepository.save(entity);
+    return { ok: true, id: (saved as any).id };
+  }
+
+  async getSequence(tenantId: string, id: string) {
+    const seq = await this.sequenceRepository.findOne({
+      where: { id, tenantId } as any,
+      relations: ['steps'],
+      order: { steps: { offsetMinutes: 'ASC' } } as any,
+    });
+    if (!seq) return null;
+    const s: any = seq as any;
+    return {
+      id: s.id,
+      name: s.name || 'Untitled automation',
+      description: s.description || null,
+      active: Boolean(s.active),
+      leadType: s.leadType || null,
+      temperature: s.temperature || null,
+      steps: (Array.isArray(s.steps) ? s.steps : []).map((st: any) => ({
+        id: st.id,
+        channel: st.channel,
+        template: st.template,
+        offsetMinutes: st.offsetMinutes,
+      })),
+    };
+  }
+
+  async updateSequence(tenantId: string, id: string, payload: any) {
+    const seq = await this.sequenceRepository.findOne({ where: { id, tenantId } as any });
+    if (!seq) return { ok: false, message: 'Not found' };
+    const s: any = seq as any;
+
+    if (payload?.name !== undefined) s.name = String(payload.name).trim() || s.name;
+    if (payload?.description !== undefined) s.description = payload.description ? String(payload.description).trim() : null;
+    if (payload?.leadType !== undefined) s.leadType = payload.leadType ? String(payload.leadType).trim() : null;
+    if (payload?.temperature !== undefined) s.temperature = payload.temperature ? String(payload.temperature).trim() : null;
+    if (payload?.active !== undefined) s.active = !!payload.active;
+
+    await this.sequenceRepository.save(seq);
+    return { ok: true };
+  }
+
+  async addStep(tenantId: string, sequenceId: string, payload: any) {
+    const seq = await this.sequenceRepository.findOne({ where: { id: sequenceId, tenantId } as any });
+    if (!seq) return { ok: false, message: 'Sequence not found' };
+
+    const step = this.stepRepository.create({
+      sequence: { id: sequenceId } as any,
+      channel: String(payload?.channel || 'sms'),
+      template: String(payload?.template || '').trim() || 'Hi {{firstName}}, just checking in.',
+      offsetMinutes: Number.isFinite(Number(payload?.offsetMinutes)) ? Number(payload.offsetMinutes) : 0,
+    } as any);
+
+    const saved = await this.stepRepository.save(step);
+    return { ok: true, id: (saved as any).id };
+  }
+
+  async updateStep(tenantId: string, sequenceId: string, stepId: string, payload: any) {
+    const step = await this.stepRepository.findOne({
+      where: { id: stepId, sequence: { id: sequenceId, tenantId } as any } as any,
+      relations: ['sequence'],
+    });
+    if (!step) return { ok: false, message: 'Step not found' };
+    const st: any = step as any;
+    if (payload?.channel !== undefined) st.channel = String(payload.channel || 'sms');
+    if (payload?.template !== undefined) st.template = String(payload.template || '').trim();
+    if (payload?.offsetMinutes !== undefined && Number.isFinite(Number(payload.offsetMinutes))) {
+      st.offsetMinutes = Number(payload.offsetMinutes);
+    }
+    await this.stepRepository.save(step);
+    return { ok: true };
+  }
+
+  async deleteStep(tenantId: string, sequenceId: string, stepId: string) {
+    const step = await this.stepRepository.findOne({
+      where: { id: stepId, sequence: { id: sequenceId, tenantId } as any } as any,
+      relations: ['sequence'],
+    });
+    if (!step) return { ok: false, message: 'Step not found' };
+    await this.stepRepository.remove(step);
+    return { ok: true };
+  }
+
+  async listEnrollmentsForLead(tenantId: string, leadId: string) {
+    const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } as any });
+    if (!lead) return [];
+    const enrollments = await this.enrollmentRepository.find({
+      where: { lead: { id: leadId } } as any,
+      relations: ['sequence'],
+      order: { createdAt: 'DESC' } as any,
+    });
+    return enrollments.map((e: any) => ({
+      id: e.id,
+      status: e.status,
+      currentStepIndex: e.currentStepIndex,
+      nextRunAt: e.nextRunAt || null,
+      stoppedReason: e.stoppedReason || null,
+      sequence: e.sequence ? { id: e.sequence.id, name: e.sequence.name } : null,
+    }));
+  }
+
+  async pauseEnrollment(tenantId: string, leadId: string, enrollmentId: string) {
+    const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } as any });
+    if (!lead) return { ok: false, message: 'Lead not found' };
+    const e = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, lead: { id: leadId } } as any });
+    if (!e) return { ok: false, message: 'Enrollment not found' };
+    (e as any).status = 'paused';
+    (e as any).nextRunAt = undefined;
+    await this.enrollmentRepository.save(e);
+    return { ok: true };
+  }
+
+  async resumeEnrollment(tenantId: string, leadId: string, enrollmentId: string) {
+    const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } as any });
+    if (!lead) return { ok: false, message: 'Lead not found' };
+    const e = await this.enrollmentRepository.findOne({
+      where: { id: enrollmentId, lead: { id: leadId } } as any,
+      relations: ['sequence'],
+    });
+    if (!e) return { ok: false, message: 'Enrollment not found' };
+    (e as any).status = 'active';
+    // Resume ASAP (runner will pick it up)
+    (e as any).nextRunAt = new Date(Date.now() + 5_000);
+    await this.enrollmentRepository.save(e);
+    return { ok: true };
+  }
+
+  async stopEnrollment(tenantId: string, leadId: string, enrollmentId: string, reason: string = 'manual') {
+    const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } as any });
+    if (!lead) return { ok: false, message: 'Lead not found' };
+    const e = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, lead: { id: leadId } } as any });
+    if (!e) return { ok: false, message: 'Enrollment not found' };
+    (e as any).status = 'stopped';
+    (e as any).stoppedReason = reason;
+    (e as any).nextRunAt = undefined;
+    await this.enrollmentRepository.save(e);
+    return { ok: true };
+  }
+
   async stopForLead(leadId: string, reason: 'reply' | 'manual' | 'other' = 'other') {
     try {
       const enrollments = await this.enrollmentRepository.find({
@@ -126,8 +308,8 @@ export class SequencesService implements OnModuleInit {
 
       for (const enrollment of enrollments) {
         enrollment.status = 'stopped';
-        enrollment.stoppedReason = reason;
-        enrollment.nextRunAt = undefined;
+        (enrollment as any).stoppedReason = reason;
+        (enrollment as any).nextRunAt = undefined;
         await this.enrollmentRepository.save(enrollment);
       }
     } catch (err: any) {
@@ -181,8 +363,8 @@ export class SequencesService implements OnModuleInit {
 
     if (!sequenceId || !leadId) {
       hydrated.status = 'stopped';
-      hydrated.stoppedReason = 'other';
-      hydrated.nextRunAt = undefined;
+      (hydrated as any).stoppedReason = 'other';
+      (hydrated as any).nextRunAt = undefined;
       await this.enrollmentRepository.save(hydrated);
       return;
     }
@@ -195,8 +377,8 @@ export class SequencesService implements OnModuleInit {
 
     if (!sequence) {
       hydrated.status = 'stopped';
-      hydrated.stoppedReason = 'other';
-      hydrated.nextRunAt = undefined;
+      (hydrated as any).stoppedReason = 'other';
+      (hydrated as any).nextRunAt = undefined;
       await this.enrollmentRepository.save(hydrated);
       return;
     }
@@ -212,11 +394,11 @@ export class SequencesService implements OnModuleInit {
       .slice()
       .sort((a: any, b: any) => (a.offsetMinutes ?? 0) - (b.offsetMinutes ?? 0));
 
-    const stepIndex = hydrated.currentStepIndex ?? 0;
+    const stepIndex = (hydrated as any).currentStepIndex ?? 0;
 
     if (stepIndex >= steps.length) {
       hydrated.status = 'completed';
-      hydrated.nextRunAt = undefined;
+      (hydrated as any).nextRunAt = undefined;
       await this.enrollmentRepository.save(hydrated);
       return;
     }
@@ -232,7 +414,7 @@ export class SequencesService implements OnModuleInit {
 
     const bookingLink = (tenant as any)?.bookingLink ?? '';
 
-    const body = renderTemplate(step.template, {
+    const body = renderTemplate((step as any).template, {
       leadName: (lead as any).fullName ?? '',
       bookingLink,
     });
@@ -255,20 +437,19 @@ export class SequencesService implements OnModuleInit {
         ? nextAllowedSendTime({ now, timeZone: tz, quietStart: qStart, quietEnd: qEnd })
         : undefined;
 
-
     const globalDisabled = process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true';
     const tenantSettings2 = tenantId
       ? await this.tenantSettingsRepository.findOne({ where: { tenantId } as any })
       : undefined;
-    const tenantDisabled = tenantSettings2 ? tenantSettings2.automationsEnabled === false : false;
+    const tenantDisabled = tenantSettings2 ? (tenantSettings2 as any).automationsEnabled === false : false;
 
     if (globalDisabled || tenantDisabled) {
       this.logger.warn(
         `Automations disabled, stopping enrollment (enrollmentId=${(hydrated as any).id} tenantId=${tenantId} globalDisabled=${globalDisabled} tenantDisabled=${tenantDisabled})`,
       );
       hydrated.status = 'stopped';
-      hydrated.stoppedReason = 'manual';
-      hydrated.nextRunAt = undefined;
+      (hydrated as any).stoppedReason = 'manual';
+      (hydrated as any).nextRunAt = undefined;
       await this.enrollmentRepository.save(hydrated);
       return;
     }
@@ -276,7 +457,7 @@ export class SequencesService implements OnModuleInit {
     // Create outbound message row (delivery handled by MessagingService)
     const msg = this.messageRepository.create({
       lead,
-      channel: step.channel,
+      channel: (step as any).channel,
       direction: 'outbound',
       body,
       status: scheduledAt ? 'scheduled' : 'pending',
@@ -289,13 +470,13 @@ export class SequencesService implements OnModuleInit {
       enrollmentId: (hydrated as any).id,
       sequenceId: (sequence as any).id,
       stepIndex,
-      channel: step.channel,
+      channel: (step as any).channel,
       messageId: (msg as any).id,
       scheduledAt: scheduledAt?.toISOString(),
     });
 
     // Advance enrollment
-    hydrated.currentStepIndex = stepIndex + 1;
+    (hydrated as any).currentStepIndex = stepIndex + 1;
 
     const enrolledAt =
       (hydrated as any).createdAt ||
@@ -305,24 +486,20 @@ export class SequencesService implements OnModuleInit {
     const nextRunAt = this.computeNextRunAt({
       enrolledAt,
       sequence,
-      stepIndex: hydrated.currentStepIndex,
+      stepIndex: (hydrated as any).currentStepIndex,
     });
 
-    if (hydrated.currentStepIndex >= steps.length) {
+    if ((hydrated as any).currentStepIndex >= steps.length) {
       hydrated.status = 'completed';
-      hydrated.nextRunAt = undefined;
+      (hydrated as any).nextRunAt = undefined;
     } else {
-      hydrated.nextRunAt = nextRunAt ?? undefined;
+      (hydrated as any).nextRunAt = nextRunAt ?? undefined;
     }
 
     await this.enrollmentRepository.save(hydrated);
   }
 
-  private computeNextRunAt(opts: {
-    enrolledAt: Date;
-    sequence: Sequence;
-    stepIndex: number;
-  }): Date | undefined {
+  private computeNextRunAt(opts: { enrolledAt: Date; sequence: Sequence; stepIndex: number }): Date | undefined {
     const steps = (opts.sequence.steps ?? [])
       .slice()
       .sort((a: any, b: any) => (a.offsetMinutes ?? 0) - (b.offsetMinutes ?? 0));

@@ -1,21 +1,26 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Message } from './message.entity';
-import { Tenants } from '../tenants/tenant.entity';
-import { LeadEvent } from '../leads/lead-event.entity';
-import { Lead } from '../leads/lead.entity';
-import { TenantSettings } from '../settings/tenant-settings.entity';
-import { SequencesModule } from '../sequences/sequences.module';
-import { MessagingService } from './messaging.service';
+
 import { MessagingController } from './messaging.controller';
+import { MessagingService } from './messaging.service';
+import { InboxSendService } from './inbox-send.service';
+
+import { Message } from './message.entity';
+import { Lead } from '../leads/lead.entity';
+import { Tenant } from '../tenants/tenant.entity';
+import { TenantSettings } from '../settings/tenant-settings.entity';
+import { LeadEvent } from '../leads/lead-event.entity';
+import { Credential } from '../settings/credential.entity';
+
+import { SequencesModule } from '../sequences/sequences.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Message, Tenants, LeadEvent, Lead, TenantSettings]),
+    TypeOrmModule.forFeature([Message, Lead, Tenant, TenantSettings, LeadEvent, Credential]),
     SequencesModule,
   ],
   controllers: [MessagingController],
-  providers: [MessagingService],
+  providers: [MessagingService, InboxSendService],
   exports: [MessagingService],
 })
 export class MessagingModule {}

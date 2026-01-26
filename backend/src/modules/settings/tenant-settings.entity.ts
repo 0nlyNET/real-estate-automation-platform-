@@ -21,6 +21,16 @@ export class TenantSettings extends BaseEntity {
 
   @Column({ name: 'automations_enabled', type: 'bool', default: true })
   automationsEnabled!: boolean;
+
+  // -------- Teams/Brokerages (routing) --------
+  @Column({ name: 'round_robin_enabled', type: 'bool', default: false })
+  roundRobinEnabled!: boolean;
+
+  @Column({ name: 'round_robin_team_id', type: 'varchar', nullable: true })
+  roundRobinTeamId?: string | null;
+
+  @Column({ name: 'round_robin_last_user_id', type: 'varchar', nullable: true })
+  roundRobinLastUserId?: string | null;
   // -------- Integrations foundation (Phase 1) --------
   @Column({ name: 'zapier_api_key_hash', type: 'varchar', nullable: true })
   zapierApiKeyHash?: string;

@@ -1,4 +1,4 @@
-import { Column, Entity, ManyToOne } from 'typeorm';
+import { Column, Entity, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../common/base.entity';
 import { Lead } from '../leads/lead.entity';
 
@@ -14,7 +14,12 @@ export type MessageStatus =
 
 @Entity({ name: 'messages' })
 export class Message extends BaseEntity {
-  @ManyToOne(() => Lead, (lead) => lead.events)
+  // DB column is camelCase: "leadId"
+  @Column({ name: 'leadId', type: 'uuid' })
+  leadId!: string;
+
+  @ManyToOne(() => Lead, (lead) => lead.messages)
+  @JoinColumn({ name: 'leadId' })
   lead!: Lead;
 
   @Column({ name: 'channel' })

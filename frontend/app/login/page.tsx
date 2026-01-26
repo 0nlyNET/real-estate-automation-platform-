@@ -1,63 +1,80 @@
-"use client"
+"use client";
 
-import type React from "react"
+import type React from "react";
 
-import { useState } from "react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { useToast } from "@/hooks/use-toast"
-import { Eye, EyeOff, Loader2, ArrowRight } from "lucide-react"
-import { Footer } from "@/components/ui/footer"
-import { Logo } from "@/components/logo"
-import { apiFetch } from "@/lib/api"
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import { Eye, EyeOff, Loader2, ArrowRight } from "lucide-react";
+import { Footer } from "@/components/ui/footer";
+import { Logo } from "@/components/logo";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 export default function LoginPage() {
-  const router = useRouter()
-  const { toast } = useToast()
-  const [loading, setLoading] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [error, setError] = useState("")
+  const router = useRouter();
+  const { toast } = useToast();
+
+  const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [error, setError] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError("")
-    setLoading(true)
+    e.preventDefault();
+    setError("");
 
-    // Mock validation
-    if (!email || !password) {
-      setError("Please fill in all fields")
-      setLoading(false)
-      return
+    const emailClean = String(email).trim();
+    const passwordClean = String(password);
+
+    if (!emailClean || !passwordClean) {
+      setError("Please fill in all fields");
+      return;
     }
+
+    setLoading(true);
 
     try {
-      const res = await apiFetch<{ accessToken: string }>("/auth/login", {
+      const res = await fetch(`${API_URL}/auth/login`, {
         method: "POST",
-        json: { email, password },
-      })
-      localStorage.setItem("rta_token", res.accessToken)
-      localStorage.setItem("rta_pending_email", email)
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: emailClean, password: passwordClean }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        const msg = Array.isArray(data?.message)
+          ? data.message.join(", ")
+          : data?.message || "Login failed";
+        throw new Error(msg);
+      }
+
+      if (!data?.accessToken) throw new Error("Login failed: missing token");
+
+      localStorage.setItem("rta_token", data.accessToken);
+      localStorage.setItem("rta_pending_email", emailClean);
+
+      toast({
+        title: "Welcome back!",
+        description: "You have successfully logged in.",
+      });
+
+      router.push("/app/dashboard");
     } catch (err: any) {
-      setLoading(false)
-      setError(err?.message || "Login failed")
-      return
+      setError(err?.message || "Login failed");
+    } finally {
+      setLoading(false);
     }
-
-    // Mock success
-    toast({
-      title: "Welcome back!",
-      description: "You have successfully logged in.",
-    })
-
-    setLoading(false)
-    router.push("/app/dashboard")
-  }
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -70,7 +87,9 @@ export default function LoginPage() {
           <Card className="border-border bg-card">
             <CardHeader className="pb-4 text-center">
               <h1 className="text-2xl font-bold text-foreground">Welcome back</h1>
-              <p className="text-sm text-muted-foreground">Enter your credentials to access your account</p>
+              <p className="text-sm text-muted-foreground">
+                Enter your credentials to access your account
+              </p>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -93,6 +112,7 @@ export default function LoginPage() {
                     className="bg-secondary"
                     disabled={loading}
                     required
+                    autoComplete="email"
                   />
                 </div>
 
@@ -105,6 +125,7 @@ export default function LoginPage() {
                       Forgot password?
                     </Link>
                   </div>
+
                   <div className="relative">
                     <Input
                       id="password"
@@ -115,13 +136,14 @@ export default function LoginPage() {
                       className="bg-secondary pr-10"
                       disabled={loading}
                       required
+                      autoComplete="current-password"
                     />
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
                       className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                      onClick={() => setShowPassword(!showPassword)}
+                      onClick={() => setShowPassword((v) => !v)}
                       disabled={loading}
                     >
                       {showPassword ? (
@@ -154,7 +176,7 @@ export default function LoginPage() {
               </form>
 
               <div className="mt-6 text-center text-sm text-muted-foreground">
-                Don't have an account?{" "}
+                Don&apos;t have an account?{" "}
                 <Link href="/signup" className="text-primary hover:underline">
                   Create account
                 </Link>
@@ -166,5 +188,5 @@ export default function LoginPage() {
 
       <Footer />
     </div>
-  )
+  );
 }

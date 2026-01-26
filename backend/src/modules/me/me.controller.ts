@@ -7,25 +7,44 @@ export class MeController {
   constructor(private readonly tenants: TenantsService) {}
 
   @UseGuards(JwtAuthGuard)
+  @Get()
+  async me(@Req() req: any) {
+    return {
+      userId: req.user?.userId,
+      tenantId: req.user?.tenantId,
+      role: req.user?.role,
+      email: req.user?.email,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('plan')
   async plan(@Req() req: any) {
     const tenantId = req.user?.tenantId;
-    const tenant = await this.tenants.findById(tenantId);
-    if (!tenant) {
+    const t = await this.tenants.findById(tenantId);
+
+    if (!t) {
       return {
-        tenantId,
-        plan: 'trial',
-        status: 'trialing',
+        plan: 'free',
+        status: 'active',
+        billingInterval: 'month',
         trialEndsAt: null,
         currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        cancelAt: null,
+        stripeSubscriptionStatus: null,
       };
     }
+
     return {
-      tenantId: tenant.id,
-      plan: tenant.plan,
-      status: tenant.status,
-      trialEndsAt: tenant.trialEndsAt ? tenant.trialEndsAt.toISOString() : null,
-      currentPeriodEnd: tenant.currentPeriodEnd ? tenant.currentPeriodEnd.toISOString() : null,
+      plan: t.plan,
+      status: t.status,
+      billingInterval: t.billingInterval || 'month',
+      trialEndsAt: t.trialEndsAt || null,
+      currentPeriodEnd: t.currentPeriodEnd || null,
+      cancelAtPeriodEnd: Boolean(t.cancelAtPeriodEnd),
+      cancelAt: t.cancelAt || null,
+      stripeSubscriptionStatus: t.stripeSubscriptionStatus || null,
     };
   }
 }

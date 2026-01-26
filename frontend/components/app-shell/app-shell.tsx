@@ -1,67 +1,75 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useEffect } from "react"
+import { useEffect, useState } from "react"
 import { Sidebar } from "./sidebar"
 import { Topbar } from "./topbar"
-import { cn } from "@/lib/utils"
-import { useIsMobile } from "@/hooks/use-mobile"
+import { fetchMePlan, formatDate, type MePlan } from "@/lib/plan"
+import Link from "next/link"
+import { Button } from "@/components/ui/button"
 
-interface AppShellProps {
-  children: React.ReactNode
-}
-
-export function AppShell({ children }: AppShellProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const isMobile = useIsMobile()
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const [plan, setPlan] = useState<MePlan | null>(null)
 
   useEffect(() => {
-    if (!isMobile) {
-      setSidebarOpen(false)
+    let mounted = true
+
+    async function load() {
+      const p = await fetchMePlan()
+      if (!mounted) return
+      setPlan(p)
     }
-  }, [isMobile])
+
+    load()
+
+    // re-check occasionally so UI stays truthful
+    const interval = setInterval(load, 30_000)
+
+    return () => {
+      mounted = false
+      clearInterval(interval)
+    }
+  }, [])
+
+  const pastDue = plan?.status === "past_due"
+  const canceling = Boolean(plan?.cancelAtPeriodEnd && plan?.currentPeriodEnd)
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <div className="flex flex-1">
-        {/* Desktop Sidebar */}
-        <aside className="hidden w-64 shrink-0 border-r border-sidebar-border lg:block">
-          <div className="sticky top-0 h-screen">
-            <Sidebar />
-          </div>
-        </aside>
+    <div className="flex min-h-screen w-full bg-background">
+      <Sidebar />
+      <div className="flex w-full flex-col">
+        <Topbar />
 
-        {/* Mobile Sidebar Overlay */}
-        {sidebarOpen && (
-          <div
-            className="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm lg:hidden"
-            onClick={() => setSidebarOpen(false)}
-          />
+        {(pastDue || canceling) && (
+          <div className="border-b bg-muted/50 px-4 py-3">
+            <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
+              <div className="text-sm">
+                {pastDue ? (
+                  <div>
+                    <div className="font-medium">Payment failed</div>
+                    <div className="text-muted-foreground">
+                      Your subscription is past due. Update your payment method to avoid losing access.
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="font-medium">Subscription will end</div>
+                    <div className="text-muted-foreground">
+                      Your plan cancels on {formatDate(plan?.currentPeriodEnd) || "your period end date"}.
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <Link href="/app/billing">
+                <Button size="sm" variant={pastDue ? "default" : "outline"}>
+                  Manage billing
+                </Button>
+              </Link>
+            </div>
+          </div>
         )}
 
-        {/* Mobile Sidebar */}
-        <aside
-          className={cn(
-            "fixed inset-y-0 left-0 z-50 w-64 transform border-r border-sidebar-border bg-sidebar transition-transform duration-300 ease-in-out lg:hidden",
-            sidebarOpen ? "translate-x-0" : "-translate-x-full",
-          )}
-        >
-          <Sidebar onClose={() => setSidebarOpen(false)} />
-        </aside>
-
-        {/* Main Content */}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <Topbar onMenuClick={() => setSidebarOpen(!sidebarOpen)} isSidebarOpen={sidebarOpen} />
-
-          {/* Page Content */}
-          <main className="flex-1 overflow-y-auto p-4 lg:p-6">{children}</main>
-
-          {/* Footer */}
-          <div className="border-t border-border bg-background px-4 py-4 text-center">
-            <p className="text-sm text-muted-foreground">RealtyTechAI LLC</p>
-          </div>
-        </div>
+        <main className="mx-auto w-full max-w-6xl flex-1 p-4 md:p-6">{children}</main>
       </div>
     </div>
   )

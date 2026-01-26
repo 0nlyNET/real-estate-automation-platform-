@@ -2,28 +2,78 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AppController } from './app.controller';
+
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { MeModule } from './modules/me/me.module';
 import { BillingModule } from './modules/billing/billing.module';
-import { AppController } from './app.controller';
+import { LeadsModule } from './modules/leads/leads.module';
+import { TeamsModule } from './modules/teams/teams.module';
+import { StatsModule } from './modules/stats/stats.module';
+
+import { PresenceModule } from './modules/presence/presence.module';
+import { RoutingModule } from './modules/routing/routing.module';
+import { ComplianceModule } from './modules/compliance/compliance.module';
+
+import { Tenant } from './modules/tenants/tenant.entity';
+import { TenantSettings } from './modules/settings/tenant-settings.entity';
+import { Credential } from './modules/settings/credential.entity';
+
+import { User } from './modules/users/user.entity';
+import { Team } from './modules/teams/team.entity';
+
+import { Lead } from './modules/leads/lead.entity';
+import { LeadEvent } from './modules/leads/lead-event.entity';
+
+import { Message } from './modules/messaging/message.entity';
+
+import { Sequence } from './modules/sequences/sequence.entity';
+import { SequenceEnrollment } from './modules/sequences/sequence-enrollment.entity';
+import { SequenceStep } from './modules/sequences/sequence-step.entity';
+
+import { RoutingRule } from './modules/routing/routing-rule.entity';
+import { RoutingAssignmentLog } from './modules/routing/routing-assignment-log.entity';
+
+import { AgentPresence } from './modules/presence/agent-presence.entity';
+
+import { ComplianceOptOut } from './modules/compliance/compliance-optout.entity';
+import { ComplianceEvent } from './modules/compliance/compliance-event.entity';
+import { TenantQuietHours } from './modules/compliance/tenant-quiet-hours.entity';
 
 function buildDatabaseConfig() {
   const url = process.env.DATABASE_URL;
   if (url) {
-    // Railway/Postgres style
     const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
     return {
       type: 'postgres' as const,
       url,
-      autoLoadEntities: true,
+      entities: [
+        Tenant,
+        User,
+        Team,
+        Lead,
+        LeadEvent,
+        Message,
+        Sequence,
+        SequenceEnrollment,
+        SequenceStep,
+        Credential,
+        TenantSettings,
+
+        RoutingRule,
+        RoutingAssignmentLog,
+        AgentPresence,
+        ComplianceOptOut,
+        ComplianceEvent,
+        TenantQuietHours,
+      ],
       synchronize: true,
       ssl: isLocal ? false : { rejectUnauthorized: false },
     };
   }
 
-  // Local docker-compose style
   return {
     type: 'postgres' as const,
     host: process.env.DB_HOST || 'localhost',
@@ -31,7 +81,26 @@ function buildDatabaseConfig() {
     username: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
     database: process.env.DB_NAME || 'real_estate',
-    autoLoadEntities: true,
+    entities: [
+      Tenant,
+      User,
+      Team,
+      Lead,
+      LeadEvent,
+      Message,
+      Sequence,
+      SequenceEnrollment,
+      SequenceStep,
+      Credential,
+      TenantSettings,
+
+      RoutingRule,
+      RoutingAssignmentLog,
+      AgentPresence,
+      ComplianceOptOut,
+      ComplianceEvent,
+      TenantQuietHours,
+    ],
     synchronize: true,
   };
 }
@@ -40,11 +109,7 @@ function buildDatabaseConfig() {
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: [
-        // Prefer backend/.env, but allow root .env
-        'backend/.env',
-        '.env',
-      ],
+      envFilePath: ['backend/.env', '.env'],
     }),
 
     TypeOrmModule.forRoot(buildDatabaseConfig()),
@@ -54,6 +119,13 @@ function buildDatabaseConfig() {
     AuthModule,
     MeModule,
     BillingModule,
+    LeadsModule,
+    TeamsModule,
+    StatsModule,
+
+    PresenceModule,
+    RoutingModule,
+    ComplianceModule,
   ],
   controllers: [AppController],
 })

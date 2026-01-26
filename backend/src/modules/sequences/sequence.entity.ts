@@ -10,6 +10,12 @@ export class Sequence extends BaseEntity {
   @Column({ type: 'varchar', length: 255, nullable: true })
   name!: string;
 
+  @Column({ type: 'text', nullable: true })
+  description?: string | null;
+
+  @Column({ type: 'boolean', default: true })
+  active!: boolean;
+
   @Column({ name: 'lead_type', type: 'varchar', length: 50, nullable: true })
   leadType!: string;
 

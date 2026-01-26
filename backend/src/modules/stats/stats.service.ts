@@ -3,68 +3,112 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Lead } from '../leads/lead.entity';
 import { Message } from '../messaging/message.entity';
-
-function toDateKey(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+import { User } from '../users/user.entity';
 
 @Injectable()
 export class StatsService {
   constructor(
-    @InjectRepository(Lead) private readonly leadsRepo: Repository<Lead>,
-    @InjectRepository(Message) private readonly messagesRepo: Repository<Message>,
+    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(Lead) private readonly leads: Repository<Lead>,
+    @InjectRepository(Message) private readonly messages: Repository<Message>,
   ) {}
 
-  async overview(tenantId?: string) {
-    const leadsTotal = await this.leadsRepo.count(
-      tenantId ? { where: { tenantId } as any } : undefined,
-    );
 
-    const messagesTotal = await this.messagesRepo.count();
+  async overview(tenantId: string, ctx?: { userId?: string; role?: string }) {
+    const leadsTotal = await this.leads.count({ where: { tenantId } as any });
 
-    const since = new Date();
-    since.setDate(since.getDate() - 6); // inclusive range = 7 days
-    since.setHours(0, 0, 0, 0);
+    const messagesTotal = await this.messages
+      .createQueryBuilder('m')
+      .leftJoin('m.lead', 'l')
+      .where('l.tenantId = :t', { t: tenantId })
+      .getCount();
 
-    // Leads last 7 days
-    const leadsRecent = await this.leadsRepo
-      .createQueryBuilder('lead')
-      .select(['lead.createdAt as createdAt'])
-      .where('lead.createdAt >= :since', { since })
-      .andWhere(tenantId ? 'lead.tenantId = :tenantId' : '1=1', { tenantId })
-      .getRawMany();
+    // Avg first response time across leads that have it
+    const rtRows = await this.leads
+      .createQueryBuilder('l')
+      .select('AVG(l.firstResponseTimeSec)', 'avg')
+      .addSelect('COUNT(*)', 'count')
+      .where('l.tenantId = :t', { t: tenantId })
+      .andWhere('l.firstResponseTimeSec IS NOT NULL')
+      .getRawOne();
 
-    // Messages last 7 days
-    const messagesRecent = await this.messagesRepo
-      .createQueryBuilder('msg')
-      .select(['msg.createdAt as createdAt'])
-      .where('msg.createdAt >= :since', { since })
-      .getRawMany();
+    const avgFirstResponseSec = rtRows?.avg ? Math.round(Number(rtRows.avg)) : null;
+    const responseSamples = rtRows?.count ? Number(rtRows.count) : 0;
 
-    const byDayMap = new Map<string, number>();
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(since);
-      d.setDate(since.getDate() + i);
-      byDayMap.set(toDateKey(d), 0);
-    }
+    // % contacted within 5 minutes (createdAt -> firstContactSentAt)
+    const contacted5 = await this.leads
+      .createQueryBuilder('l')
+      .where('l.tenantId = :t', { t: tenantId })
+      .andWhere('l.firstContactSentAt IS NOT NULL')
+      .andWhere("EXTRACT(EPOCH FROM (l.firstContactSentAt - l.createdAt)) <= 300")
+      .getCount();
 
-    for (const row of leadsRecent) {
-      const d = new Date(row.createdAt);
-      const key = toDateKey(d);
-      if (byDayMap.has(key)) byDayMap.set(key, (byDayMap.get(key) || 0) + 1);
-    }
+    const contactedSample = await this.leads
+      .createQueryBuilder('l')
+      .where('l.tenantId = :t', { t: tenantId })
+      .andWhere('l.firstContactSentAt IS NOT NULL')
+      .getCount();
 
-    const leadsByDay = Array.from(byDayMap.entries()).map(([date, count]) => ({ date, count }));
+    const pctContactedWithin5Min =
+      contactedSample > 0 ? Math.round((contacted5 / contactedSample) * 100) : null;
+
+    const since7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const appointmentsSet7d = await this.leads
+      .createQueryBuilder('l')
+      .where('l.tenantId = :t', { t: tenantId })
+      .andWhere("l.stage = 'appointment_set'")
+      .andWhere('l.updatedAt >= :since', { since: since7 })
+      .getCount();
 
     return {
       leadsTotal,
-      leadsLast7d: leadsRecent.length,
       messagesTotal,
-      messagesLast7d: messagesRecent.length,
-      leadsByDay,
+      avgFirstResponseSec,
+      responseSamples,
+      pctContactedWithin5Min,
+      appointmentsSet7d,
     };
+  }
+
+  async agentPerformance(tenantId: string) {
+    const agents = await this.users.find({ where: { tenant: { id: tenantId }, isActive: true } as any });
+    const since7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const out = [] as any[];
+    for (const u of agents) {
+      const leadsAssigned = await this.leads.count({ where: { tenantId, assignedToUserId: u.id } as any });
+      const leadsNew7d = await this.leads
+        .createQueryBuilder('l')
+        .where('l.tenantId = :t', { t: tenantId })
+        .andWhere('l.assignedToUserId = :u', { u: u.id })
+        .andWhere('l.createdAt >= :since', { since: since7.toISOString() })
+        .getCount();
+
+      const messagesSent7d = await this.messages
+        .createQueryBuilder('m')
+        .leftJoin('m.lead', 'l')
+        .where('l.tenantId = :t', { t: tenantId })
+        .andWhere('m.direction = :d', { d: 'outbound' })
+        .andWhere('m.createdAt >= :since', { since: since7.toISOString() })
+        .andWhere('l.assignedToUserId = :u', { u: u.id })
+        .getCount();
+
+      out.push({
+        userId: u.id,
+        email: u.email,
+        role: u.role,
+        teamId: u.teamId,
+        leadsAssigned,
+        leadsNew7d,
+        messagesSent7d,
+      });
+    }
+    return out;
+  }
+
+  // Backwards-compatible name used by the controller.
+  async agentMetrics(tenantId: string) {
+    return await this.agentPerformance(tenantId);
   }
 }

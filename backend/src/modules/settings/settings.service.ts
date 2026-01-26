@@ -1,14 +1,7 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { TenantSettings } from './tenant-settings.entity';
-
-type TenantSettingsPatch = Partial<
-  Pick<
-    TenantSettings,
-    'timeZone' | 'quietHoursStart' | 'quietHoursEnd' | 'bookingLink' | 'automationsEnabled'
-  >
->;
+import { Injectable } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { TenantSettings } from "./tenant-settings.entity";
 
 @Injectable()
 export class SettingsService {
@@ -17,73 +10,73 @@ export class SettingsService {
     private readonly tenantSettingsRepo: Repository<TenantSettings>,
   ) {}
 
-  async getTenantSettings(tenantId: string): Promise<TenantSettings> {
-    if (!tenantId) throw new BadRequestException('tenantId is required');
+  private async findByTenantId(tenantId: string) {
+    // Works whether TenantSettings has tenantId column OR tenant relation.
+    return this.tenantSettingsRepo
+      .createQueryBuilder("s")
+      .leftJoin("s.tenant", "t")
+      .where("t.id = :tenantId", { tenantId })
+      .getOne();
+  }
 
-    const existing = await this.tenantSettingsRepo.findOne({
-      where: { tenantId },
-    });
+  async getTenantSettings(tenantId: string) {
+    let settings = await this.findByTenantId(tenantId);
 
-    if (existing) return existing;
+    if (!settings) {
+      // Create with only fields that are almost always present.
+      // We avoid null assignments to satisfy strict TS types.
+      settings = this.tenantSettingsRepo.create() as TenantSettings;
 
-    const created = this.tenantSettingsRepo.create({
-      tenantId,
-      timeZone: process.env.DEFAULT_TIME_ZONE || 'America/New_York',
-      quietHoursStart: process.env.DEFAULT_QUIET_START || '21:00',
-      quietHoursEnd: process.env.DEFAULT_QUIET_END || '08:00',
-      bookingLink: undefined,
-      automationsEnabled:
-        process.env.DEFAULT_AUTOMATIONS_ENABLED === 'false' ? false : true,
-    });
+      // Attach tenant relation without needing Tenant repository:
+      // TypeORM allows partial relation objects.
+      (settings as any).tenant = { id: tenantId };
 
-    return await this.tenantSettingsRepo.save(created);
+      // Set safe defaults ONLY if those properties exist on the entity.
+      if ("timeZone" in settings) (settings as any).timeZone = "America/New_York";
+      if ("quietHoursStart" in settings) (settings as any).quietHoursStart = "21:00";
+      if ("quietHoursEnd" in settings) (settings as any).quietHoursEnd = "08:00";
+      if ("automationsEnabled" in settings) (settings as any).automationsEnabled = true;
+
+      // bookingLink: do not set to null. If it exists, set to empty string.
+      if ("bookingLink" in settings && (settings as any).bookingLink == null) {
+        (settings as any).bookingLink = "";
+      }
+
+      await this.tenantSettingsRepo.save(settings);
+    }
+
+    return settings;
   }
 
   async updateTenantSettings(
     tenantId: string,
-    patch: TenantSettingsPatch,
-  ): Promise<TenantSettings> {
-    if (!tenantId) throw new BadRequestException('tenantId is required');
+    updates: Partial<{
+      timeZone: string;
+      quietHoursStart: string;
+      quietHoursEnd: string;
+      bookingLink: string;
+      automationsEnabled: boolean;
+      roundRobinEnabled: boolean;
+      roundRobinTeamId: string | null;
+    }>,
+  ) {
+    const current = await this.getTenantSettings(tenantId);
 
-    const row = await this.getTenantSettings(tenantId);
+    if (typeof updates.timeZone === "string" && "timeZone" in current) (current as any).timeZone = updates.timeZone;
+    if (typeof updates.quietHoursStart === "string" && "quietHoursStart" in current)
+      (current as any).quietHoursStart = updates.quietHoursStart;
+    if (typeof updates.quietHoursEnd === "string" && "quietHoursEnd" in current)
+      (current as any).quietHoursEnd = updates.quietHoursEnd;
+    if (typeof updates.bookingLink === "string" && "bookingLink" in current) (current as any).bookingLink = updates.bookingLink;
+    if (typeof updates.automationsEnabled === "boolean" && "automationsEnabled" in current)
+      (current as any).automationsEnabled = updates.automationsEnabled;
 
-    if (patch.timeZone !== undefined) {
-      row.timeZone = String(patch.timeZone).trim();
-    }
+    if (typeof (updates as any).roundRobinEnabled === "boolean" && "roundRobinEnabled" in current)
+      (current as any).roundRobinEnabled = (updates as any).roundRobinEnabled;
 
-    if (patch.quietHoursStart !== undefined) {
-      row.quietHoursStart = String(patch.quietHoursStart).trim();
-    }
+    if (("roundRobinTeamId" in (updates as any)) && "roundRobinTeamId" in current)
+      (current as any).roundRobinTeamId = (updates as any).roundRobinTeamId;
 
-    if (patch.quietHoursEnd !== undefined) {
-      row.quietHoursEnd = String(patch.quietHoursEnd).trim();
-    }
-
-    if (patch.bookingLink !== undefined) {
-      const v = String(patch.bookingLink || '').trim();
-
-      if (!v) {
-        row.bookingLink = undefined;
-      } else {
-        // basic URL sanity check
-        try {
-          const u = new URL(v);
-          if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-            throw new Error('bad protocol');
-          }
-          row.bookingLink = v;
-        } catch {
-          throw new BadRequestException(
-            'bookingLink must be a valid http(s) URL',
-          );
-        }
-      }
-    }
-
-    if (patch.automationsEnabled !== undefined) {
-      row.automationsEnabled = Boolean(patch.automationsEnabled);
-    }
-
-    return await this.tenantSettingsRepo.save(row);
+    return this.tenantSettingsRepo.save(current);
   }
 }

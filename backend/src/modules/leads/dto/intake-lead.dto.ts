@@ -1,21 +1,81 @@
-import { LeadStage, LeadTemperature, LeadType } from '../lead.entity';
+import { IsArray, IsEmail, IsIn, IsOptional, IsString } from 'class-validator';
 
-// Public intake payload for website forms / Zapier / FB leads.
-// Keep this intentionally permissive for MVP; sanitize in the service.
+// Public intake payloads (forms/webhooks). Everything is optional because sources vary.
+// The service layer applies required checks and defaults.
 export class IntakeLeadDto {
-  fullName!: string;
-  email?: string;
-  phone?: string;
-  source?: string;
-  location?: string;
-  propertyInterest?: string;
+  @IsOptional()
+  @IsString()
+  fullName?: string | null;
 
-  leadType?: LeadType;
-  temperature?: LeadTemperature;
-  stage?: LeadStage;
+  @IsOptional()
+  @IsEmail()
+  email?: string | null;
 
-  budgetRange?: string;
-  estimatedPrice?: string;
-  preferredAreas?: string[];
-  notes?: string;
+  @IsOptional()
+  @IsString()
+  phone?: string | null;
+
+  @IsOptional()
+  @IsString()
+  source?: string | null;
+
+  @IsOptional()
+  @IsString()
+  location?: string | null;
+
+  @IsOptional()
+  @IsString()
+  propertyInterest?: string | null;
+
+  @IsOptional()
+  @IsString()
+  budgetRange?: string | null;
+
+  @IsOptional()
+  @IsString()
+  estimatedPrice?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  preferredAreas?: string[] | null;
+
+  @IsOptional()
+  @IsIn(['buyer', 'seller', 'renter', 'investor'])
+  leadType?: string | null;
+
+  @IsOptional()
+  @IsIn(['hot', 'warm', 'cold'])
+  temperature?: string | null;
+
+  @IsOptional()
+  @IsIn(['new','contacted','qualified','appointment_set','showing_scheduled','offer_out','under_contract','closed','nurture','lost'])
+  stage?: string | null;
+
+  @IsOptional()
+  @IsString()
+  timeline?: string | null;
+
+  @IsOptional()
+  @IsIn(['buy','rent','sell'])
+  buyOrRent?: string | null;
+
+  @IsOptional()
+  @IsIn(['yes','no','unsure'])
+  preapproved?: string | null;
+
+  @IsOptional()
+  @IsString()
+  bestTimeToTalk?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  tags?: string[] | null;
+
+  @IsOptional()
+  @IsString()
+  notes?: string | null;
+
+  @IsOptional()
+  @IsString()
+  campaign?: string | null;
 }

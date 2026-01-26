@@ -1,164 +1,67 @@
 "use client"
 
-import type React from "react"
-
 import { useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
-import { Loader2, ArrowRight, ArrowLeft, CheckCircle2 } from "lucide-react"
-import { Footer } from "@/components/ui/footer"
-import { apiFetch } from "@/lib/api"
 
 export default function ForgotPasswordPage() {
+  const router = useRouter()
   const { toast } = useToast()
-  const [loading, setLoading] = useState(false)
   const [email, setEmail] = useState("")
-  const [sent, setSent] = useState(false)
+  const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
+
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-
-    if (!email) {
-      toast({
-        title: "Error",
-        description: "Please enter your email address",
-        variant: "destructive",
-      })
-      return
-    }
-
     setLoading(true)
-
     try {
-      await apiFetch<{ ok: boolean }>("/auth/forgot-password", {
+      await fetch(`${apiUrl}/auth/forgot-password`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       })
+      toast({
+        title: "Check your email",
+        description: "If that email exists, a reset link was sent.",
+      })
+      router.push("/login")
     } catch {
-      // Always show success so users can't enumerate accounts.
+      toast({ title: "Error", description: "Something went wrong. Try again." })
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
-    setSent(true)
-  }
-
-  if (sent) {
-    return (
-      <div className="flex min-h-screen flex-col bg-background">
-        <div className="flex flex-1 items-center justify-center px-4 py-12">
-          <div className="w-full max-w-md">
-            <div className="mb-8 text-center">
-              <Link href="/" className="inline-flex items-center gap-2">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
-                  <span className="text-lg font-bold text-primary-foreground">R</span>
-                </div>
-                <span className="text-xl font-semibold text-foreground">RealtyTechAI</span>
-              </Link>
-            </div>
-
-            <Card className="border-border bg-card">
-              <CardHeader className="pb-4 text-center">
-                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
-                  <CheckCircle2 className="h-8 w-8 text-primary" />
-                </div>
-                <h1 className="text-2xl font-bold text-foreground">Check your email</h1>
-                <p className="text-sm text-muted-foreground">
-                  If an account exists for {email}, you will receive a password reset link shortly.
-                </p>
-              </CardHeader>
-              <CardContent>
-                <Link
-                  href="/login"
-                  className="flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-foreground"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  Back to login
-                </Link>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-        <Footer />
-      </div>
-    )
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <div className="flex flex-1 items-center justify-center px-4 py-12">
-        <div className="w-full max-w-md">
-          <div className="mb-8 text-center">
-            <Link href="/" className="inline-flex items-center gap-2">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
-                <span className="text-lg font-bold text-primary-foreground">R</span>
-              </div>
-              <span className="text-xl font-semibold text-foreground">RealtyTechAI</span>
-            </Link>
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <div className="space-y-1">
+            <h1 className="text-xl font-semibold">Forgot password</h1>
+            <p className="text-sm text-muted-foreground">We will email you a reset link.</p>
           </div>
-
-          <Card className="border-border bg-card">
-            <CardHeader className="pb-4 text-center">
-              <h1 className="text-2xl font-bold text-foreground">Forgot your password?</h1>
-              <p className="text-sm text-muted-foreground">
-                Enter your email and we'll send you a link to reset your password.
-              </p>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email" className="text-foreground">
-                    Email
-                  </Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="john@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="bg-secondary"
-                    disabled={loading}
-                    required
-                  />
-                </div>
-
-                <Button
-                  type="submit"
-                  className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
-                  disabled={loading}
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Sending...
-                    </>
-                  ) : (
-                    <>
-                      Send reset link
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </>
-                  )}
-                </Button>
-              </form>
-
-              <div className="mt-6">
-                <Link
-                  href="/login"
-                  className="flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-foreground"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  Back to login
-                </Link>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      <Footer />
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            </div>
+            <Button className="w-full" type="submit" disabled={loading}>
+              {loading ? "Sending..." : "Send reset link"}
+            </Button>
+            <div className="text-sm text-muted-foreground">
+              <Link href="/login" className="underline">Back to login</Link>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   )
 }

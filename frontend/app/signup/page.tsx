@@ -1,110 +1,108 @@
-"use client"
+"use client";
 
-import type React from "react"
+import type React from "react";
 
-import { useState } from "react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
-import { useToast } from "@/hooks/use-toast"
-import { Eye, EyeOff, Loader2, ArrowRight, Check, X } from "lucide-react"
-import { Footer } from "@/components/ui/footer"
-import { Logo } from "@/components/logo"
-import { apiFetch } from "@/lib/api"
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import { Eye, EyeOff, Loader2, ArrowRight } from "lucide-react";
+import { Footer } from "@/components/ui/footer";
+import { Logo } from "@/components/logo";
 
-const passwordRequirements = [
-  { label: "At least 8 characters", test: (p: string) => p.length >= 8 },
-  { label: "One uppercase letter", test: (p: string) => /[A-Z]/.test(p) },
-  { label: "One lowercase letter", test: (p: string) => /[a-z]/.test(p) },
-  { label: "One number", test: (p: string) => /\d/.test(p) },
-]
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+
+function makeTenantName(fullName: string) {
+  const base = fullName.trim() || "My";
+  const first = base.split(" ").filter(Boolean)[0] || "My";
+  return `${first}'s Realty`;
+}
 
 export default function SignupPage() {
-  const router = useRouter()
-  const { toast } = useToast()
-  const [loading, setLoading] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
-  const [acceptTerms, setAcceptTerms] = useState(false)
+  const router = useRouter();
+  const { toast } = useToast();
 
-  const [formData, setFormData] = useState({
-    name: "",
-    email: "",
-    password: "",
-    confirmPassword: "",
-  })
-  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
-  const updateField = (field: string, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }))
-  }
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
-  const getPasswordStrength = () => {
-    const passed = passwordRequirements.filter((req) => req.test(formData.password)).length
-    if (passed === 0) return { label: "", color: "" }
-    if (passed <= 2) return { label: "Weak", color: "bg-destructive" }
-    if (passed === 3) return { label: "Medium", color: "bg-yellow-500" }
-    return { label: "Strong", color: "bg-primary" }
-  }
+  const [error, setError] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError("")
+    e.preventDefault();
+    setError("");
 
-    if (!formData.name || !formData.email || !formData.password || !formData.confirmPassword) {
-      setError("Please fill in all fields")
-      return
+    const fullNameClean = String(fullName).trim();
+    const emailClean = String(email).trim();
+    const passwordClean = String(password);
+    const confirmClean = String(confirmPassword);
+
+    if (!fullNameClean || !emailClean || !passwordClean || !confirmClean) {
+      setError("Please fill in all fields");
+      return;
     }
 
-    if (formData.password !== formData.confirmPassword) {
-      setError("Passwords do not match")
-      return
+    if (passwordClean.length < 8) {
+      setError("Password must be at least 8 characters");
+      return;
     }
 
-    if (!passwordRequirements.every((req) => req.test(formData.password))) {
-      setError("Password does not meet requirements")
-      return
+    if (passwordClean !== confirmClean) {
+      setError("Passwords do not match");
+      return;
     }
 
-    if (!acceptTerms) {
-      setError("Please accept the terms of service")
-      return
-    }
-
-    setLoading(true)
+    setLoading(true);
 
     try {
-      const res = await apiFetch<{ accessToken: string }>("/auth/register", {
+      const tenantName = makeTenantName(fullNameClean);
+
+      const res = await fetch(`${API_URL}/auth/register`, {
         method: "POST",
-        json: {
-          email: formData.email,
-          password: formData.password,
-          brokerage: "",
-        },
-      })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: emailClean,
+          password: passwordClean,
+          fullName: fullNameClean,
+          tenantName,
+        }),
+      });
 
-      localStorage.setItem("rta_token", res.accessToken)
-      localStorage.setItem("rta_pending_email", formData.email)
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        const msg = Array.isArray(data?.message)
+          ? data.message.join(", ")
+          : data?.message || "Signup failed";
+        throw new Error(msg);
+      }
+
+      if (!data?.accessToken) throw new Error("Signup failed: missing token");
+
+      localStorage.setItem("rta_token", data.accessToken);
+      localStorage.setItem("rta_pending_email", emailClean);
+
+      toast({
+        title: "Account created!",
+        description: "Welcome to RealtyTechAI.",
+      });
+
+      router.push("/app/dashboard");
     } catch (err: any) {
-      setLoading(false)
-      setError(err?.message || "Signup failed")
-      return
+      setError(err?.message || "Signup failed");
+    } finally {
+      setLoading(false);
     }
-
-    toast({
-      title: "Account created!",
-      description: "Please check your email to verify your account.",
-    })
-
-    setLoading(false)
-    router.push("/verify-email")
-  }
-
-  const strength = getPasswordStrength()
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -117,8 +115,9 @@ export default function SignupPage() {
           <Card className="border-border bg-card">
             <CardHeader className="pb-4 text-center">
               <h1 className="text-2xl font-bold text-foreground">Create your account</h1>
-              <p className="text-sm text-muted-foreground">Start your 14-day free trial today</p>
+              <p className="text-sm text-muted-foreground">Start your free trial today</p>
             </CardHeader>
+
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-4">
                 {error && (
@@ -128,18 +127,17 @@ export default function SignupPage() {
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="name" className="text-foreground">
+                  <Label htmlFor="fullName" className="text-foreground">
                     Full name
                   </Label>
                   <Input
-                    id="name"
-                    type="text"
-                    placeholder="John Doe"
-                    value={formData.name}
-                    onChange={(e) => updateField("name", e.target.value)}
+                    id="fullName"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
                     className="bg-secondary"
                     disabled={loading}
                     required
+                    autoComplete="name"
                   />
                 </div>
 
@@ -150,12 +148,12 @@ export default function SignupPage() {
                   <Input
                     id="email"
                     type="email"
-                    placeholder="john@example.com"
-                    value={formData.email}
-                    onChange={(e) => updateField("email", e.target.value)}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     className="bg-secondary"
                     disabled={loading}
                     required
+                    autoComplete="email"
                   />
                 </div>
 
@@ -167,19 +165,19 @@ export default function SignupPage() {
                     <Input
                       id="password"
                       type={showPassword ? "text" : "password"}
-                      placeholder="Create a strong password"
-                      value={formData.password}
-                      onChange={(e) => updateField("password", e.target.value)}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
                       className="bg-secondary pr-10"
                       disabled={loading}
                       required
+                      autoComplete="new-password"
                     />
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
                       className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                      onClick={() => setShowPassword(!showPassword)}
+                      onClick={() => setShowPassword((v) => !v)}
                       disabled={loading}
                     >
                       {showPassword ? (
@@ -187,42 +185,9 @@ export default function SignupPage() {
                       ) : (
                         <Eye className="h-4 w-4 text-muted-foreground" />
                       )}
+                      <span className="sr-only">{showPassword ? "Hide password" : "Show password"}</span>
                     </Button>
                   </div>
-
-                  {formData.password && (
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <div className="h-1.5 flex-1 rounded-full bg-secondary">
-                          <div
-                            className={`h-full rounded-full transition-all ${strength.color}`}
-                            style={{
-                              width: `${(passwordRequirements.filter((r) => r.test(formData.password)).length / 4) * 100}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="text-xs text-muted-foreground">{strength.label}</span>
-                      </div>
-                      <ul className="space-y-1">
-                        {passwordRequirements.map((req, i) => (
-                          <li key={i} className="flex items-center gap-2 text-xs">
-                            {req.test(formData.password) ? (
-                              <Check className="h-3 w-3 text-primary" />
-                            ) : (
-                              <X className="h-3 w-3 text-muted-foreground" />
-                            )}
-                            <span
-                              className={
-                                req.test(formData.password) ? "text-muted-foreground" : "text-muted-foreground/60"
-                              }
-                            >
-                              {req.label}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -232,48 +197,30 @@ export default function SignupPage() {
                   <div className="relative">
                     <Input
                       id="confirmPassword"
-                      type={showConfirmPassword ? "text" : "password"}
-                      placeholder="Confirm your password"
-                      value={formData.confirmPassword}
-                      onChange={(e) => updateField("confirmPassword", e.target.value)}
+                      type={showConfirm ? "text" : "password"}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
                       className="bg-secondary pr-10"
                       disabled={loading}
                       required
+                      autoComplete="new-password"
                     />
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
                       className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      onClick={() => setShowConfirm((v) => !v)}
                       disabled={loading}
                     >
-                      {showConfirmPassword ? (
+                      {showConfirm ? (
                         <EyeOff className="h-4 w-4 text-muted-foreground" />
                       ) : (
                         <Eye className="h-4 w-4 text-muted-foreground" />
                       )}
+                      <span className="sr-only">{showConfirm ? "Hide password" : "Show password"}</span>
                     </Button>
                   </div>
-                </div>
-
-                <div className="flex items-start gap-2">
-                  <Checkbox
-                    id="terms"
-                    checked={acceptTerms}
-                    onCheckedChange={(checked) => setAcceptTerms(checked as boolean)}
-                    disabled={loading}
-                  />
-                  <Label htmlFor="terms" className="text-sm text-muted-foreground">
-                    I agree to the{" "}
-                    <Link href="/terms" className="text-primary hover:underline">
-                      Terms of Service
-                    </Link>{" "}
-                    and{" "}
-                    <Link href="/privacy" className="text-primary hover:underline">
-                      Privacy Policy
-                    </Link>
-                  </Label>
                 </div>
 
                 <Button
@@ -284,7 +231,7 @@ export default function SignupPage() {
                   {loading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Creating account...
+                      Creating...
                     </>
                   ) : (
                     <>
@@ -308,5 +255,5 @@ export default function SignupPage() {
 
       <Footer />
     </div>
-  )
+  );
 }

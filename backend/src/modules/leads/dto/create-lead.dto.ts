@@ -1,23 +1,84 @@
-import { LeadStage, LeadTemperature, LeadType } from '../lead.entity';
+import { IsArray, IsEmail, IsIn, IsOptional, IsString } from 'class-validator';
 
-// Protected payload for agents creating a lead manually from the app.
 export class CreateLeadDto {
-  fullName!: string;
-  email?: string;
-  phone?: string;
-  source?: string;
-  location?: string;
-  propertyInterest?: string;
+  @IsOptional()
+  @IsString()
+  fullName?: string | null;
 
-  leadType?: LeadType;
-  temperature?: LeadTemperature;
-  stage?: LeadStage;
+  @IsOptional()
+  @IsEmail()
+  email?: string | null;
 
-  budgetRange?: string;
-  estimatedPrice?: string;
-  preferredAreas?: string[];
-  notes?: string;
+  @IsOptional()
+  @IsString()
+  phone?: string | null;
 
-  // For future: allow disabling instant responses.
-  triggerAutomation?: boolean;
+  @IsOptional()
+  @IsString()
+  source?: string | null;
+
+  @IsOptional()
+  @IsString()
+  location?: string | null;
+
+  @IsOptional()
+  @IsString()
+  propertyInterest?: string | null;
+
+  @IsOptional()
+  @IsString()
+  budgetRange?: string | null;
+
+  @IsOptional()
+  @IsString()
+  estimatedPrice?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  preferredAreas?: string[] | null;
+
+  @IsOptional()
+  @IsIn(['buyer', 'seller', 'renter', 'investor'])
+  leadType?: string | null;
+
+  @IsOptional()
+  @IsIn(['hot', 'warm', 'cold'])
+  temperature?: string | null;
+
+  @IsOptional()
+  @IsIn(['new','contacted','qualified','appointment_set','showing_scheduled','offer_out','under_contract','closed','nurture','lost'])
+  stage?: string | null;
+
+  // Optional manual assignment (Teams/Enterprise; enforced by guards/controllers)
+  @IsOptional()
+  @IsString()
+  assignedToUserId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  assignedToTeamId?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  tags?: string[] | null;
+
+  @IsOptional()
+  @IsString()
+  notes?: string | null;
+
+  @IsOptional()
+  @IsString()
+  timeline?: string | null;
+
+  @IsOptional()
+  @IsIn(['buy','rent','sell'])
+  buyOrRent?: string | null;
+
+  @IsOptional()
+  @IsIn(['yes','no','unsure'])
+  preapproved?: string | null;
+
+  @IsOptional()
+  @IsString()
+  bestTimeToTalk?: string | null;
 }

@@ -1,67 +1,77 @@
-import { Body, Controller, Post } from '@nestjs/common';
-import { MessagingService } from './messaging.service';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
+import { Request } from "express";
+import { JwtAuthGuard } from "../auth/jwt-auth.guard";
+import { MessagingService } from "./messaging.service";
 
-type TestEmailDto = {
-  to: string;
-};
-
-// Twilio sends application/x-www-form-urlencoded with fields like:
-// From=+1555...&To=+1...&Body=...
-// Depending on your Nest body parser config, this will arrive as a plain object.
-type TwilioInboundSmsBody = {
-  From?: string;
-  To?: string;
-  Body?: string;
-
-  // sometimes people proxy/transform fields to lowercase
-  from?: string;
-  to?: string;
-  body?: string;
-  text?: string;
-};
-
-type SendgridInboundBody = {
-  from?: string;
-  text?: string;
-  subject?: string;
-};
-
-@Controller('messaging')
+@Controller("messaging")
 export class MessagingController {
-  constructor(private readonly messaging: MessagingService) {}
+  constructor(private readonly messagingService: MessagingService) {}
 
-  @Post('test-email')
-  async testEmail(@Body() body: TestEmailDto) {
-    return this.messaging.sendLeadAutoReply({
-      leadEmail: body?.to,
-      leadName: 'Test Lead',
-      bookingLink: 'https://example.com',
+  @Post("test-email")
+  async testEmail(@Body() body: any) {
+    return this.messagingService.testEmail(body);
+  }
+
+  @Post("webhooks/twilio/sms")
+  async twilioSmsWebhook(@Req() req: Request) {
+    return this.messagingService.handleTwilioSmsWebhook(req);
+  }
+
+  @Post("webhooks/sendgrid/inbound")
+  async sendgridInboundWebhook(@Req() req: Request) {
+    return this.messagingService.handleSendgridInboundWebhook(req);
+  }
+
+  @Post("process")
+  async process(@Body() body: any) {
+    return this.messagingService.process(body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get("threads")
+  async getThreads(
+    @Req() req: Request,
+    @Query("take") take?: string,
+    @Query("skip") skip?: string,
+    @Query("scope") scope?: string,
+  ) {
+    const user: any = (req as any).user;
+    const tenantId = user?.tenantId;
+
+    const takeNum = Math.min(Math.max(parseInt(take || "50", 10) || 50, 1), 200);
+    const skipNum = Math.max(parseInt(skip || "0", 10) || 0, 0);
+
+    const normalizedScope = scope === "mine" ? "mine" : scope === "team" ? "team" : "shared";
+
+    return this.messagingService.listThreads(tenantId, takeNum, skipNum, {
+      userId: user?.userId,
+      role: user?.role,
+      teamId: user?.teamId || null,
+      scope: normalizedScope,
     });
   }
 
-  @Post('webhooks/twilio/sms')
-  async twilioSmsWebhook(@Body() body: TwilioInboundSmsBody) {
-    // Be defensive about field casing so local tests/proxies don’t break it
-    const From = body?.From ?? body?.from;
-    const To = body?.To ?? body?.to;
-    const Body = body?.Body ?? body?.body ?? body?.text;
-
-    return this.messaging.handleInboundSms({ From, To, Body });
+  @UseGuards(JwtAuthGuard)
+  @Get("threads/:leadId")
+  async getThreadMessages(@Req() req: Request, @Param("leadId") leadId: string) {
+    const user: any = (req as any).user;
+    const tenantId = user?.tenantId;
+    return this.messagingService.getThreadMessages(tenantId, leadId);
   }
 
-  @Post('webhooks/sendgrid/inbound')
-  async sendgridInboundWebhook(@Body() body: SendgridInboundBody) {
-    // Minimal shape for local testing: { from, text, subject }
-    return this.messaging.handleInboundEmail({
-      from: body?.from,
-      text: body?.text,
-      subject: body?.subject,
-    });
-  }
-
-  @Post('process')
-  async processPending() {
-    await this.messaging.processPendingOutbound({ limit: 50 });
-    return { status: 'ok' };
+  @UseGuards(JwtAuthGuard)
+  @Post("send")
+  async send(@Req() req: Request, @Body() body: any) {
+    const user: any = (req as any).user;
+    return this.messagingService.sendManualMessage(user?.tenantId, user?.userId, body);
   }
 }

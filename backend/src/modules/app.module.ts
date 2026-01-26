@@ -2,58 +2,47 @@ import { join } from 'path';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { TerminusModule } from '@nestjs/terminus';
 
-import { HealthModule } from './health/health.module';
-import { TenantsModule } from './tenants/tenants.module';
-import { UsersModule } from './users/users.module';
+import { AuthModule } from './auth/auth.module';
+import { BillingModule } from './billing/billing.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 import { LeadsModule } from './leads/leads.module';
 import { MessagingModule } from './messaging/messaging.module';
 import { SequencesModule } from './sequences/sequences.module';
-import { CrmModule } from './crm/crm.module';
-import { CalendarModule } from './calendar/calendar.module';
 import { SettingsModule } from './settings/settings.module';
-import { AuditModule } from './audit/audit.module';
-import { AuthModule } from './auth/auth.module';
-import { BillingModule } from './billing/billing.module';
+import { TenantsModule } from './tenants/tenants.module';
+import { UsersModule } from './users/users.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 
 @Module({
   imports: [
-    // ENV
-ConfigModule.forRoot({
-  isGlobal: true,
-  envFilePath: join(process.cwd(), '.env'),
-}),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: join(process.cwd(), '.env'),
+    }),
 
-    // DATABASE (Railway Postgres)
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL,
       autoLoadEntities: true,
-      synchronize: true, // OK for demo only
-      ssl: {
-        rejectUnauthorized: false,
-      },
+      synchronize: true,
+      ssl: process.env.DATABASE_SSL === 'false'
+        ? false
+        : { rejectUnauthorized: false },
     }),
 
-    // Health check (Railway needs this)
-    TerminusModule,
-    HealthModule,
-
-    // Core business modules
-    TenantsModule,
+    AuthModule,
     UsersModule,
+    TenantsModule,
+    SettingsModule,
+
     LeadsModule,
     MessagingModule,
     SequencesModule,
-    CrmModule,
-    CalendarModule,
-    SettingsModule,
-    AuditModule,
-    AuthModule,
-    BillingModule,
 
-    // ❌ QueueModule / Redis intentionally removed for Railway
+    BillingModule,
+    IntegrationsModule,
+    WebhooksModule,
   ],
 })
 export class AppModule {}
