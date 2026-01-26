@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { API_BASE_URL } from '@/lib/api';
 
-export default function VerifyEmailPage() {
+function VerifyEmailContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -57,5 +57,13 @@ export default function VerifyEmailPage() {
       {status === 'error' && <p>{message}</p>}
       {status === 'idle' && <p>Preparing...</p>}
     </div>
+  );
+}
+
+export default function VerifyEmailPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24 }}>Preparing...</div>}>
+      <VerifyEmailContent />
+    </Suspense>
   );
 }

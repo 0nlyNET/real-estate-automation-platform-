@@ -9,34 +9,39 @@ export function Footer() {
           <div className="space-y-4">
             <Logo size="md" />
             <p className="text-sm text-muted-foreground">
-              Speed-to-lead automation platform for real estate professionals.
+              We install lead follow-up systems for real estate teams.
             </p>
           </div>
 
           <div>
-            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-foreground">Product</h3>
+            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-foreground">Explore</h3>
             <ul className="space-y-3">
               <li>
-                <Link href="/features" className="text-sm text-muted-foreground transition-colors hover:text-primary">
-                  Features
-                </Link>
-              </li>
-              <li>
-                <Link href="/use-cases" className="text-sm text-muted-foreground transition-colors hover:text-primary">
-                  Use Cases
-                </Link>
-              </li>
-              <li>
-                <Link href="/pricing" className="text-sm text-muted-foreground transition-colors hover:text-primary">
-                  Pricing
+                <Link href="/services" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Services
                 </Link>
               </li>
               <li>
                 <Link
-                  href="/app/integrations"
+                  href="/case-studies"
                   className="text-sm text-muted-foreground transition-colors hover:text-primary"
                 >
-                  Integrations
+                  Case Studies
+                </Link>
+              </li>
+              <li>
+                <Link href="/book" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Book a call
+                </Link>
+              </li>
+              <li>
+                <Link href="/apply" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Apply
+                </Link>
+              </li>
+              <li>
+                <Link href="/login" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Client login
                 </Link>
               </li>
             </ul>

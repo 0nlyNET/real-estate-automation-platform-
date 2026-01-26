@@ -1,6 +1,6 @@
 import { Column, Entity, Index, ManyToOne, OneToMany } from 'typeorm';
 import { BaseEntity } from '../../common/base.entity';
-import { Tenants } from '../tenants/tenant.entity';
+import { Tenant } from '../tenants/tenant.entity';
 import { LeadEvent } from './lead-event.entity';
 import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
 
@@ -78,8 +78,8 @@ export class Lead extends BaseEntity {
   @Column({ name: 'sequence_status', default: 'idle' })
   sequenceStatus!: 'idle' | 'active' | 'stopped';
 
-  @ManyToOne(() => Tenants, (tenant) => tenant.leads)
-  tenant!: Tenants;
+  @ManyToOne(() => Tenant, (tenant) => tenant.leads)
+  tenant!: Tenant;
 
   @Column({ name: 'tenant_id', type: 'uuid' })
   tenantId!: string;

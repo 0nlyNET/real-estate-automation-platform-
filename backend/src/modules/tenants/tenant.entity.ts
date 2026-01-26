@@ -1,5 +1,7 @@
 import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
 import { User } from '../users/user.entity';
+import { Lead } from '../leads/lead.entity';
+import { Credential } from '../settings/credential.entity';
 
 export type Plan = 'trial' | 'pro' | 'teams';
 
@@ -31,4 +33,16 @@ export class Tenant {
 
   @OneToMany(() => User, (u) => u.tenant)
   users!: User[];
+
+  @OneToMany(() => Lead, (lead) => lead.tenant)
+  leads?: Lead[];
+
+  @OneToMany(() => Credential, (credential) => credential.tenant)
+  credentials?: Credential[];
+
+  // Optional settings fields accessed by messaging workflows.
+  bookingLink?: string;
+  timezone?: string;
+  quietHoursStart?: string;
+  quietHoursEnd?: string;
 }
