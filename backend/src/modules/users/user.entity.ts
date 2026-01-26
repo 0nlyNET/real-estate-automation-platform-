@@ -1,45 +1,46 @@
-import { Column, Entity, ManyToOne, PrimaryGeneratedColumn, Index, JoinColumn } from 'typeorm';
-import { Tenant } from '../tenants/tenant.entity';
-import { Team } from '../teams/team.entity';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
+import { Tenant } from "../tenants/tenant.entity";
+import { Team } from "../teams/team.entity";
+import { UserRole } from "../../common/rbac";
 
-export type UserRole = 'owner' | 'admin' | 'agent' | 'tc' | 'read_only';
-
-@Entity('users')
+@Entity("users")
 export class User {
-  @PrimaryGeneratedColumn('uuid')
-  id!: string;
+  @PrimaryGeneratedColumn("uuid")
+  id: string;
 
-  @Index({ unique: true })
-  @Column({ type: 'varchar', length: 255 })
-  email!: string;
+  @Column({ type: "uuid" })
+  tenantId: string;
 
-  @Column({ type: 'varchar', length: 255 })
-  passwordHash!: string;
+  @ManyToOne(() => Tenant, (t: any) => t.users, { onDelete: "CASCADE" })
+  @JoinColumn({ name: "tenantId" })
+  tenant: Tenant;
 
-  @Column({ type: 'boolean', default: false })
-  isEmailVerified!: boolean;
+  @Column({ type: "varchar", length: 255 })
+  email: string;
 
-  @Column({ type: 'varchar', length: 255, nullable: true })
-  emailVerifyToken!: string | null;
+  // Keep nullable for now so existing DB rows with null don't crash schema sync.
+  @Column({ type: "varchar", length: 255, nullable: true })
+  passwordHash: string | null;
 
-  @Column({ type: 'timestamptz', nullable: true })
-  emailVerifyTokenExpiresAt!: Date | null;
+  @Column({ type: "varchar", length: 50, default: "agent" })
+  role: UserRole;
 
-  @ManyToOne(() => Tenant, (t) => t.users, { eager: true, onDelete: 'CASCADE' })
-  tenant!: Tenant;
+  @Column({ type: "uuid", nullable: true })
+  teamId: string | null;
 
-  // RBAC for Teams/Brokerages. Defaults keep existing single-user tenants working.
-  @Column({ type: 'varchar', default: 'owner' })
-  role!: UserRole;
+  @ManyToOne(() => Team, (team: any) => team.users, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "teamId" })
+  team: Team | null;
 
-  // Optional: group users inside a tenant into teams (Sales team, ISA team, etc.)
-  @Column({ type: 'uuid', nullable: true })
-  teamId!: string | null;
+  @Column({ type: "boolean", default: false })
+  isEmailVerified: boolean;
 
-  @ManyToOne(() => Team, (team) => team.users, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'teamId' })
-  team!: Team | null;
+  @Column({ type: "varchar", length: 255, nullable: true })
+  emailVerifyToken: string | null;
 
-  @Column({ type: 'boolean', default: true })
-  isActive!: boolean;
+  @Column({ type: "timestamptz", nullable: true })
+  emailVerifyTokenExpiresAt: Date | null;
+
+  @Column({ type: "boolean", default: true })
+  isActive: boolean;
 }

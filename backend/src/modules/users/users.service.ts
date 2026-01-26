@@ -53,8 +53,9 @@ export class UsersService {
   }
 
   async validatePassword(user: User, password: string): Promise<boolean> {
+    if (!user.passwordHash) return false;
     return await bcrypt.compare(password, user.passwordHash);
-  }
+}
 
   async verifyEmail(token: string): Promise<User> {
     const t = token.trim();
