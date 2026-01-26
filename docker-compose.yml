@@ -25,13 +25,15 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      - DB_HOST=localhost
-      - DB_PORT=55432
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - DB_NAME=real_estate
-      - REDIS_HOST=localhost
-      - REDIS_PORT=6379
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: real_estate
+      DB_SSL: "false"
+      PGSSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
     ports:
       - "4000:4000"
 
@@ -46,4 +48,3 @@ services:
 
 volumes:
   pgdata:
-
