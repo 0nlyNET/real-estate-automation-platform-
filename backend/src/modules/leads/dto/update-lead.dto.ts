@@ -1,71 +1,53 @@
-import { IsArray, IsIn, IsInt, IsOptional, IsString } from 'class-validator';
+import { IsEmail, IsIn, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+
+const LEAD_TYPES = ['buyer', 'seller', 'renter', 'investor', 'other'] as const;
+const TEMPERATURES = ['cold', 'warm', 'hot'] as const;
+const STAGES = ['new', 'contacted', 'qualified', 'appointment_set', 'in_progress', 'closed', 'lost'] as const;
 
 export class UpdateLeadDto {
   @IsOptional()
   @IsString()
-  fullName?: string | null;
+  fullName?: string;
 
   @IsOptional()
   @IsString()
-  email?: string | null;
+  phone?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
 
   @IsOptional()
   @IsString()
-  phone?: string | null;
+  source?: string;
 
   @IsOptional()
-  @IsIn(['buyer', 'seller', 'renter', 'investor'])
-  leadType?: string | null;
+  @IsString()
+  notes?: string;
 
   @IsOptional()
-  @IsIn(['new','contacted','qualified','appointment_set','showing_scheduled','offer_out','under_contract','closed','nurture','lost'])
-  stage?: string;
+  @IsString()
+  location?: string;
 
   @IsOptional()
-  @IsIn(['hot','warm','cold'])
-  temperature?: string;
+  @IsString()
+  propertyInterest?: string;
 
   @IsOptional()
-  @IsInt()
+  @IsIn(LEAD_TYPES as unknown as string[])
+  leadType?: (typeof LEAD_TYPES)[number];
+
+  @IsOptional()
+  @IsIn(TEMPERATURES as unknown as string[])
+  temperature?: (typeof TEMPERATURES)[number];
+
+  @IsOptional()
+  @IsIn(STAGES as unknown as string[])
+  stage?: (typeof STAGES)[number];
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
   score?: number;
-
-  @IsOptional()
-  @IsString()
-  source?: string | null;
-
-  @IsOptional()
-  @IsString()
-  location?: string | null;
-
-  @IsOptional()
-  @IsString()
-  propertyInterest?: string | null;
-
-  @IsOptional()
-  @IsString()
-  budgetRange?: string | null;
-
-  @IsOptional()
-  @IsArray()
-  preferredAreas?: string[] | null;
-
-  @IsOptional()
-  @IsString()
-  timeline?: string | null;
-
-  @IsOptional()
-  @IsIn(['buy','rent','sell'])
-  buyOrRent?: string | null;
-
-  @IsOptional()
-  @IsIn(['yes','no','unsure'])
-  preapproved?: string | null;
-
-  @IsOptional()
-  @IsString()
-  bestTimeToTalk?: string | null;
-
-  @IsOptional()
-  @IsArray()
-  tags?: string[] | null;
 }

@@ -14,10 +14,22 @@
     "strictNullChecks": true,
     "moduleResolution": "node",
     "paths": {
-      "@common/*": ["src/common/*"],
-      "@modules/*": ["src/modules/*"]
-    }
+      "@common/*": [
+        "src/common/*"
+      ],
+      "@modules/*": [
+        "src/modules/*"
+      ]
+    },
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }
