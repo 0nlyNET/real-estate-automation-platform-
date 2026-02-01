@@ -1,81 +1,51 @@
-import { IsArray, IsEmail, IsIn, IsOptional, IsString } from 'class-validator';
+import { IsEmail, IsIn, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
-// Public intake payloads (forms/webhooks). Everything is optional because sources vary.
-// The service layer applies required checks and defaults.
+const LEAD_TYPES = ['buyer', 'seller', 'renter', 'investor', 'other'] as const;
+const TEMPERATURES = ['cold', 'warm', 'hot'] as const;
+const STAGES = ['new', 'contacted', 'qualified', 'appointment_set', 'in_progress', 'closed', 'lost'] as const;
+
 export class IntakeLeadDto {
-  @IsOptional()
   @IsString()
-  fullName?: string | null;
+  fullName!: string;
+
+  @IsString()
+  phone!: string;
 
   @IsOptional()
   @IsEmail()
-  email?: string | null;
+  email?: string;
 
   @IsOptional()
   @IsString()
-  phone?: string | null;
+  source?: string;
 
   @IsOptional()
   @IsString()
-  source?: string | null;
+  message?: string;
 
   @IsOptional()
   @IsString()
-  location?: string | null;
+  location?: string;
 
   @IsOptional()
   @IsString()
-  propertyInterest?: string | null;
+  propertyInterest?: string;
 
   @IsOptional()
-  @IsString()
-  budgetRange?: string | null;
+  @IsIn(LEAD_TYPES as unknown as string[])
+  leadType?: (typeof LEAD_TYPES)[number];
 
   @IsOptional()
-  @IsString()
-  estimatedPrice?: string | null;
+  @IsIn(TEMPERATURES as unknown as string[])
+  temperature?: (typeof TEMPERATURES)[number];
 
   @IsOptional()
-  @IsArray()
-  preferredAreas?: string[] | null;
+  @IsIn(STAGES as unknown as string[])
+  stage?: (typeof STAGES)[number];
 
   @IsOptional()
-  @IsIn(['buyer', 'seller', 'renter', 'investor'])
-  leadType?: string | null;
-
-  @IsOptional()
-  @IsIn(['hot', 'warm', 'cold'])
-  temperature?: string | null;
-
-  @IsOptional()
-  @IsIn(['new','contacted','qualified','appointment_set','showing_scheduled','offer_out','under_contract','closed','nurture','lost'])
-  stage?: string | null;
-
-  @IsOptional()
-  @IsString()
-  timeline?: string | null;
-
-  @IsOptional()
-  @IsIn(['buy','rent','sell'])
-  buyOrRent?: string | null;
-
-  @IsOptional()
-  @IsIn(['yes','no','unsure'])
-  preapproved?: string | null;
-
-  @IsOptional()
-  @IsString()
-  bestTimeToTalk?: string | null;
-
-  @IsOptional()
-  @IsArray()
-  tags?: string[] | null;
-
-  @IsOptional()
-  @IsString()
-  notes?: string | null;
-
-  @IsOptional()
-  @IsString()
-  campaign?: string | null;
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  score?: number;
 }

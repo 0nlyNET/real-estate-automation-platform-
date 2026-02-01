@@ -9,9 +9,8 @@ import { cn } from "@/lib/utils"
 import { Logo } from "@/components/logo"
 
 const navItems = [
-  { label: "Features", href: "/features" },
-  { label: "Use Cases", href: "/use-cases" },
-  { label: "Pricing", href: "/pricing" },
+  { label: "Services", href: "/features" },
+  { label: "Results", href: "/use-cases" },
   { label: "Contact", href: "/contact" },
 ]
 
@@ -21,10 +20,12 @@ export function MarketingHeader() {
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        <Logo href="/" size="md" />
+      <div className="mx-auto grid h-16 max-w-7xl grid-cols-3 items-center px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center">
+          <Logo href="/" size="md" />
+        </div>
 
-        <nav className="hidden items-center gap-1 md:flex">
+        <nav className="hidden items-center justify-center gap-1 md:flex">
           {navItems.map((item) => (
             <Link
               key={item.href}
@@ -41,18 +42,23 @@ export function MarketingHeader() {
           ))}
         </nav>
 
-        <div className="hidden items-center gap-3 md:flex">
+        <div className="hidden items-center justify-end gap-3 md:flex">
           <Button variant="ghost" asChild className="text-muted-foreground hover:text-foreground">
             <Link href="/login">Log in</Link>
           </Button>
+          <Button variant="outline" asChild>
+            <Link href="/contact?topic=demo">Get a demo</Link>
+          </Button>
           <Button asChild className="bg-primary text-primary-foreground hover:bg-primary/90">
-            <Link href="/signup">Start free trial</Link>
+            <Link href="/apply">Book setup</Link>
           </Button>
         </div>
 
-        <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
-          {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-        </Button>
+        <div className="flex justify-end md:hidden">
+          <Button variant="ghost" size="icon" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+            {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </Button>
+        </div>
       </div>
 
       {mobileMenuOpen && (
@@ -73,12 +79,16 @@ export function MarketingHeader() {
                 {item.label}
               </Link>
             ))}
+
             <div className="mt-4 flex flex-col gap-2 border-t border-border pt-4">
               <Button variant="ghost" asChild className="justify-start text-muted-foreground">
                 <Link href="/login">Log in</Link>
               </Button>
+              <Button variant="outline" asChild>
+                <Link href="/contact?topic=demo">Get a demo</Link>
+              </Button>
               <Button asChild className="bg-primary text-primary-foreground">
-                <Link href="/signup">Start free trial</Link>
+                <Link href="/apply">Book setup</Link>
               </Button>
             </div>
           </nav>

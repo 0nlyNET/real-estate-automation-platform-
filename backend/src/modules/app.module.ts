@@ -13,6 +13,7 @@ import { SettingsModule } from './settings/settings.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { UsersModule } from './users/users.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { PublicModule } from './public/public.module';
 
 @Module({
   imports: [
@@ -44,6 +45,9 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     BillingModule,
     IntegrationsModule,
     WebhooksModule,
+
+    // Public (marketing) endpoints
+    PublicModule,
   ],
 })
 export class AppModule {}
