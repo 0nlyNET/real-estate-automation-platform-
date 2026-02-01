@@ -16,6 +16,12 @@ import { Logo } from "@/components/logo";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
+function redirectForRole(role?: string) {
+  const r = (role || "").toLowerCase();
+  if (r === "owner" || r === "admin") return "/admin";
+  return "/app/dashboard";
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -59,8 +65,10 @@ export default function LoginPage() {
       }
 
       if (!data?.accessToken) throw new Error("Login failed: missing token");
+      if (!data?.user) throw new Error("Login failed: missing user");
 
       localStorage.setItem("rta_token", data.accessToken);
+      localStorage.setItem("rta_user", JSON.stringify(data.user));
       localStorage.setItem("rta_pending_email", emailClean);
 
       toast({
@@ -68,7 +76,7 @@ export default function LoginPage() {
         description: "You have successfully logged in.",
       });
 
-      router.push("/app/dashboard");
+      router.push(redirectForRole(data?.user?.role));
     } catch (err: any) {
       setError(err?.message || "Login failed");
     } finally {

@@ -21,31 +21,34 @@ function decode(token: string): any | null {
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Public routes
+  // ALWAYS-PUBLIC routes (never redirect)
   if (
     pathname === '/' ||
+    pathname === '/login' ||
+    pathname === '/logout' ||
     pathname.startsWith('/apply') ||
     pathname.startsWith('/contact') ||
     pathname.startsWith('/privacy') ||
     pathname.startsWith('/terms') ||
     pathname.startsWith('/about') ||
     pathname.startsWith('/faq') ||
-    pathname.startsWith('/blog')
+    pathname.startsWith('/blog') ||
+    pathname.startsWith('/thanks')
   ) {
     return NextResponse.next();
   }
 
   const token = getToken(req);
   if (!token) {
-    return NextResponse.redirect(new URL('/', req.url));
+    return NextResponse.redirect(new URL('/login', req.url));
   }
 
   const payload = decode(token);
   if (!payload?.role) {
-    return NextResponse.redirect(new URL('/', req.url));
+    return NextResponse.redirect(new URL('/login', req.url));
   }
 
-  // Admin routes
+  // Admin routes (owner/admin only)
   if (pathname.startsWith('/admin')) {
     if (payload.role !== 'owner' && payload.role !== 'admin') {
       return NextResponse.redirect(new URL('/app/dashboard', req.url));
@@ -53,7 +56,7 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Client app routes
+  // Client app routes (auth required)
   if (pathname.startsWith('/app')) {
     return NextResponse.next();
   }
