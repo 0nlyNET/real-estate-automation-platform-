@@ -9,34 +9,31 @@ export function Footer() {
           <div className="space-y-4">
             <Logo size="md" />
             <p className="text-sm text-muted-foreground">
-              Speed-to-lead automation platform for real estate professionals.
+              Done-for-you speed-to-lead systems for real estate teams and brokerages.
             </p>
           </div>
 
           <div>
-            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-foreground">Product</h3>
+            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-foreground">Services</h3>
             <ul className="space-y-3">
               <li>
                 <Link href="/features" className="text-sm text-muted-foreground transition-colors hover:text-primary">
-                  Features
+                  What we install
                 </Link>
               </li>
               <li>
                 <Link href="/use-cases" className="text-sm text-muted-foreground transition-colors hover:text-primary">
-                  Use Cases
+                  Results
                 </Link>
               </li>
               <li>
                 <Link href="/pricing" className="text-sm text-muted-foreground transition-colors hover:text-primary">
-                  Pricing
+                  Packages
                 </Link>
               </li>
               <li>
-                <Link
-                  href="/app/integrations"
-                  className="text-sm text-muted-foreground transition-colors hover:text-primary"
-                >
-                  Integrations
+                <Link href="/contact" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Book a call
                 </Link>
               </li>
             </ul>
@@ -58,6 +55,11 @@ export function Footer() {
               <li>
                 <Link href="/contact" className="text-sm text-muted-foreground transition-colors hover:text-primary">
                   Contact
+                </Link>
+              </li>
+              <li>
+                <Link href="/login" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Client portal
                 </Link>
               </li>
             </ul>

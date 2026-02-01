@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 
 type LoginResponse = {
   accessToken?: string;
@@ -29,30 +29,6 @@ function setCookie(name: string, value: string) {
   } catch {}
 }
 
-function getCookie(name: string): string | null {
-  try {
-    const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[-[\]/{}()*+?.\\^$|]/g, '\\$&') + '=([^;]*)'));
-    return match ? decodeURIComponent(match[1]) : null;
-  } catch {
-    return null;
-  }
-}
-
-function getStoredToken(): string | null {
-  try {
-    return (
-      getCookie('rtai_token') ||
-      getCookie('accessToken') ||
-      getCookie('token') ||
-      localStorage.getItem('rtai_token') ||
-      localStorage.getItem('accessToken') ||
-      localStorage.getItem('token')
-    );
-  } catch {
-    return null;
-  }
-}
-
 function storeToken(token: string) {
   try {
     localStorage.setItem('rtai_token', token);
@@ -62,32 +38,24 @@ function storeToken(token: string) {
   setCookie('token', token);
 }
 
-function redirectForRole(role?: string) {
+function isAdminRole(role?: string) {
   const r = (role || '').toLowerCase();
-  if (r === 'owner' || r === 'admin') {
+  return r === 'owner' || r === 'admin';
+}
+
+function redirectForRole(role?: string) {
+  if (isAdminRole(role)) {
     window.location.assign('/admin');
     return;
   }
   window.location.assign('/app/dashboard');
 }
 
-export default function RootLoginPage() {
+export default function LoginPage() {
   const [email, setEmail] = useState('aiautomationsllc@gmail.com');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
-  const existingToken = useMemo(() => getStoredToken(), []);
-  useEffect(() => {
-    if (!existingToken) return;
-    const payload = decodeJwtPayload(existingToken);
-    if (payload?.role) {
-      redirectForRole(payload.role);
-    } else {
-      window.location.assign('/app/dashboard');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -101,17 +69,14 @@ export default function RootLoginPage() {
       });
 
       const data: LoginResponse = await res.json().catch(() => ({} as any));
-
       if (!res.ok) {
         setErr(data?.message || 'Login failed');
-        setLoading(false);
         return;
       }
 
       const token = data.accessToken || data.token;
       if (!token) {
         setErr('Login succeeded but no token returned.');
-        setLoading(false);
         return;
       }
 
@@ -127,9 +92,9 @@ export default function RootLoginPage() {
 
   return (
     <main style={{ maxWidth: 420, margin: '64px auto', padding: 24 }}>
-      <h1 style={{ fontSize: 24, marginBottom: 10 }}>Sign in</h1>
+      <h1 style={{ fontSize: 24, marginBottom: 10 }}>Log in</h1>
       <p style={{ marginTop: 0, marginBottom: 20, opacity: 0.8 }}>
-        Use your RealtyTechAI admin or client credentials.
+        Admins go to /admin. Clients go to /app/dashboard.
       </p>
 
       <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
@@ -173,9 +138,13 @@ export default function RootLoginPage() {
             cursor: loading ? 'not-allowed' : 'pointer',
           }}
         >
-          {loading ? 'Signing in...' : 'Sign in'}
+          {loading ? 'Signing in...' : 'Log in'}
         </button>
       </form>
+
+      <div style={{ marginTop: 14, opacity: 0.8 }}>
+        <a href="/" style={{ color: '#111' }}>Back to homepage</a>
+      </div>
     </main>
   );
 }

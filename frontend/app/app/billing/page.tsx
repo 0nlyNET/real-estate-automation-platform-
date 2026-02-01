@@ -17,7 +17,6 @@ export default function BillingPage() {
             <Button>Upgrade</Button>
           </Link>
           <Link href="/pricing">
-            <Button variant="outline">Pricing</Button>
           </Link>
         </CardContent>
       </Card>
