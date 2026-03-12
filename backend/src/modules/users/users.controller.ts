@@ -7,7 +7,6 @@ import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard
 import { UserRole, canManageUsers } from '../../common/rbac';
 
 function randomTempPassword() {
-  // Not meant to be super human-friendly. User can reset later.
   return `Temp-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
@@ -22,7 +21,7 @@ export class UsersController {
   @Get()
   async list(@Req() req: any) {
     const tenantId = req.user?.tenantId;
-    // Owners/Admins can see the full roster.
+
     if (canManageUsers((req.user?.role as UserRole) || 'read_only')) {
       const list = await this.users.listByTenant(tenantId);
       return list.map((u) => ({
@@ -35,18 +34,16 @@ export class UsersController {
       }));
     }
 
-    // Non-managers only see themselves.
     return [{
-      id: req.user?.userId,
-      email: req.user?.email,
-      role: req.user?.role,
+      id: req.user?.sub || null,
+      email: req.user?.email || null,
+      role: req.user?.role || null,
       teamId: null,
       isActive: true,
       isEmailVerified: true,
     }];
   }
 
-  // Create a new team member (Teams plan only)
   @UseGuards(TeamsPlanGuard)
   @RequireTeamsPlan()
   @RequireRole('admin')
@@ -59,7 +56,6 @@ export class UsersController {
     const email = (body?.email || '').toString();
     const role = (body?.role || 'agent') as UserRole;
     const teamId = body?.teamId ? String(body.teamId) : null;
-
     const tempPassword = body?.tempPassword ? String(body.tempPassword) : randomTempPassword();
 
     const { user, verifyToken } = await this.users.createTeamUser({

@@ -22,13 +22,11 @@ import { UpdateLeadDto } from './dto/update-lead.dto';
 export class LeadsController {
   constructor(private readonly leadsService: LeadsService) {}
 
-  // PUBLIC: intake endpoint for websites/zapier
   @Post('leads/intake/:tenantId')
   intake(@Param('tenantId') tenantId: string, @Body() payload: IntakeLeadDto) {
     return this.leadsService.intake(tenantId, payload);
   }
 
-  // PROTECTED: agent dashboard endpoints
   @UseGuards(JwtAuthGuard)
   @Get('leads')
   list(
@@ -38,7 +36,7 @@ export class LeadsController {
   ) {
     return this.leadsService.listLeads({
       tenantId: req.user?.tenantId,
-      userId: req.user?.userId,
+      userId: req.user?.sub,
       role: req.user?.role,
       take: take ? parseInt(take, 10) : 50,
       skip: skip ? parseInt(skip, 10) : 0,
@@ -60,16 +58,21 @@ export class LeadsController {
   @UseGuards(JwtAuthGuard)
   @Get('leads/:id')
   getOne(@Req() req: any, @Param('id') id: string) {
-    return this.leadsService.getLeadById(req.user?.tenantId, id, { userId: req.user?.userId, role: req.user?.role });
+    return this.leadsService.getLeadById(req.user?.tenantId, id, {
+      userId: req.user?.sub,
+      role: req.user?.role,
+    });
   }
 
   @UseGuards(JwtAuthGuard)
   @Patch('leads/:id')
   update(@Req() req: any, @Param('id') id: string, @Body() payload: UpdateLeadDto) {
-    return this.leadsService.updateLead(req.user?.tenantId, id, payload, { userId: req.user?.userId, role: req.user?.role });
+    return this.leadsService.updateLead(req.user?.tenantId, id, payload, {
+      userId: req.user?.sub,
+      role: req.user?.role,
+    });
   }
 
-  // Teams/Brokerages: assign a lead to a specific agent (or clear assignment)
   @UseGuards(JwtAuthGuard, TeamsPlanGuard, RolesGuard)
   @RequireTeamsPlan()
   @RequireRole('admin')
@@ -84,4 +87,3 @@ export class LeadsController {
     });
   }
 }
-

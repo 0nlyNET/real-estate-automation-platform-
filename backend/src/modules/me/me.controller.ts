@@ -10,10 +10,10 @@ export class MeController {
   @Get()
   async me(@Req() req: any) {
     return {
-      userId: req.user?.userId,
-      tenantId: req.user?.tenantId,
-      role: req.user?.role,
-      email: req.user?.email,
+      userId: req.user?.sub || null,
+      tenantId: req.user?.tenantId || null,
+      role: req.user?.role || null,
+      email: req.user?.email || null,
     };
   }
 

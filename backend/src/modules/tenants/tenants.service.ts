@@ -8,6 +8,10 @@ import { mapStripeStatusToTenantStatus, toDateOrNull } from './stripe-billing-up
 export class TenantsService {
   constructor(@InjectRepository(Tenant) private readonly repo: Repository<Tenant>) {}
 
+  async listAll(): Promise<Tenant[]> {
+    return await this.repo.find({ order: { createdAt: 'DESC' as any } });
+  }
+
   async createTrialTenant(name?: string): Promise<Tenant> {
     const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
     const tenant = this.repo.create({

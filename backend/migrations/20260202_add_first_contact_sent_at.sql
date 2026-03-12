@@ -1,0 +1,2 @@
+ALTER TABLE leads
+ADD COLUMN IF NOT EXISTS first_contact_sent_at TIMESTAMP NULL;

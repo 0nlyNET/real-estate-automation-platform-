@@ -28,6 +28,10 @@ export class UsersService {
     return await this.repo.findOne({ where: { id } });
   }
 
+  async save(user: User): Promise<User> {
+    return await this.repo.save(user);
+  }
+
   async createUser(params: { email: string; password: string; tenant: Tenant; role?: UserRole; teamId?: string | null }): Promise<{ user: User; verifyToken: string }> {
     const email = params.email.toLowerCase().trim();
     const existing = await this.findByEmail(email);
@@ -55,7 +59,7 @@ export class UsersService {
   async validatePassword(user: User, password: string): Promise<boolean> {
     if (!user.passwordHash) return false;
     return await bcrypt.compare(password, user.passwordHash);
-}
+  }
 
   async verifyEmail(token: string): Promise<User> {
     const t = token.trim();
@@ -82,7 +86,6 @@ export class UsersService {
     role: UserRole;
     teamId?: string | null;
   }) {
-    // Plan gating: multi-user only on Teams/Enterprise.
     if (!planHasTeamsFeatures(params.tenant.plan)) {
       throw new BadRequestException('Adding team members requires the Teams plan');
     }

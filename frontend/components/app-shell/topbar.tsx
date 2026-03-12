@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { ReturnToAdminButton } from "@/components/ReturnToAdminButton"
+
 import { useTheme } from "next-themes"
 import { Moon, Sun } from "lucide-react"
 
@@ -91,7 +93,10 @@ export function Topbar() {
               <DropdownMenuSeparator />
 
               <DropdownMenuItem asChild>
-                <Link href="/logout">Logout</Link>
+                <>
+<ReturnToAdminButton />
+<Link href="/logout">Logout</Link>
+</>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

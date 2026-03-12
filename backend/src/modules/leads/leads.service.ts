@@ -209,6 +209,9 @@ export class LeadsService {
 
       notes: this.normalizeString((payload as any).notes),
 
+      assignedToUserId: assigneeUserId,
+      assignedToTeamId: teamId,
+
       score: this.clampScore((payload as any).score),
 
       lastActivityAt: new Date(),
@@ -297,6 +300,8 @@ export class LeadsService {
       notes: this.normalizeString((payload as any).notes),
 
       assignedTo: this.normalizeString((payload as any).assignedTo),
+      assignedToUserId: assigneeUserId,
+      assignedToTeamId: teamId,
       score: this.clampScore((payload as any).score),
       nextFollowUpAt: (payload as any).nextFollowUpAt ? new Date((payload as any).nextFollowUpAt) : undefined,
 

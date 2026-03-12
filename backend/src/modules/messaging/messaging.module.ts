@@ -13,11 +13,13 @@ import { LeadEvent } from '../leads/lead-event.entity';
 import { Credential } from '../settings/credential.entity';
 
 import { SequencesModule } from '../sequences/sequences.module';
+import { ComplianceModule } from '../compliance/compliance.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Message, Lead, Tenant, TenantSettings, LeadEvent, Credential]),
     SequencesModule,
+    ComplianceModule,
   ],
   controllers: [MessagingController],
   providers: [MessagingService, InboxSendService],

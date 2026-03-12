@@ -12,7 +12,7 @@ import { BillingModule } from './modules/billing/billing.module';
 import { LeadsModule } from './modules/leads/leads.module';
 import { TeamsModule } from './modules/teams/teams.module';
 import { StatsModule } from './modules/stats/stats.module';
-
+import { AdminModule } from './modules/admin/admin.module';
 import { PresenceModule } from './modules/presence/presence.module';
 import { RoutingModule } from './modules/routing/routing.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
@@ -41,6 +41,7 @@ import { AgentPresence } from './modules/presence/agent-presence.entity';
 import { ComplianceOptOut } from './modules/compliance/compliance-optout.entity';
 import { ComplianceEvent } from './modules/compliance/compliance-event.entity';
 import { TenantQuietHours } from './modules/compliance/tenant-quiet-hours.entity';
+import { PasswordResetToken } from './modules/auth/password-reset-token.entity';
 
 function buildDatabaseConfig() {
   const url = process.env.DATABASE_URL;
@@ -57,17 +58,15 @@ function buildDatabaseConfig() {
     SequenceStep,
     Credential,
     TenantSettings,
-
     RoutingRule,
     RoutingAssignmentLog,
     AgentPresence,
     ComplianceOptOut,
     ComplianceEvent,
     TenantQuietHours,
+    PasswordResetToken,
   ];
 
-  // Safety: never let production auto-sync schema.
-  // If you need sync locally, set TYPEORM_SYNC=true.
   if (url) {
     const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
     const allowSync = process.env.TYPEORM_SYNC === 'true' && isLocal;
@@ -99,9 +98,7 @@ function buildDatabaseConfig() {
       isGlobal: true,
       envFilePath: ['backend/.env', '.env'],
     }),
-
     TypeOrmModule.forRoot(buildDatabaseConfig()),
-
     TenantsModule,
     UsersModule,
     AuthModule,
@@ -110,7 +107,7 @@ function buildDatabaseConfig() {
     LeadsModule,
     TeamsModule,
     StatsModule,
-
+    AdminModule,
     PresenceModule,
     RoutingModule,
     ComplianceModule,
