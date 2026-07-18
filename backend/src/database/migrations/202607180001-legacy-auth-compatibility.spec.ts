@@ -55,7 +55,7 @@ describe("legacy auth compatibility migration", () => {
         name varchar(255) NOT NULL,
         password_hash varchar(255) NOT NULL,
         role varchar(50) DEFAULT 'agent',
-        tenant_id uuid NOT NULL,
+        tenant_id varchar NOT NULL,
         created_at timestamptz DEFAULT now(),
         updated_at timestamptz DEFAULT now()
       );
@@ -63,6 +63,11 @@ describe("legacy auth compatibility migration", () => {
 
     const tenantId = randomUUID();
     const userId = randomUUID();
+    const executedSql: string[] = [];
+    const querySubscription = db.public.interceptQueries((sql) => {
+      executedSql.push(sql);
+      return null;
+    });
     db.public.none(
       `INSERT INTO tenants (id, name, slug) VALUES ('${tenantId}', 'Legacy Realty', 'legacy-realty')`,
     );
@@ -81,6 +86,13 @@ describe("legacy auth compatibility migration", () => {
       migrationsTableName: "app_migrations",
     });
     await dataSource.initialize();
+
+    expect(
+      executedSql.some((sql) =>
+        sql.includes('SET "tenantId" = "tenant_id"::text::uuid'),
+      ),
+    ).toBe(true);
+    querySubscription.unsubscribe();
 
     await expect(
       dataSource.getRepository(User).findOne({

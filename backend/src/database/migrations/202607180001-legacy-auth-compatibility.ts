@@ -166,7 +166,7 @@ export class LegacyAuthCompatibility1784332800001 implements MigrationInterface 
       currentUserColumns.has("tenant_id")
     ) {
       await queryRunner.query(
-        'UPDATE "users" SET "tenantId" = "tenant_id" WHERE "tenantId" IS NULL',
+        'UPDATE "users" SET "tenantId" = "tenant_id"::text::uuid WHERE "tenantId" IS NULL AND "tenant_id" IS NOT NULL',
       );
     }
     if (
