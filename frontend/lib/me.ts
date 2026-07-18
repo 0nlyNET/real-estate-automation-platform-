@@ -6,6 +6,10 @@ export type Me = {
   tenantId: string;
   role: string;
   email: string;
+  isPlatformAdmin: boolean;
+  impersonated: boolean;
+  impersonatedBy: { userId: string; email: string } | null;
+  sessionExpiresAt: string | null;
 };
 
 export type MeWithPlan = {
@@ -17,7 +21,7 @@ export type MeWithPlan = {
 export async function fetchMe(): Promise<Me | null> {
   try {
     const d = await apiFetch<Me>("/me");
-    if (!d || !(d as any).userId) return null;
+    if (!d?.userId) return null;
     return d;
   } catch {
     return null;
@@ -37,6 +41,6 @@ export async function fetchMeWithPlan(): Promise<MeWithPlan> {
     })(),
   ]);
 
-  const planName: PlanName = (plan?.plan as any) || "free";
+  const planName: PlanName = plan?.plan || "free";
   return { me, plan, planName };
 }

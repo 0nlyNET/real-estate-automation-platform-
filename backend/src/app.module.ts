@@ -1,5 +1,5 @@
 import { Module } from "@nestjs/common";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
 
@@ -27,6 +27,7 @@ import { AuditModule } from "./modules/audit/audit.module";
 import { IntegrationsModule } from "./modules/integrations/integrations.module";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { buildDatabaseOptions } from "./database/database-options";
+import { AuditInterceptor } from "./modules/audit/audit.interceptor";
 
 @Module({
   imports: [
@@ -57,6 +58,9 @@ import { buildDatabaseOptions } from "./database/database-options";
     AuditModule,
   ],
   controllers: [AppController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
+  ],
 })
 export class AppModule {}

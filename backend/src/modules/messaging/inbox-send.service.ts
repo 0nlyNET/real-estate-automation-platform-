@@ -55,7 +55,7 @@ function normalizeE164(v?: string | null) {
   if (!v) return null;
   const s = String(v).trim();
   if (!s) return null;
-  return s.replace(/[()\-\s\.]/g, '');
+  return s.replace(/[().\s-]/g, '');
 }
 
 @Injectable()

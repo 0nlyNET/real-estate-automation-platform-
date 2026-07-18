@@ -7,6 +7,7 @@ import { fetchMePlan, formatDate, type MePlan } from "@/lib/plan"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { apiFetch } from "@/lib/api"
+import { ImpersonationBanner } from './impersonation-banner'
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [plan, setPlan] = useState<MePlan | null>(null)
@@ -44,6 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="flex w-full flex-col">
         <Topbar />
+        <ImpersonationBanner />
 
         {(pastDue || canceling) && (
           <div className="border-b bg-muted/50 px-4 py-3">

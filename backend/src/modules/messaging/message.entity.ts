@@ -1,4 +1,4 @@
-import { Column, Entity, ManyToOne, JoinColumn } from 'typeorm';
+import { Column, Entity, ManyToOne, JoinColumn, Index } from 'typeorm';
 import { BaseEntity } from '../../common/base.entity';
 import { Lead } from '../leads/lead.entity';
 
@@ -32,6 +32,10 @@ export class Message extends BaseEntity {
   body!: string;
 
   @Column({ name: 'provider_message_id', nullable: true })
+  @Index('IDX_messages_provider_message_id', {
+    unique: true,
+    where: '"provider_message_id" IS NOT NULL',
+  })
   providerMessageId?: string;
 
   @Column({ name: 'status', type: 'varchar', default: 'pending' })

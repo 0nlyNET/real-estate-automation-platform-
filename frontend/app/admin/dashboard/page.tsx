@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { apiFetch } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { startImpersonation } from "@/lib/impersonation"
 
 type Overview = {
   totalClients: number
@@ -29,15 +29,14 @@ type Tenant = {
 
 type TenantUser = {
   id: string
+  tenantId: string
   email: string
   role: string
   isActive: boolean
 }
 
-const ADMIN_SNAPSHOT_KEY = "rta_admin_snapshot_v1"
-
-function setAuthCookie(token: string) {
-  document.cookie = `rtai_token=${encodeURIComponent(token)}; Path=/; Max-Age=${60 * 60 * 24 * 7}; SameSite=Lax`
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback
 }
 
 export default function AdminDashboardPage() {
@@ -63,9 +62,9 @@ export default function AdminDashboardPage() {
         setOverview(o)
         setHealth(h)
         setTenants(t)
-      } catch (e: any) {
+      } catch (error: unknown) {
         if (!alive) return
-        setError(e?.message || "Failed to load admin data")
+        setError(errorMessage(error, "Failed to load admin data"))
       } finally {
         if (alive) setLoading(false)
       }
@@ -80,27 +79,21 @@ export default function AdminDashboardPage() {
       setError("")
       setSelectedTenant(tenant)
       setTenantUsers(await apiFetch<TenantUser[]>(`/admin/tenants/${tenant.id}/users`))
-    } catch (e: any) {
-      setError(e?.message || "Failed to load tenant users")
+    } catch (error: unknown) {
+      setError(errorMessage(error, "Failed to load tenant users"))
     }
   }
 
   async function impersonate(userId: string) {
     try {
-      const currentToken = localStorage.getItem("rta_token")
-      const currentUser = localStorage.getItem("rta_user")
-      if (!currentToken || !currentUser) throw new Error("Admin session is missing")
       const result = await apiFetch<{ accessToken: string; user: TenantUser }>("/admin/impersonate", {
         method: "POST",
         body: { userId },
       })
-      localStorage.setItem(ADMIN_SNAPSHOT_KEY, JSON.stringify({ token: currentToken, user: currentUser }))
-      localStorage.setItem("rta_token", result.accessToken)
-      localStorage.setItem("rta_user", JSON.stringify(result.user))
-      setAuthCookie(result.accessToken)
-      window.location.href = "/app/dashboard"
-    } catch (e: any) {
-      setError(e?.message || "Impersonation failed")
+      startImpersonation(result.accessToken, result.user)
+      window.location.assign("/app/dashboard")
+    } catch (error: unknown) {
+      setError(errorMessage(error, "Impersonation failed"))
     }
   }
 
@@ -173,7 +166,13 @@ export default function AdminDashboardPage() {
   )
 }
 
-function StatCard({ title, value }: { title: string; value: any }) {
+function StatCard({
+  title,
+  value,
+}: {
+  title: string
+  value: string | number | null | undefined
+}) {
   return (
     <Card>
       <CardHeader className="pb-2">

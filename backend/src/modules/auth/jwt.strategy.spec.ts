@@ -39,7 +39,77 @@ describe('JwtStrategy', () => {
       role: 'admin',
       tenantId: 'tenant-2',
       platformAdmin: true,
+      sessionExpiresAt: null,
     });
+  });
+
+  it('revalidates the acting platform admin for an impersonated session', async () => {
+    const users = {
+      findById: jest.fn(async (id: string) =>
+        id === 'target-1'
+          ? {
+              id,
+              email: 'agent@example.com',
+              role: 'agent',
+              tenantId: 'tenant-1',
+              isActive: true,
+              isEmailVerified: true,
+            }
+          : {
+              id: 'admin-1',
+              email: 'owner@example.com',
+              isActive: true,
+              isEmailVerified: true,
+            },
+      ),
+    };
+    const strategy = new JwtStrategy(users as any);
+
+    await expect(
+      strategy.validate({
+        sub: 'target-1',
+        exp: 2_000_000_000,
+        impersonatedBy: { userId: 'admin-1', email: 'stale@example.com' },
+      }),
+    ).resolves.toMatchObject({
+      sub: 'target-1',
+      platformAdmin: false,
+      impersonatedBy: {
+        userId: 'admin-1',
+        email: 'owner@example.com',
+      },
+      sessionExpiresAt: '2033-05-18T03:33:20.000Z',
+    });
+  });
+
+  it('rejects impersonation after the acting admin loses access', async () => {
+    const users = {
+      findById: jest.fn(async (id: string) =>
+        id === 'target-1'
+          ? {
+              id,
+              email: 'agent@example.com',
+              role: 'agent',
+              tenantId: 'tenant-1',
+              isActive: true,
+              isEmailVerified: true,
+            }
+          : {
+              id: 'admin-1',
+              email: 'removed@example.com',
+              isActive: true,
+              isEmailVerified: true,
+            },
+      ),
+    };
+    const strategy = new JwtStrategy(users as any);
+
+    await expect(
+      strategy.validate({
+        sub: 'target-1',
+        impersonatedBy: { userId: 'admin-1' },
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it.each([

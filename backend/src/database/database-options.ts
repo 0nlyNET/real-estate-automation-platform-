@@ -3,10 +3,12 @@ import { buildDatabaseSslConfig } from "../common/database-ssl";
 import { databaseEntities } from "./entities";
 import { LegacyAuthCompatibility1784332800001 } from "./migrations/202607180001-legacy-auth-compatibility";
 import { TenantSettingsIntakeKeys1784332800002 } from "./migrations/202607180002-tenant-settings-intake-keys";
+import { AuditAndProviderRouting1784332800003 } from "./migrations/202607180003-audit-and-provider-routing";
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
   TenantSettingsIntakeKeys1784332800002,
+  AuditAndProviderRouting1784332800003,
 ];
 
 function migrationOptions() {

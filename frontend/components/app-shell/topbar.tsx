@@ -1,11 +1,10 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useSyncExternalStore } from "react"
 import Link from "next/link"
-import { ReturnToAdminButton } from "@/components/ReturnToAdminButton"
 
 import { useTheme } from "next-themes"
-import { Moon, Sun } from "lucide-react"
+import { LogOut, Moon, Settings, Sun } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -17,45 +16,32 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { getAvatarDataUrl, getDisplayName, getInitials } from "@/lib/profile"
+import { AUTH_CHANGED_EVENT, getEffectiveToken } from "@/lib/impersonation"
+
+function subscribeToAuth(callback: () => void) {
+  window.addEventListener(AUTH_CHANGED_EVENT, callback)
+  window.addEventListener("storage", callback)
+  window.addEventListener("rta:avatar-updated", callback)
+  return () => {
+    window.removeEventListener(AUTH_CHANGED_EVENT, callback)
+    window.removeEventListener("storage", callback)
+    window.removeEventListener("rta:avatar-updated", callback)
+  }
+}
 
 export function Topbar() {
-  const [token, setToken] = useState<string | null>(null)
-  const [avatar, setAvatar] = useState<string | null>(null)
-  const [mounted, setMounted] = useState(false)
-
+  const token = useSyncExternalStore(subscribeToAuth, getEffectiveToken, () => null)
+  const avatar = useSyncExternalStore(
+    subscribeToAuth,
+    () => getAvatarDataUrl(getEffectiveToken()),
+    () => null,
+  )
   const { resolvedTheme, setTheme } = useTheme()
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  useEffect(() => {
-    try {
-      setToken(localStorage.getItem("rta_token"))
-    } catch {
-      setToken(null)
-    }
-  }, [])
-
-  useEffect(() => {
-    setAvatar(getAvatarDataUrl(token))
-  }, [token])
-
-  useEffect(() => {
-    function onAvatarUpdated() {
-      setAvatar(getAvatarDataUrl(token))
-    }
-    window.addEventListener("rta:avatar-updated", onAvatarUpdated as any)
-    return () => window.removeEventListener("rta:avatar-updated", onAvatarUpdated as any)
-  }, [token])
-
-  const displayName = useMemo(() => getDisplayName(token), [token])
-  const initials = useMemo(() => getInitials(displayName), [displayName])
-
-  const isDark = mounted ? (resolvedTheme ?? "dark") === "dark" : true
+  const displayName = getDisplayName(token)
+  const initials = getInitials(displayName)
 
   function toggleTheme() {
-    setTheme(isDark ? "light" : "dark")
+    setTheme(resolvedTheme === "dark" ? "light" : "dark")
   }
 
   return (
@@ -80,23 +66,27 @@ export function Topbar() {
 
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuItem onClick={toggleTheme}>
-                {isDark ? <Sun className="mr-2 h-4 w-4" /> : <Moon className="mr-2 h-4 w-4" />}
-                {isDark ? "Switch to light mode" : "Switch to dark mode"}
+                <Sun className="mr-2 hidden h-4 w-4 dark:block" />
+                <Moon className="mr-2 h-4 w-4 dark:hidden" />
+                Toggle theme
               </DropdownMenuItem>
 
               <DropdownMenuSeparator />
 
               <DropdownMenuItem asChild>
-                <Link href="/app/settings">Settings</Link>
+                <Link href="/app/settings">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Settings
+                </Link>
               </DropdownMenuItem>
 
               <DropdownMenuSeparator />
 
               <DropdownMenuItem asChild>
-                <>
-<ReturnToAdminButton />
-<Link href="/logout">Logout</Link>
-</>
+                <Link href="/logout">
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Logout
+                </Link>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
