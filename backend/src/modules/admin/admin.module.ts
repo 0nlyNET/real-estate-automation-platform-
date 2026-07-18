@@ -12,6 +12,7 @@ import { Message } from '../messaging/message.entity';
 import { Credential } from '../settings/credential.entity';
 import { CommonModule } from '../../common/common.module';
 import { AuditModule } from '../audit/audit.module';
+import { MailModule } from '../../mail/mail.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { AuditModule } from '../audit/audit.module';
     TypeOrmModule.forFeature([Tenant, User, Lead, Message, Credential]),
     CommonModule,
     AuditModule,
+    MailModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],

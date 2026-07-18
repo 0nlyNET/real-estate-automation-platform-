@@ -3,7 +3,12 @@ import { sendSendGridEmail } from '../common/providers';
 
 @Injectable()
 export class MailService {
-  async sendEmail(params: { to: string; subject: string; text: string; html?: string }) {
+  async sendEmail(params: {
+    to: string;
+    subject: string;
+    text: string;
+    html?: string;
+  }) {
     const apiKey = process.env.SENDGRID_API_KEY;
     if (!apiKey) throw new Error('SENDGRID_API_KEY missing');
     const fromEmail = process.env.SENDGRID_FROM_EMAIL;
@@ -45,8 +50,12 @@ export class MailService {
 
   async sendWelcomeEmail(params: { to: string }) {
     const subject = 'Welcome to RealtyTechAI';
-    const appUrl = (process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
-    const dashboardLink = `${appUrl}/app/onboarding`;
+    const appUrl = (
+      process.env.FRONTEND_URL ||
+      process.env.PUBLIC_APP_URL ||
+      'http://localhost:3000'
+    ).replace(/\/$/, '');
+    const dashboardLink = `${appUrl}/app/dashboard`;
 
     const text =
       `You're in.\n\n` +

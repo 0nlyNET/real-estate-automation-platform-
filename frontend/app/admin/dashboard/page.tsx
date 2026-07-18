@@ -1,9 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { type FormEvent, useEffect, useState } from "react"
 import { apiFetch } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { startImpersonation } from "@/lib/impersonation"
 
 type Overview = {
@@ -35,6 +36,19 @@ type TenantUser = {
   isActive: boolean
 }
 
+type ClientSetup = {
+  tenant: Tenant & { trialEndsAt: string | null }
+  owner: {
+    id: string
+    email: string
+    role: string
+    isEmailVerified: boolean
+  }
+  temporaryPassword: string
+  verifyLink: string
+  verificationEmailSent: boolean
+}
+
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback
 }
@@ -47,6 +61,10 @@ export default function AdminDashboardPage() {
   const [error, setError] = useState("")
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null)
   const [tenantUsers, setTenantUsers] = useState<TenantUser[]>([])
+  const [businessName, setBusinessName] = useState("")
+  const [ownerEmail, setOwnerEmail] = useState("")
+  const [creatingClient, setCreatingClient] = useState(false)
+  const [clientSetup, setClientSetup] = useState<ClientSetup | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -97,11 +115,116 @@ export default function AdminDashboardPage() {
     }
   }
 
+  async function createClient(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    try {
+      setCreatingClient(true)
+      setError("")
+      const result = await apiFetch<ClientSetup>("/admin/tenants", {
+        method: "POST",
+        body: { businessName, ownerEmail },
+      })
+      setClientSetup(result)
+      setTenants((current) => [result.tenant, ...current])
+      setBusinessName("")
+      setOwnerEmail("")
+    } catch (error: unknown) {
+      setError(errorMessage(error, "Client workspace could not be created"))
+    } finally {
+      setCreatingClient(false)
+    }
+  }
+
+  async function copyText(value: string) {
+    try {
+      await navigator.clipboard.writeText(value)
+    } catch {
+      setError("Copy failed. Select the value and copy it manually.")
+    }
+  }
+
   if (loading) return <div className="p-6">Loading admin dashboard...</div>
-  if (error) return <div className="p-6 text-red-500">{error}</div>
 
   return (
     <div className="space-y-8 p-6">
+
+      {error ? (
+        <div className="flex items-center justify-between gap-4 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-600">
+          <span>{error}</span>
+          <Button variant="ghost" size="sm" onClick={() => setError("")}>Dismiss</Button>
+        </div>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Create a client workspace</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Creates a 14-day trial and the client&apos;s first owner account. Share the temporary password separately from the verification email.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end" onSubmit={createClient}>
+            <label className="space-y-2 text-sm font-medium">
+              Business name
+              <Input
+                required
+                minLength={2}
+                maxLength={120}
+                value={businessName}
+                onChange={(event) => setBusinessName(event.target.value)}
+                placeholder="Lakeview Realty Group"
+              />
+            </label>
+            <label className="space-y-2 text-sm font-medium">
+              Owner email
+              <Input
+                required
+                type="email"
+                value={ownerEmail}
+                onChange={(event) => setOwnerEmail(event.target.value)}
+                placeholder="broker@example.com"
+              />
+            </label>
+            <Button type="submit" disabled={creatingClient}>
+              {creatingClient ? "Creating…" : "Create client"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      {clientSetup ? (
+        <Card className="border-emerald-500/40">
+          <CardHeader>
+            <CardTitle>Client workspace created</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              These credentials are displayed only in this browser session. Store them securely, then send the password through a separate channel.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <SetupValue
+              label="Owner email"
+              value={clientSetup.owner.email}
+              onCopy={() => copyText(clientSetup.owner.email)}
+            />
+            <SetupValue
+              label="Temporary password"
+              value={clientSetup.temporaryPassword}
+              onCopy={() => copyText(clientSetup.temporaryPassword)}
+            />
+            <SetupValue
+              label="Verification link"
+              value={clientSetup.verifyLink}
+              onCopy={() => copyText(clientSetup.verifyLink)}
+            />
+            <div className="rounded-md bg-muted p-3 text-sm">
+              {clientSetup.verificationEmailSent
+                ? "Verification email sent. Share only the temporary password with the client through a separate channel."
+                : "Email delivery is not connected. Send the verification link and temporary password separately, or connect SendGrid before onboarding the next client."}
+            </div>
+            <Button variant="outline" onClick={() => setClientSetup(null)}>Done</Button>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* REVENUE + RISK */}
       <div>
@@ -162,6 +285,26 @@ export default function AdminDashboardPage() {
         </Card>
       ) : null}
 
+    </div>
+  )
+}
+
+function SetupValue({
+  label,
+  value,
+  onCopy,
+}: {
+  label: string
+  value: string
+  onCopy: () => void
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="text-sm font-medium">{label}</div>
+      <div className="flex items-center gap-2">
+        <code className="min-w-0 flex-1 overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs">{value}</code>
+        <Button type="button" variant="outline" size="sm" onClick={onCopy}>Copy</Button>
+      </div>
     </div>
   )
 }
