@@ -4,19 +4,23 @@ import { databaseEntities } from "./entities";
 import { LegacyAuthCompatibility1784332800001 } from "./migrations/202607180001-legacy-auth-compatibility";
 import { TenantSettingsIntakeKeys1784332800002 } from "./migrations/202607180002-tenant-settings-intake-keys";
 import { AuditAndProviderRouting1784332800003 } from "./migrations/202607180003-audit-and-provider-routing";
+import { ProductionSchemaReconciliation1784332800004 } from "./migrations/202607180004-production-schema-reconciliation";
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
   TenantSettingsIntakeKeys1784332800002,
   AuditAndProviderRouting1784332800003,
+  ProductionSchemaReconciliation1784332800004,
 ];
 
 function migrationOptions() {
+  const migrationOverride = process.env.RUN_MIGRATIONS;
+
   return {
     migrations: databaseMigrations,
     migrationsRun:
-      process.env.NODE_ENV === "production" ||
-      process.env.RUN_MIGRATIONS === "true",
+      migrationOverride === "true" ||
+      (migrationOverride !== "false" && process.env.NODE_ENV !== "test"),
     migrationsTableName: "app_migrations",
     migrationsTransactionMode: "all" as const,
   };
