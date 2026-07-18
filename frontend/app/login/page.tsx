@@ -189,7 +189,10 @@ export default function LoginPage() {
               </form>
 
               <div className="mt-6 text-center text-sm text-muted-foreground">
-                <Link href="/signup" className="text-primary hover:underline"></Link>
+                Need access?{" "}
+                <Link href="/contact" className="text-primary hover:underline">
+                  Contact us
+                </Link>
               </div>
             </CardContent>
           </Card>

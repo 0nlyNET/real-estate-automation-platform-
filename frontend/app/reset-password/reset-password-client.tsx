@@ -65,10 +65,10 @@ export default function ResetPasswordClient() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                minLength={8}
+                minLength={12}
                 required
               />
-              <p className="text-xs text-muted-foreground">Minimum 8 characters.</p>
+              <p className="text-xs text-muted-foreground">Minimum 12 characters.</p>
             </div>
 
             <Button className="w-full" type="submit" disabled={loading}>

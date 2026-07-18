@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 type Team = { id: string; name: string }
 type UserRow = { id: string; email: string; role?: string }
+type InviteResult = { email: string; tempPassword: string; verifyLink: string }
 
 export default function TeamPage() {
   const [loading, setLoading] = useState(true)
@@ -29,6 +30,7 @@ export default function TeamPage() {
   const [users, setUsers] = useState<UserRow[]>([])
   const [inviteEmail, setInviteEmail] = useState("")
   const [inviteRole, setInviteRole] = useState("agent")
+  const [inviteResult, setInviteResult] = useState<InviteResult | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -100,12 +102,15 @@ export default function TeamPage() {
   async function invite() {
     const email = inviteEmail.trim()
     if (!email) return
-    setInviteEmail("")
     try {
-      await apiFetch("/users", {
+      setErr(null)
+      setInviteResult(null)
+      const result = await apiFetch<InviteResult>("/users", {
         method: "POST",
         body: { email, role: inviteRole, teamId: selectedTeamId },
       })
+      setInviteResult(result)
+      setInviteEmail("")
       await refresh()
     } catch (e: any) {
       setErr(e?.message || "Invite failed")
@@ -182,11 +187,25 @@ export default function TeamPage() {
                       <SelectItem value="admin">Admin</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Button onClick={invite}>Send invite</Button>
+                  <Button onClick={invite}>Create invite</Button>
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Invites will be associated to the selected team when supported by backend.
+                  The user will be associated with the selected team.
                 </div>
+                {inviteResult ? (
+                  <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                    <div className="font-medium">Invite created for {inviteResult.email}</div>
+                    <p className="text-xs text-muted-foreground">Email delivery is not connected to this action yet. Share these one-time details through a secure channel.</p>
+                    <div>
+                      <div className="text-xs text-muted-foreground">Temporary password</div>
+                      <code className="break-all">{inviteResult.tempPassword}</code>
+                    </div>
+                    <div>
+                      <div className="text-xs text-muted-foreground">Verification link</div>
+                      <a className="break-all text-primary underline" href={inviteResult.verifyLink} target="_blank" rel="noreferrer">{inviteResult.verifyLink}</a>
+                    </div>
+                  </div>
+                ) : null}
               </>
             )}
           </CardContent>
