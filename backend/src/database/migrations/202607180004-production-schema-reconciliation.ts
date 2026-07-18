@@ -624,12 +624,15 @@ async function backfillAlias(
   table: string,
   target: string,
   source: string,
+  targetType?: "uuid",
 ) {
   const columns = await columnNames(queryRunner, table);
   if (!columns.has(target) || !columns.has(source)) return;
+  const sourceExpression =
+    targetType === "uuid" ? `${quoted(source)}::text::uuid` : quoted(source);
   await queryRunner.query(
     `UPDATE ${quoted(table)}
-     SET ${quoted(target)} = ${quoted(source)}
+     SET ${quoted(target)} = ${sourceExpression}
      WHERE ${quoted(target)} IS NULL AND ${quoted(source)} IS NOT NULL`,
   );
 }
@@ -679,7 +682,7 @@ async function backfillAuditActors(queryRunner: QueryRunner) {
   );
   await queryRunner.query(`
     UPDATE "audit_logs"
-    SET "actorId" = "actor_id"
+    SET "actorId" = "actor_id"::text::uuid
     WHERE "actorId" IS NULL AND "actor_id" IS NOT NULL
   `);
   await queryRunner.query(`
@@ -728,10 +731,16 @@ export class ProductionSchemaReconciliation1784332800004 implements MigrationInt
       "quiet_hours_end",
     );
     await backfillAlias(queryRunner, "tenants", "bookingLink", "booking_link");
-    await backfillAlias(queryRunner, "users", "tenantId", "tenant_id");
+    await backfillAlias(queryRunner, "users", "tenantId", "tenant_id", "uuid");
     await backfillAlias(queryRunner, "users", "passwordHash", "password_hash");
-    await backfillAlias(queryRunner, "lead_events", "leadId", "lead_id");
-    await backfillAlias(queryRunner, "messages", "leadId", "lead_id");
+    await backfillAlias(
+      queryRunner,
+      "lead_events",
+      "leadId",
+      "lead_id",
+      "uuid",
+    );
+    await backfillAlias(queryRunner, "messages", "leadId", "lead_id", "uuid");
     await backfillAlias(
       queryRunner,
       "sequence_steps",
@@ -743,18 +752,21 @@ export class ProductionSchemaReconciliation1784332800004 implements MigrationInt
       "sequence_steps",
       "sequenceId",
       "sequence_id",
+      "uuid",
     );
     await backfillAlias(
       queryRunner,
       "sequence_enrollments",
       "sequenceId",
       "sequence_id",
+      "uuid",
     );
     await backfillAlias(
       queryRunner,
       "sequence_enrollments",
       "leadId",
       "lead_id",
+      "uuid",
     );
     await backfillAlias(
       queryRunner,
@@ -762,7 +774,13 @@ export class ProductionSchemaReconciliation1784332800004 implements MigrationInt
       "encryptedValue",
       "encrypted_value",
     );
-    await backfillAlias(queryRunner, "credentials", "tenantId", "tenant_id");
+    await backfillAlias(
+      queryRunner,
+      "credentials",
+      "tenantId",
+      "tenant_id",
+      "uuid",
+    );
     await backfillAuditActors(queryRunner);
 
     if (addedByTable.get("users")?.has("isEmailVerified")) {
