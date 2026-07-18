@@ -1,6 +1,20 @@
 import { DataSourceOptions } from "typeorm";
 import { buildDatabaseSslConfig } from "../common/database-ssl";
 import { databaseEntities } from "./entities";
+import { LegacyAuthCompatibility1784332800001 } from "./migrations/202607180001-legacy-auth-compatibility";
+
+const databaseMigrations = [LegacyAuthCompatibility1784332800001];
+
+function migrationOptions() {
+  return {
+    migrations: databaseMigrations,
+    migrationsRun:
+      process.env.NODE_ENV === "production" ||
+      process.env.RUN_MIGRATIONS === "true",
+    migrationsTableName: "app_migrations",
+    migrationsTransactionMode: "all" as const,
+  };
+}
 
 export function buildDatabaseOptions(): DataSourceOptions {
   const url = process.env.DATABASE_URL;
@@ -15,6 +29,7 @@ export function buildDatabaseOptions(): DataSourceOptions {
       entities: [...databaseEntities],
       synchronize: allowSync,
       ssl: buildDatabaseSslConfig(!isLocal),
+      ...migrationOptions(),
     };
   }
 
@@ -28,5 +43,6 @@ export function buildDatabaseOptions(): DataSourceOptions {
     entities: [...databaseEntities],
     synchronize: process.env.TYPEORM_SYNC === "true",
     ssl: buildDatabaseSslConfig(false),
+    ...migrationOptions(),
   };
 }

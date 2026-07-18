@@ -15,6 +15,8 @@
     "seed:dev": "ts-node -r tsconfig-paths/register src/scripts/seed.ts",
     "schema:sql": "ts-node -r tsconfig-paths/register src/scripts/print-schema-sql.ts",
     "schema:check": "node dist/scripts/schema-check.js",
+    "migration:run": "node ./node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js",
+    "migration:show": "node ./node_modules/typeorm/cli.js migration:show -d dist/database/data-source.js",
     "format": "prettier --write \"src/**/*.ts\""
   },
   "dependencies": {
