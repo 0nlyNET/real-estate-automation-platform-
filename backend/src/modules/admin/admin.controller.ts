@@ -14,7 +14,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthService } from '../auth/auth.service';
 import { AdminService } from './admin.service';
 import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
-import { ImpersonateDto } from './admin.dto';
+import { CreateClientDto, ImpersonateDto } from './admin.dto';
 import { AuditService } from '../audit/audit.service';
 
 @UseGuards(JwtAuthGuard, PlatformAdminGuard)
@@ -47,6 +47,31 @@ export class AdminController {
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
     }));
+  }
+
+  @Post('tenants')
+  async createTenant(@Body() body: CreateClientDto, @Req() req: any) {
+    const result = await this.admin.createClient({
+      businessName: body.businessName,
+      ownerEmail: body.ownerEmail,
+    });
+
+    await this.audit.record({
+      tenantId: result.tenant.id,
+      actorId: String(req.user?.sub || ''),
+      actorEmail: String(req.user?.email || ''),
+      action: 'client.created',
+      method: 'POST',
+      path: '/admin/tenants',
+      statusCode: 201,
+      metadata: {
+        ownerUserId: result.owner.id,
+        ownerEmail: result.owner.email,
+        verificationEmailSent: result.verificationEmailSent,
+      },
+    });
+
+    return result;
   }
 
   @Get('tenants/:tenantId/users')

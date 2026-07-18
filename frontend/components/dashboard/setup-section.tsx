@@ -34,9 +34,7 @@ type StatsOverview = {
   messagesTotal: number
 }
 
-type SequencesResp = {
-  sequences: Array<{ id: string }>
-}
+type SequenceSummary = { id: string }
 
 type IntegrationSummary = {
   provider: "twilio" | "sendgrid" | "facebook_lead_ads"
@@ -85,8 +83,8 @@ export function DashboardSetupSection() {
             leadsTotal: 0,
             messagesTotal: 0,
           })),
-          apiFetch<SequencesResp>("/sequences", { method: "GET" }).catch(
-            () => ({ sequences: [] }),
+          apiFetch<SequenceSummary[]>("/sequences", { method: "GET" }).catch(
+            () => [],
           ),
           apiFetch<IntegrationSummary[]>("/integrations").catch(() => []),
         ])
@@ -94,9 +92,7 @@ export function DashboardSetupSection() {
         if (!alive) return
         setSettings(s)
         setStats(st)
-        setSequencesCount(
-          Array.isArray(seq.sequences) ? seq.sequences.length : 0,
-        )
+        setSequencesCount(Array.isArray(seq) ? seq.length : 0)
         setIntegrations(connected)
       } finally {
         if (alive) setLoading(false)
