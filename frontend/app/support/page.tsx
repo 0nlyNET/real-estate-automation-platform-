@@ -18,7 +18,7 @@ export default function SupportPage() {
     e.preventDefault()
     setLoading(true)
     try {
-      const res = await apiFetch("/support/contact", {
+      const res = await apiFetch<{ ok: boolean; message?: string; notificationSent?: boolean }>("/support/contact", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subject, message }),
@@ -26,7 +26,12 @@ export default function SupportPage() {
       if (!res?.ok) throw new Error(res?.message || "Failed")
       setSubject("")
       setMessage("")
-      toast({ title: "Sent", description: "Support received your message." })
+      toast({
+        title: "Support ticket created",
+        description: res.notificationSent
+          ? "The support team was notified."
+          : "Your ticket was saved, but operator email notification is not configured yet.",
+      })
     } catch (e: any) {
       toast({ title: "Error", description: e?.message || "Could not send." })
     } finally {
