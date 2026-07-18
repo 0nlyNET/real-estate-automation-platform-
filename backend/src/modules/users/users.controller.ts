@@ -6,9 +6,10 @@ import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
 import { UserRole, canManageUsers } from '../../common/rbac';
 import { CreateTeamUserDto, UpdateUserActiveDto, UpdateUserRoleDto, UpdateUserTeamDto } from './users.dto';
+import * as crypto from 'crypto';
 
 function randomTempPassword() {
-  return `Temp-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 6)}`;
+  return `Temp-${crypto.randomBytes(18).toString('base64url')}`;
 }
 
 @UseGuards(JwtAuthGuard, RolesGuard)

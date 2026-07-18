@@ -32,8 +32,8 @@ export default function ResetPasswordInner() {
       setError("Missing reset token. Please use the link from your email.")
       return
     }
-    if (!password || password.length < 8) {
-      setError("Password must be at least 8 characters.")
+    if (!password || password.length < 12) {
+      setError("Password must be at least 12 characters.")
       return
     }
     if (password !== confirm) {
@@ -85,7 +85,8 @@ export default function ResetPasswordInner() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 8 characters"
+                placeholder="At least 12 characters"
+                minLength={12}
                 autoComplete="new-password"
               />
             </div>
@@ -98,6 +99,7 @@ export default function ResetPasswordInner() {
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 placeholder="Repeat password"
+                minLength={12}
                 autoComplete="new-password"
               />
             </div>
