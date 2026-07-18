@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -42,6 +43,16 @@ import { ComplianceOptOut } from './modules/compliance/compliance-optout.entity'
 import { ComplianceEvent } from './modules/compliance/compliance-event.entity';
 import { TenantQuietHours } from './modules/compliance/tenant-quiet-hours.entity';
 import { PasswordResetToken } from './modules/auth/password-reset-token.entity';
+import { SupportTicket } from './modules/support/support-ticket.entity';
+import { AuditLog } from './modules/audit/audit-log.entity';
+import { HealthModule } from './modules/health/health.module';
+import { SettingsModule } from './modules/settings/settings.module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { PublicModule } from './modules/public/public.module';
+import { SupportModule } from './modules/support/support.module';
+import { AuditModule } from './modules/audit/audit.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
 function buildDatabaseConfig() {
   const url = process.env.DATABASE_URL;
@@ -65,18 +76,23 @@ function buildDatabaseConfig() {
     ComplianceEvent,
     TenantQuietHours,
     PasswordResetToken,
+    SupportTicket,
+    AuditLog,
   ];
 
   if (url) {
     const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
     const allowSync = process.env.TYPEORM_SYNC === 'true' && isLocal;
+    const useSsl = !isLocal && process.env.DATABASE_SSL !== 'false';
 
     return {
       type: 'postgres' as const,
       url,
       entities,
       synchronize: allowSync,
-      ssl: isLocal ? false : { rejectUnauthorized: false },
+      ssl: useSsl
+        ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
+        : false,
     };
   }
 
@@ -89,6 +105,9 @@ function buildDatabaseConfig() {
     database: process.env.DB_NAME || 'real_estate',
     entities,
     synchronize: process.env.TYPEORM_SYNC === 'true',
+    ssl: process.env.DATABASE_SSL === 'true'
+      ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
+      : false,
   };
 }
 
@@ -98,6 +117,7 @@ function buildDatabaseConfig() {
       isGlobal: true,
       envFilePath: ['backend/.env', '.env'],
     }),
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     TypeOrmModule.forRoot(buildDatabaseConfig()),
     TenantsModule,
     UsersModule,
@@ -111,7 +131,15 @@ function buildDatabaseConfig() {
     PresenceModule,
     RoutingModule,
     ComplianceModule,
+    HealthModule,
+    SettingsModule,
+    IntegrationsModule,
+    WebhooksModule,
+    PublicModule,
+    SupportModule,
+    AuditModule,
   ],
   controllers: [AppController],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

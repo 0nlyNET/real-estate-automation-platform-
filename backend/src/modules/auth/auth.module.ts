@@ -9,15 +9,17 @@ import { JwtStrategy } from './jwt.strategy';
 import { PasswordResetToken } from './password-reset-token.entity';
 
 import { UsersModule } from '../users/users.module';
+import { MailModule } from '../../mail/mail.module';
+import { requireJwtSecret } from '../../common/env';
 
 @Module({
   imports: [
     UsersModule,
+    MailModule,
     TypeOrmModule.forFeature([PasswordResetToken]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'dev_secret_change_me',
-      signOptions: { expiresIn: '7d' },
+    JwtModule.registerAsync({
+      useFactory: () => ({ secret: requireJwtSecret(), signOptions: { expiresIn: '7d' } }),
     }),
   ],
   controllers: [AuthController],

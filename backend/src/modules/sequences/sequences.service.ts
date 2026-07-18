@@ -1,5 +1,5 @@
 import { TenantSettings } from '../settings/tenant-settings.entity';
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -13,10 +13,12 @@ import { LeadEvent } from '../leads/lead-event.entity';
 import { Message } from '../messaging/message.entity';
 import { Tenant } from '../tenants/tenant.entity';
 
-import { isWithinQuietHours, nextAllowedSendTime } from '../../common/time';
+import { formatHHMM, isWithinQuietHours, nextAllowedSendTime } from '../../common/time';
+import { ComplianceService } from '../compliance/compliance.service';
+import { hasAtLeastRole, UserRole } from '../../common/rbac';
 
 @Injectable()
-export class SequencesService implements OnModuleInit {
+export class SequencesService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SequencesService.name);
   private interval: NodeJS.Timeout | null = null;
 
@@ -37,6 +39,7 @@ export class SequencesService implements OnModuleInit {
     private readonly tenantSettingsRepository: Repository<TenantSettings>,
     @InjectRepository(Lead)
     private readonly leadRepository: Repository<Lead>,
+    private readonly complianceService: ComplianceService,
   ) {}
 
   onModuleInit(): void {
@@ -47,6 +50,25 @@ export class SequencesService implements OnModuleInit {
         this.logger.error(`processDueEnrollments failed: ${e?.message ?? e}`),
       );
     }, 10_000);
+  }
+
+  onModuleDestroy(): void {
+    if (this.interval) clearInterval(this.interval);
+    this.interval = null;
+  }
+
+  private async requireLeadAccess(
+    tenantId: string,
+    leadId: string,
+    ctx?: { userId?: string; role?: UserRole },
+  ) {
+    const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } });
+    if (!lead) throw new ForbiddenException('Lead not found');
+    const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : false;
+    if (!canSeeAll && lead.assignedToUserId !== ctx?.userId) {
+      throw new ForbiddenException('Lead is not assigned to this user');
+    }
+    return lead;
   }
 
   async startForLead(lead: Lead) {
@@ -75,6 +97,7 @@ export class SequencesService implements OnModuleInit {
       const sequence = await this.sequenceRepository.findOne({
         where: {
           tenantId,
+          active: true,
           leadType: (lead as any).leadType,
           temperature: (lead as any).temperature,
         } as any,
@@ -244,9 +267,8 @@ export class SequencesService implements OnModuleInit {
     return { ok: true };
   }
 
-  async listEnrollmentsForLead(tenantId: string, leadId: string) {
-    const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } as any });
-    if (!lead) return [];
+  async listEnrollmentsForLead(tenantId: string, leadId: string, ctx?: { userId?: string; role?: UserRole }) {
+    await this.requireLeadAccess(tenantId, leadId, ctx);
     const enrollments = await this.enrollmentRepository.find({
       where: { lead: { id: leadId } } as any,
       relations: ['sequence'],
@@ -262,9 +284,8 @@ export class SequencesService implements OnModuleInit {
     }));
   }
 
-  async pauseEnrollment(tenantId: string, leadId: string, enrollmentId: string) {
-    const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } as any });
-    if (!lead) return { ok: false, message: 'Lead not found' };
+  async pauseEnrollment(tenantId: string, leadId: string, enrollmentId: string, ctx?: { userId?: string; role?: UserRole }) {
+    await this.requireLeadAccess(tenantId, leadId, ctx);
     const e = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, lead: { id: leadId } } as any });
     if (!e) return { ok: false, message: 'Enrollment not found' };
     (e as any).status = 'paused';
@@ -273,9 +294,8 @@ export class SequencesService implements OnModuleInit {
     return { ok: true };
   }
 
-  async resumeEnrollment(tenantId: string, leadId: string, enrollmentId: string) {
-    const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } as any });
-    if (!lead) return { ok: false, message: 'Lead not found' };
+  async resumeEnrollment(tenantId: string, leadId: string, enrollmentId: string, ctx?: { userId?: string; role?: UserRole }) {
+    await this.requireLeadAccess(tenantId, leadId, ctx);
     const e = await this.enrollmentRepository.findOne({
       where: { id: enrollmentId, lead: { id: leadId } } as any,
       relations: ['sequence'],
@@ -288,9 +308,8 @@ export class SequencesService implements OnModuleInit {
     return { ok: true };
   }
 
-  async stopEnrollment(tenantId: string, leadId: string, enrollmentId: string, reason: string = 'manual') {
-    const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } as any });
-    if (!lead) return { ok: false, message: 'Lead not found' };
+  async stopEnrollment(tenantId: string, leadId: string, enrollmentId: string, reason: string = 'manual', ctx?: { userId?: string; role?: UserRole }) {
+    await this.requireLeadAccess(tenantId, leadId, ctx);
     const e = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, lead: { id: leadId } } as any });
     if (!e) return { ok: false, message: 'Enrollment not found' };
     (e as any).status = 'stopped';
@@ -300,7 +319,7 @@ export class SequencesService implements OnModuleInit {
     return { ok: true };
   }
 
-  async stopForLead(leadId: string, reason: 'reply' | 'manual' | 'other' = 'other') {
+  async stopForLead(leadId: string, reason: 'reply' | 'manual' | 'other' | 'opt_out' = 'other') {
     try {
       const enrollments = await this.enrollmentRepository.find({
         where: { lead: { id: leadId }, status: 'active' } as any,
@@ -375,7 +394,7 @@ export class SequencesService implements OnModuleInit {
       order: { steps: { offsetMinutes: 'ASC' } } as any,
     });
 
-    if (!sequence) {
+    if (!sequence || !sequence.active) {
       hydrated.status = 'stopped';
       (hydrated as any).stoppedReason = 'other';
       (hydrated as any).nextRunAt = undefined;
@@ -389,6 +408,15 @@ export class SequencesService implements OnModuleInit {
     });
 
     if (!lead) return;
+
+    const leadTenantId = (lead as any).tenantId || (lead as any).tenant?.id;
+    if (sequence.tenantId !== leadTenantId) {
+      hydrated.status = 'stopped';
+      (hydrated as any).stoppedReason = 'other';
+      (hydrated as any).nextRunAt = undefined;
+      await this.enrollmentRepository.save(hydrated);
+      return;
+    }
 
     const steps = (sequence.steps ?? [])
       .slice()
@@ -412,7 +440,10 @@ export class SequencesService implements OnModuleInit {
         ? await this.tenantRepository.findOne({ where: { id: tenantId } as any })
         : null);
 
-    const bookingLink = (tenant as any)?.bookingLink ?? '';
+    const tenantSettings = tenantId
+      ? await this.tenantSettingsRepository.findOne({ where: { tenantId } as any })
+      : undefined;
+    const bookingLink = tenantSettings?.bookingLink || (tenant as any)?.bookingLink || '';
 
     const body = renderTemplate((step as any).template, {
       leadName: (lead as any).fullName ?? '',
@@ -421,15 +452,14 @@ export class SequencesService implements OnModuleInit {
 
     // Quiet hours
     const now = new Date();
-    const tenantSettings = tenantId
-      ? await this.tenantSettingsRepository.findOne({ where: { tenantId } as any })
-      : undefined;
-
-    const tz = (tenantSettings as any)?.timeZone || (tenant as any)?.timezone;
-    const qStart = (tenantSettings as any)?.quietHoursStart || (tenant as any)?.quietHoursStart;
-    const qEnd = (tenantSettings as any)?.quietHoursEnd || (tenant as any)?.quietHoursEnd;
+    const complianceQuietHours = tenantId ? await this.complianceService.findQuietHours(tenantId) : null;
+    const quietHoursEnabled = complianceQuietHours?.enabled ?? true;
+    const tz = complianceQuietHours?.timezone || (tenantSettings as any)?.timeZone || (tenant as any)?.timezone;
+    const qStart = complianceQuietHours ? formatHHMM(complianceQuietHours.startMinute) : (tenantSettings as any)?.quietHoursStart;
+    const qEnd = complianceQuietHours ? formatHHMM(complianceQuietHours.endMinute) : (tenantSettings as any)?.quietHoursEnd;
 
     const scheduledAt =
+      quietHoursEnabled &&
       tz &&
       qStart &&
       qEnd &&
@@ -438,10 +468,7 @@ export class SequencesService implements OnModuleInit {
         : undefined;
 
     const globalDisabled = process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true';
-    const tenantSettings2 = tenantId
-      ? await this.tenantSettingsRepository.findOne({ where: { tenantId } as any })
-      : undefined;
-    const tenantDisabled = tenantSettings2 ? (tenantSettings2 as any).automationsEnabled === false : false;
+    const tenantDisabled = tenantSettings?.automationsEnabled === false;
 
     if (globalDisabled || tenantDisabled) {
       this.logger.warn(

@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
 import { Tenant } from "../tenants/tenant.entity";
 import { Team } from "../teams/team.entity";
 import { UserRole } from "../../common/rbac";
@@ -15,6 +15,7 @@ export class User {
   @JoinColumn({ name: "tenantId" })
   tenant: Tenant;
 
+  @Index({ unique: true })
   @Column({ type: "varchar", length: 255 })
   email: string;
 

@@ -1,9 +1,7 @@
-import { Injectable, Logger, OnModuleInit, ForbiddenException } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, ForbiddenException } from "@nestjs/common";
 import { UserRole, hasAtLeastRole } from "../../common/rbac";
 import { DataSource, Repository } from "typeorm";
 import { InjectRepository } from "@nestjs/typeorm";
-import * as SendgridMail from "@sendgrid/mail";
-import axios from "axios";
 
 import { Message } from "./message.entity";
 import { Lead } from "../leads/lead.entity";
@@ -11,12 +9,21 @@ import { Tenant } from "../tenants/tenant.entity";
 import { TenantSettings } from "../settings/tenant-settings.entity";
 import { LeadEvent } from "../leads/lead-event.entity";
 import { SequencesService } from "../sequences/sequences.service";
-import { isWithinQuietHours, nextAllowedSendTime } from "../../common/time";
-import { decryptSecret } from "../../common/secrets";
+import { formatHHMM, isWithinQuietHours, nextAllowedSendTime } from "../../common/time";
+import { Credential } from "../settings/credential.entity";
+import { decryptIntegrationPayload } from "../integrations/integrations.service";
+import { ComplianceService } from "../compliance/compliance.service";
+import { sendSendGridEmail, sendTwilioSms } from "../../common/providers";
+
+type ProviderConfig = {
+  sendgrid?: { apiKey?: string; fromEmail?: string; fromName?: string };
+  twilio?: { accountSid?: string; authToken?: string; fromNumber?: string; messagingServiceSid?: string };
+};
 
 @Injectable()
-export class MessagingService implements OnModuleInit {
+export class MessagingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MessagingService.name);
+  private senderTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -36,16 +43,24 @@ export class MessagingService implements OnModuleInit {
     @InjectRepository(LeadEvent)
     private readonly leadEventRepository: Repository<LeadEvent>,
 
+    @InjectRepository(Credential)
+    private readonly credentialRepository: Repository<Credential>,
+
     private readonly sequencesService: SequencesService,
+    private readonly complianceService: ComplianceService,
   ) {}
 
   onModuleInit(): void {
     // Lightweight sender loop: delivers pending/scheduled outbound messages without Redis.
-    setInterval(() => {
+    this.senderTimer = setInterval(() => {
       this.processPendingOutbound({ limit: 25 }).catch((e) =>
         this.logger.error(`processPendingOutbound failed: ${e?.message ?? e}`),
       );
     }, 5_000);
+  }
+
+  onModuleDestroy(): void {
+    if (this.senderTimer) clearInterval(this.senderTimer);
   }
 
   private requireTenant(tenantId?: string | null) {
@@ -53,51 +68,18 @@ export class MessagingService implements OnModuleInit {
     return tenantId;
   }
 
-  private async getProviderConfig(tenantId: string) {
-    const settings = await this.settingsRepository.findOne({
-      where: { tenantId } as any,
+  private async getProviderConfig(tenantId: string): Promise<ProviderConfig> {
+    const rows = await this.credentialRepository.find({
+      where: { tenant: { id: tenantId } as any },
+      relations: ['tenant'],
     });
-
-    const out: {
-      sendgrid?: { apiKey?: string; fromEmail?: string; fromName?: string };
-      twilio?: {
-        accountSid?: string;
-        authToken?: string;
-        fromNumber?: string;
-        messagingServiceSid?: string;
-      };
-    } = {};
-
-    if (settings?.sendgridApiKeyEnc || settings?.sendgridFromEmail) {
-      try {
-        out.sendgrid = {
-          apiKey: settings.sendgridApiKeyEnc
-            ? decryptSecret(settings.sendgridApiKeyEnc)
-            : undefined,
-          fromEmail: settings.sendgridFromEmail || undefined,
-          fromName: settings.sendgridFromName || undefined,
-        };
-      } catch {
-        // ignore invalid encryption config
-      }
-    }
-
-    if (settings?.twilioAccountSid || settings?.twilioAuthTokenEnc) {
-      try {
-        out.twilio = {
-          accountSid: settings.twilioAccountSid || undefined,
-          authToken: settings.twilioAuthTokenEnc
-            ? decryptSecret(settings.twilioAuthTokenEnc)
-            : undefined,
-          fromNumber: settings.twilioFromNumber || undefined,
-          messagingServiceSid: settings.twilioMessagingServiceSid || undefined,
-        };
-      } catch {
-        // ignore
-      }
-    }
-
-    return out;
+    const values = new Map(rows.map((row) => [row.provider, decryptIntegrationPayload(row.encryptedValue)]));
+    const sendgrid = values.get('sendgrid');
+    const twilio = values.get('twilio');
+    return {
+      sendgrid: sendgrid?.connected ? sendgrid : undefined,
+      twilio: twilio?.connected ? twilio : undefined,
+    };
   }
 
   // ============================================================
@@ -220,7 +202,11 @@ export class MessagingService implements OnModuleInit {
    * GET /messaging/threads/:leadId
    * Returns ordered message history for that lead (tenant scoped)
    */
-  async getThreadMessages(tenantIdRaw: string, leadId: string) {
+  async getThreadMessages(
+    tenantIdRaw: string,
+    leadId: string,
+    ctx?: { userId?: string; role?: UserRole },
+  ) {
     const tenantId = this.requireTenant(tenantIdRaw);
 
     // Verify lead belongs to tenant
@@ -228,6 +214,10 @@ export class MessagingService implements OnModuleInit {
       where: { id: leadId, tenantId } as any,
     });
     if (!lead) throw new ForbiddenException("Lead not found");
+    const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : false;
+    if (!canSeeAll && lead.assignedToUserId !== ctx?.userId) {
+      throw new ForbiddenException('Lead is not assigned to this user');
+    }
 
     const msgs = await this.messageRepository
       .createQueryBuilder("m")
@@ -264,36 +254,45 @@ export class MessagingService implements OnModuleInit {
       const tenant = await this.loadTenantForLead(lead);
       if (!tenant) return;
 
-      const bookingLink = (tenant as any).bookingLink || "https://example.com";
-      const body = `Hey ${lead.fullName}, thanks for reaching out. Here’s my booking link: ${bookingLink}`;
+      const settings = await this.settingsRepository.findOne({ where: { tenantId: lead.tenantId } });
+      if (settings?.automationsEnabled === false) return;
+
+      const bookingLink = String(settings?.bookingLink || (tenant as any).bookingLink || '').trim();
+      const body = bookingLink
+        ? `Hey ${lead.fullName}, thanks for reaching out. Here’s my booking link: ${bookingLink}`
+        : `Hey ${lead.fullName}, thanks for reaching out. What time works best for a quick conversation?`;
 
       const now = new Date();
 
+      const complianceQuietHours = await this.complianceService.findQuietHours(lead.tenantId);
+      const quietHoursEnabled = complianceQuietHours?.enabled ?? true;
+      const timeZone = complianceQuietHours?.timezone || settings?.timeZone || (tenant as any).timezone || 'America/New_York';
+      const quietStart = complianceQuietHours ? formatHHMM(complianceQuietHours.startMinute) : settings?.quietHoursStart;
+      const quietEnd = complianceQuietHours ? formatHHMM(complianceQuietHours.endMinute) : settings?.quietHoursEnd;
+
       const hasQuietHours =
-        !!(tenant as any).timezone &&
-        !!(tenant as any).quietHoursStart &&
-        !!(tenant as any).quietHoursEnd;
+        quietHoursEnabled && !!timeZone && !!quietStart && !!quietEnd;
 
       const inQuiet =
         hasQuietHours &&
         isWithinQuietHours({
           now,
-          timeZone: (tenant as any).timezone || "America/New_York",
-          quietStart: (tenant as any).quietHoursStart ?? undefined,
-          quietEnd: (tenant as any).quietHoursEnd ?? undefined,
+          timeZone,
+          quietStart,
+          quietEnd,
         });
 
       const scheduledAt = inQuiet
         ? nextAllowedSendTime({
             now,
-            timeZone: (tenant as any).timezone || "America/New_York",
-            quietStart: (tenant as any).quietHoursStart ?? undefined,
-            quietEnd: (tenant as any).quietHoursEnd ?? undefined,
+            timeZone,
+            quietStart,
+            quietEnd,
           })
         : undefined;
 
       // SMS
-      if ((lead as any).phone) {
+      if ((lead as any).phone && !(await this.complianceService.isOptedOut(lead.tenantId, 'sms', (lead as any).phone))) {
         const msg = await this.createMessage({
           lead,
           channel: "sms",
@@ -311,7 +310,7 @@ export class MessagingService implements OnModuleInit {
       }
 
       // Email
-      if ((lead as any).email) {
+      if ((lead as any).email && !(await this.complianceService.isOptedOut(lead.tenantId, 'email', (lead as any).email))) {
         const msg = await this.createMessage({
           lead,
           channel: "email",
@@ -372,14 +371,14 @@ export class MessagingService implements OnModuleInit {
       }`;
 
     try {
-      SendgridMail.setApiKey(apiKey);
-      await SendgridMail.send({
+      await sendSendGridEmail({
+        apiKey,
         to: payload.leadEmail,
-        from,
+        fromEmail: from,
         subject: "Quick follow-up",
         text,
       });
-      this.logger.log(`SendGrid test email sent to ${payload.leadEmail}`);
+      this.logger.log("SendGrid test email sent");
     } catch (e: any) {
       this.logger.error(`SendGrid test email failed: ${e?.message ?? e}`);
     }
@@ -416,6 +415,14 @@ export class MessagingService implements OnModuleInit {
   }
 
   private async trySend(msg: Message) {
+    const lead = (msg as any).lead as Lead | undefined;
+    const target = (msg as any).channel === 'sms' ? lead?.phone : lead?.email;
+    if (lead && target && await this.complianceService.isOptedOut(lead.tenantId, (msg as any).channel, target)) {
+      (msg as any).status = 'skipped';
+      (msg as any).lastError = 'Recipient opted out';
+      await this.messageRepository.save(msg);
+      return;
+    }
     (msg as any).attemptCount = ((msg as any).attemptCount ?? 0) + 1;
     (msg as any).lastError = undefined;
     await this.messageRepository.save(msg);
@@ -468,7 +475,7 @@ export class MessagingService implements OnModuleInit {
 
   private async sendEmail(msg: Message) {
     const tenantId = (msg as any).lead?.tenantId;
-    const cfg = tenantId ? await this.getProviderConfig(tenantId) : {};
+    const cfg: ProviderConfig = tenantId ? await this.getProviderConfig(tenantId) : {};
 
     const apiKey = cfg.sendgrid?.apiKey || process.env.SENDGRID_API_KEY;
     const fromEmail =
@@ -488,10 +495,11 @@ export class MessagingService implements OnModuleInit {
 
     if (!apiKey || !fromEmail) throw new Error("Missing SendGrid config");
 
-    SendgridMail.setApiKey(apiKey);
-    await SendgridMail.send({
+    await sendSendGridEmail({
+      apiKey,
       to,
-      from: { email: fromEmail, name: fromName },
+      fromEmail,
+      fromName,
       subject: "Quick follow-up",
       text: (msg as any).body,
     });
@@ -499,14 +507,15 @@ export class MessagingService implements OnModuleInit {
 
   private async sendSms(msg: Message) {
     const tenantId = (msg as any).lead?.tenantId;
-    const cfg = tenantId ? await this.getProviderConfig(tenantId) : {};
+    const cfg: ProviderConfig = tenantId ? await this.getProviderConfig(tenantId) : {};
 
     const sid = cfg.twilio?.accountSid || process.env.TWILIO_ACCOUNT_SID;
     const token = cfg.twilio?.authToken || process.env.TWILIO_AUTH_TOKEN;
     const from = cfg.twilio?.fromNumber || process.env.TWILIO_FROM_NUMBER;
     const messagingServiceSid = cfg.twilio?.messagingServiceSid;
 
-    const to = (msg as any).lead?.phone;
+    const canonicalTo = (msg as any).lead?.phone;
+    const to = canonicalTo ? `+${String(canonicalTo).replace(/^\+/, '')}` : null;
     if (!to) {
       (msg as any).status = "skipped";
       (msg as any).lastError = "Missing lead phone";
@@ -518,21 +527,15 @@ export class MessagingService implements OnModuleInit {
     if (!from && !messagingServiceSid)
       throw new Error("Missing Twilio From number or Messaging Service SID");
 
-    const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`;
-    const data = new URLSearchParams({
-      To: to,
-      Body: (msg as any).body,
-      ...(messagingServiceSid
-        ? { MessagingServiceSid: messagingServiceSid }
-        : { From: from as string }),
+    const resp = await sendTwilioSms({
+      accountSid: sid,
+      authToken: token,
+      to,
+      body: (msg as any).body,
+      ...(messagingServiceSid ? { messagingServiceSid } : { from: from as string }),
     });
 
-    const resp = await axios.post(url, data, {
-      auth: { username: sid, password: token },
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-
-    (msg as any).providerMessageId = resp.data?.sid;
+    (msg as any).providerMessageId = resp.sid;
   }
 
   private async loadTenantForLead(lead: Lead): Promise<Tenant | null> {

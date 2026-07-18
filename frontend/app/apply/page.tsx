@@ -1,11 +1,46 @@
+"use client"
+
+import { FormEvent, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { MarketingHeader } from "@/components/ui/marketing-header"
 import { Footer } from "@/components/ui/footer"
 import { CookieBanner } from "@/components/ui/cookie-banner"
 import { ArrowRight, CheckCircle2 } from "lucide-react"
+import { apiFetch } from "@/lib/api"
 
 export default function ApplyPage() {
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  async function submitApplication(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSubmitting(true)
+    setResult(null)
+
+    const formElement = event.currentTarget
+    const form = new FormData(formElement)
+    try {
+      await apiFetch("/public/inquiry", {
+        method: "POST",
+        body: {
+          name: String(form.get("name") || ""),
+          email: String(form.get("email") || ""),
+          company: String(form.get("business") || ""),
+          topic: "setup",
+          source: String(form.get("lead_source") || ""),
+          message: String(form.get("goal") || ""),
+        },
+      })
+      formElement.reset()
+      setResult("Thanks — your application was submitted.")
+    } catch (error) {
+      setResult(error instanceof Error ? error.message : "Application could not be submitted.")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <MarketingHeader />
@@ -61,16 +96,7 @@ export default function ApplyPage() {
                   Answer honestly. This helps us launch faster.
                 </p>
 
-                <form
-                  className="mt-8 space-y-4"
-                  action="https://formsubmit.co/aiautomationsllc@gmail.com"
-                  method="POST"
-                >
-                  <input type="hidden" name="_captcha" value="false" />
-                  <input type="hidden" name="_subject" value="New RealtyTechAI Application" />
-                  <input type="hidden" name="_template" value="table" />
-                  <input type="hidden" name="_next" value="https://www.realtytechai.com/thanks" />
-
+                <form className="mt-8 space-y-4" onSubmit={submitApplication}>
                   <input
                     required
                     name="name"
@@ -108,10 +134,12 @@ export default function ApplyPage() {
                     className="w-full rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
                   />
 
-                  <Button type="submit" className="mt-4 w-full">
-                    Submit application
+                  <Button type="submit" className="mt-4 w-full" disabled={submitting}>
+                    {submitting ? "Submitting..." : "Submit application"}
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
+
+                  {result ? <p role="status" className="text-sm text-muted-foreground">{result}</p> : null}
 
                   <p className="pt-2 text-xs text-muted-foreground">
                     We review applications manually. Not everyone is accepted.

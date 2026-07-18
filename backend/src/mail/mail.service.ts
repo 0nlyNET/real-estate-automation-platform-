@@ -1,29 +1,20 @@
-import { Injectable, Logger } from '@nestjs/common';
-import * as sgMail from '@sendgrid/mail';
+import { Injectable } from '@nestjs/common';
+import { sendSendGridEmail } from '../common/providers';
 
 @Injectable()
 export class MailService {
-  private readonly logger = new Logger(MailService.name);
-
-  constructor() {
-    const apiKey = process.env.SENDGRID_API_KEY;
-    if (!apiKey) {
-      this.logger.error('SENDGRID_API_KEY missing');
-    } else {
-      sgMail.setApiKey(apiKey);
-    }
-  }
-
   async sendEmail(params: { to: string; subject: string; text: string; html?: string }) {
+    const apiKey = process.env.SENDGRID_API_KEY;
+    if (!apiKey) throw new Error('SENDGRID_API_KEY missing');
     const fromEmail = process.env.SENDGRID_FROM_EMAIL;
     if (!fromEmail) throw new Error('SENDGRID_FROM_EMAIL missing');
 
     const fromName = process.env.SENDGRID_FROM_NAME || 'RealtyTechAI';
-    const from = { email: fromEmail, name: fromName };
-
-    await sgMail.send({
+    await sendSendGridEmail({
+      apiKey,
       to: params.to,
-      from,
+      fromEmail,
+      fromName,
       subject: params.subject,
       text: params.text,
       ...(params.html ? { html: params.html } : {}),
@@ -78,4 +69,3 @@ export class MailService {
     return this.sendEmail({ to: params.to, subject, text, html });
   }
 }
-

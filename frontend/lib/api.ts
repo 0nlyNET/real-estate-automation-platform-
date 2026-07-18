@@ -65,7 +65,11 @@ function extractErrorMessage(payload: any): string {
   return String(payload);
 }
 
-export async function apiFetch(path: string, init: RequestInit = {}) {
+export type ApiRequestInit = Omit<RequestInit, "body"> & {
+  body?: BodyInit | Record<string, unknown> | unknown[] | null
+}
+
+export async function apiFetch<T = any>(path: string, init: ApiRequestInit = {}): Promise<T> {
   const url = path.startsWith("http") ? path : `${API_URL}${path.startsWith("/") ? "" : "/"}${path}`;
 
   const headers = new Headers(init.headers || {});
@@ -102,5 +106,5 @@ export async function apiFetch(path: string, init: RequestInit = {}) {
     throw new Error(msg);
   }
 
-  return payload;
+  return payload as T;
 }

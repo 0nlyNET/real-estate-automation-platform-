@@ -7,9 +7,11 @@ import { Message } from '../messaging/message.entity';
 
 import { WebhooksController } from './webhooks.controller';
 import { WebhooksService } from './webhooks.service';
+import { ComplianceModule } from '../compliance/compliance.module';
+import { SequencesModule } from '../sequences/sequences.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Credential, Lead, Message])],
+  imports: [TypeOrmModule.forFeature([Credential, Lead, Message]), ComplianceModule, SequencesModule],
   controllers: [WebhooksController],
   providers: [WebhooksService],
 })

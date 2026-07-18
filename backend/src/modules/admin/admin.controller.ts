@@ -1,9 +1,11 @@
 import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 import { AuthService } from '../auth/auth.service';
 import { AdminService } from './admin.service';
+import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
+import { ImpersonateDto } from './admin.dto';
 
+@UseGuards(JwtAuthGuard, PlatformAdminGuard)
 @Controller('admin')
 export class AdminController {
   constructor(
@@ -11,22 +13,16 @@ export class AdminController {
     private readonly auth: AuthService,
   ) {}
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole('owner')
   @Get('overview')
   async overview() {
     return this.admin.overview();
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole('owner')
   @Get('system-health')
   async systemHealth() {
     return this.admin.systemHealth();
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole('owner')
   @Get('tenants')
   async listTenants() {
     const items = await this.admin.listTenants();
@@ -40,8 +36,6 @@ export class AdminController {
     }));
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole('owner')
   @Get('tenants/:tenantId/users')
   async listTenantUsers(@Param('tenantId') tenantId: string) {
     const items = await this.admin.listUsersByTenant(tenantId);
@@ -54,10 +48,8 @@ export class AdminController {
     }));
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole('owner')
   @Post('impersonate')
-  async impersonate(@Body() body: { userId: string }, @Req() req: any) {
+  async impersonate(@Body() body: ImpersonateDto, @Req() req: any) {
     const userId = String(body?.userId || '').trim();
     if (!userId) return { message: 'Missing userId' };
 
@@ -75,7 +67,7 @@ export class AdminController {
         tenantId: (target as any).tenantId,
       },
       impersonatedBy: {
-        userId: req.user?.userId,
+        userId: req.user?.sub,
         email: req.user?.email,
       },
     };

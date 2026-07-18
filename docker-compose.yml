@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:15
+    image: postgres:15-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -9,40 +9,54 @@ services:
       - "55432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-
-  redis:
-    image: redis:7
-    ports:
-      - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d real_estate"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
     environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: real_estate
-      DB_SSL: "false"
-      PGSSLMODE: disable
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/real_estate?sslmode=disable
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_me}
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/real_estate
+      TYPEORM_SYNC: "true"
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in a root .env file}
+      PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      SEED_TENANT_NAME: ${SEED_TENANT_NAME:-RealtyTechAI Workspace}
+      INTEGRATIONS_ENCRYPTION_KEY: ${INTEGRATIONS_ENCRYPTION_KEY:-}
+      FRONTEND_URL: http://localhost:3000
+      PUBLIC_APP_URL: http://localhost:3000
+      PUBLIC_INTAKE_SECRET: ${PUBLIC_INTAKE_SECRET:-}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL:-}
+      SENDGRID_FROM_NAME: ${SENDGRID_FROM_NAME:-RealtyTechAI}
+      SALES_INBOX_EMAIL: ${SALES_INBOX_EMAIL:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
     ports:
       - "4000:4000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:4000
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:4000
+    depends_on:
+      backend:
+        condition: service_healthy
     ports:
       - "3000:3000"
 

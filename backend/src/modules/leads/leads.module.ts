@@ -12,18 +12,21 @@ import { LeadsService } from './leads.service';
 import { TenantsModule } from '../tenants/tenants.module';
 import { MessagingModule } from '../messaging/messaging.module';
 import { MailModule } from '../../mail/mail.module';
-import { IntegrationsModule } from '../integrations/integrations.module';
 import { LimitsModule } from '../limits/limits.module';
+import { Team } from '../teams/team.entity';
+import { CommonModule } from '../../common/common.module';
+import { RoutingModule } from '../routing/routing.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Lead, LeadEvent, User, TenantSettings]),
+    TypeOrmModule.forFeature([Lead, LeadEvent, User, Team, TenantSettings]),
     TenantsModule,
     MessagingModule,
     SequencesModule,
     MailModule,
-    IntegrationsModule,
     LimitsModule,
+    CommonModule,
+    RoutingModule,
   ],
   controllers: [LeadsController],
   providers: [LeadsService],

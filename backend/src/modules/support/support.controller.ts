@@ -1,6 +1,7 @@
 import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SupportService } from './support.service';
+import { CreateSupportTicketDto } from './support.dto';
 
 @Controller('support')
 export class SupportController {
@@ -10,11 +11,11 @@ export class SupportController {
   @Post('contact')
   async contact(
     @Req() req: any,
-    @Body() body: { subject: string; message: string; name?: string | null; email?: string | null },
+    @Body() body: CreateSupportTicketDto,
   ) {
     const tenantId = req.user?.tenantId;
     const userId = req.user?.sub;
-    const email = (body.email || req.user?.email || '').toString().trim().toLowerCase();
+    const email = String(req.user?.email || '').trim().toLowerCase();
     const subject = (body.subject || '').toString().trim();
     const message = (body.message || '').toString().trim();
     const name = body.name ? String(body.name).trim() : null;

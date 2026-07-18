@@ -6,33 +6,33 @@ import { Shield, Lock, Server, Eye, FileCheck, Users } from "lucide-react"
 const securityFeatures = [
   {
     icon: Lock,
-    title: "256-bit Encryption",
-    description: "All data is encrypted in transit and at rest using industry-standard AES-256 encryption.",
+    title: "Transport Security",
+    description: "Production deployments should terminate HTTPS at a trusted proxy or hosting platform.",
   },
   {
     icon: Server,
-    title: "SOC 2 Type II Compliant",
-    description: "Our infrastructure and processes are audited annually to meet SOC 2 security standards.",
+    title: "Tenant Isolation",
+    description: "API access is scoped by tenant and protected with server-side authorization checks.",
   },
   {
     icon: Shield,
-    title: "DDoS Protection",
-    description: "Enterprise-grade protection against distributed denial-of-service attacks.",
+    title: "Webhook Verification",
+    description: "Twilio webhook signatures are validated before inbound messages are processed.",
   },
   {
     icon: Eye,
-    title: "24/7 Monitoring",
-    description: "Continuous security monitoring and threat detection across all systems.",
+    title: "Role Controls",
+    description: "Owner, admin, transaction-coordinator, agent, and read-only roles limit sensitive actions.",
   },
   {
     icon: FileCheck,
-    title: "Regular Audits",
-    description: "Third-party security assessments and penetration testing performed quarterly.",
+    title: "Credential Handling",
+    description: "Integration credentials are stored encrypted and are not exposed through application responses.",
   },
   {
     icon: Users,
-    title: "Access Controls",
-    description: "Role-based access control and multi-factor authentication for all accounts.",
+    title: "Abuse Controls",
+    description: "Authentication and public intake endpoints include request validation and rate limits.",
   },
 ]
 
@@ -51,8 +51,8 @@ export default function SecurityPage() {
               Security at <span className="text-primary">RealtyTechAI</span>
             </h1>
             <p className="mt-6 text-lg text-muted-foreground">
-              Your data security is our top priority. We employ enterprise-grade security measures to protect your
-              information.
+              The product includes practical safeguards for authentication, tenant isolation, integrations, and
+              messaging. Your hosting and provider configuration remain part of the security boundary.
             </p>
           </div>
         </div>
@@ -84,48 +84,48 @@ export default function SecurityPage() {
             <div>
               <h3 className="text-lg font-semibold text-foreground">Infrastructure Security</h3>
               <p className="mt-2">
-                Our platform runs on secure, SOC 2 compliant cloud infrastructure with automatic failover, redundant
-                backups, and geographically distributed data centers.
+                Production operators should use managed PostgreSQL, HTTPS, restricted network access, backups, and
+                monitoring appropriate to their risk profile. These controls are deployment responsibilities.
               </p>
             </div>
 
             <div>
               <h3 className="text-lg font-semibold text-foreground">Data Protection</h3>
               <p className="mt-2">
-                All customer data is encrypted using AES-256 encryption. We implement strict access controls and audit
-                logging for all data access.
+                Tenant identifiers are enforced in service queries, integration secrets are encrypted before storage,
+                and sensitive values are excluded from normal API responses and logs.
               </p>
             </div>
 
             <div>
               <h3 className="text-lg font-semibold text-foreground">Authentication & Access</h3>
               <p className="mt-2">
-                We support multi-factor authentication, SSO integration, and enforce strong password policies. Session
-                management includes automatic timeouts and secure token handling.
+                The application uses signed JWTs, verified email accounts, strong password requirements, and
+                server-side role checks. MFA and SSO are not currently included.
               </p>
             </div>
 
             <div>
               <h3 className="text-lg font-semibold text-foreground">Compliance</h3>
               <p className="mt-2">
-                We maintain compliance with industry standards including SOC 2 Type II, GDPR, CCPA, and follow OWASP
-                security guidelines.
+                RealtyTechAI does not currently claim a third-party security certification. Customers are responsible
+                for assessing their own legal, privacy, retention, consent, and messaging obligations.
               </p>
             </div>
 
             <div>
               <h3 className="text-lg font-semibold text-foreground">Incident Response</h3>
               <p className="mt-2">
-                We have a dedicated security team and documented incident response procedures. In the event of a
-                security incident, affected customers are notified within 72 hours.
+                Operators should configure logs, alerts, backups, key rotation, and an incident-response process before
+                handling production data.
               </p>
             </div>
 
             <div>
               <h3 className="text-lg font-semibold text-foreground">Vulnerability Disclosure</h3>
               <p className="mt-2">
-                If you discover a security vulnerability, please report it to security@realtytechai.com. We take all
-                reports seriously and will respond within 48 hours.
+                If you discover a security issue, use the contact page and avoid including live credentials or customer
+                data in the initial report.
               </p>
             </div>
           </div>

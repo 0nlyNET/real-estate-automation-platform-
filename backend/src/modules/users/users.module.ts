@@ -5,9 +5,10 @@ import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { CommonModule } from '../../common/common.module';
 import { TenantsModule } from '../tenants/tenants.module';
+import { Team } from '../teams/team.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User]), CommonModule, TenantsModule],
+  imports: [TypeOrmModule.forFeature([User, Team]), CommonModule, TenantsModule],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService, TypeOrmModule],

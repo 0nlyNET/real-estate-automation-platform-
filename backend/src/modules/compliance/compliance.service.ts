@@ -4,9 +4,13 @@ import { Repository } from 'typeorm';
 import { ComplianceOptOut } from './compliance-optout.entity';
 import { ComplianceEvent } from './compliance-event.entity';
 import { TenantQuietHours } from './tenant-quiet-hours.entity';
+import { TenantSettings } from '../settings/tenant-settings.entity';
+import { formatHHMM, isWithinQuietHours, parseHHMM } from '../../common/time';
 
 function normalizePhone(v: string) {
-  return (v || '').trim();
+  let digits = (v || '').replace(/\D/g, '');
+  if (digits.length === 10) digits = `1${digits}`;
+  return digits;
 }
 
 function normalizeEmail(v: string) {
@@ -22,6 +26,8 @@ export class ComplianceService {
     private readonly evtRepo: Repository<ComplianceEvent>,
     @InjectRepository(TenantQuietHours)
     private readonly qhRepo: Repository<TenantQuietHours>,
+    @InjectRepository(TenantSettings)
+    private readonly settingsRepo: Repository<TenantSettings>,
   ) {}
 
   async listEvents(tenantId: string, take = 50, skip = 0) {
@@ -97,37 +103,45 @@ export class ComplianceService {
       timezone: payload.timezone ?? existing?.timezone ?? 'America/New_York',
     });
 
-    return this.qhRepo.save(row);
+    const saved = await this.qhRepo.save(row);
+    let settings = await this.settingsRepo.findOne({ where: { tenantId } });
+    if (!settings) settings = this.settingsRepo.create({ tenantId });
+    settings.quietHoursStart = formatHHMM(saved.startMinute);
+    settings.quietHoursEnd = formatHHMM(saved.endMinute);
+    settings.timeZone = saved.timezone;
+    await this.settingsRepo.save(settings);
+    return saved;
+  }
+
+  async findQuietHours(tenantId: string) {
+    return this.qhRepo.findOne({ where: { tenantId } as any });
   }
 
   async getQuietHours(tenantId: string) {
-    const existing = await this.qhRepo.findOne({ where: { tenantId } as any });
+    const existing = await this.findQuietHours(tenantId);
     if (existing) return existing;
-
-    return this.qhRepo.save(
-      this.qhRepo.create({
-        tenantId,
-        enabled: false,
-        startMinute: 0,
-        endMinute: 0,
-        timezone: 'America/New_York',
-      }),
-    );
+    const settings = await this.settingsRepo.findOne({ where: { tenantId } });
+    const start = parseHHMM(settings?.quietHoursStart);
+    const end = parseHHMM(settings?.quietHoursEnd);
+    return this.qhRepo.create({
+      tenantId,
+      enabled: !!start && !!end,
+      startMinute: start ? start.hour * 60 + start.minute : 0,
+      endMinute: end ? end.hour * 60 + end.minute : 0,
+      timezone: settings?.timeZone || 'America/New_York',
+    });
   }
 
   async isInQuietHours(tenantId: string) {
     const qh = await this.getQuietHours(tenantId);
     if (!qh.enabled) return false;
 
-    const now = new Date();
-    const minutes = now.getHours() * 60 + now.getMinutes();
-
-    const start = qh.startMinute;
-    const end = qh.endMinute;
-
-    if (start === end) return false;
-    if (start < end) return minutes >= start && minutes < end;
-    return minutes >= start || minutes < end;
+    return isWithinQuietHours({
+      now: new Date(),
+      timeZone: qh.timezone,
+      quietStart: formatHHMM(qh.startMinute),
+      quietEnd: formatHHMM(qh.endMinute),
+    });
   }
 
   isStopKeyword(body: string) {

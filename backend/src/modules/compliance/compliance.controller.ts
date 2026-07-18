@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ComplianceService } from './compliance.service';
+import { AddOptOutDto, QuietHoursDto } from './compliance.dto';
+import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 
 @UseGuards(JwtAuthGuard)
 @Controller('compliance')
@@ -8,7 +10,9 @@ export class ComplianceController {
   constructor(private readonly compliance: ComplianceService) {}
 
   @Post('optout')
-  async optout(@Req() req: any, @Body() body: any) {
+  @UseGuards(RolesGuard)
+  @RequireRole('admin')
+  async optout(@Req() req: any, @Body() body: AddOptOutDto) {
     return this.compliance.addOptOut(
       req.user?.tenantId,
       body?.channel,
@@ -24,7 +28,9 @@ export class ComplianceController {
   }
 
   @Put('quiet-hours')
-  async putQh(@Req() req: any, @Body() body: any) {
+  @UseGuards(RolesGuard)
+  @RequireRole('admin')
+  async putQh(@Req() req: any, @Body() body: QuietHoursDto) {
     return this.compliance.upsertQuietHours(req.user?.tenantId, body);
   }
 
@@ -35,8 +41,4 @@ export class ComplianceController {
     return this.compliance.listEvents(req.user?.tenantId, takeNum, skipNum);
   }
 
-  @Post('event')
-  async event(@Req() req: any, @Body() body: any) {
-    return this.compliance.recordEvent(req.user?.tenantId, body);
-  }
 }

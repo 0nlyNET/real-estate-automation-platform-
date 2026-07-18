@@ -1,16 +1,8 @@
 import { Body, Controller, Get, Put, Req, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { SettingsService } from "./settings.service";
-
-class UpdateTenantSettingsDto {
-  timeZone?: string;
-  quietHoursStart?: string;
-  quietHoursEnd?: string;
-  bookingLink?: string;
-  automationsEnabled?: boolean;
-  roundRobinEnabled?: boolean;
-  roundRobinTeamId?: string | null;
-}
+import { UpdateTenantSettingsDto } from "./settings.dto";
+import { RequireRole, RolesGuard } from "../../common/guards/roles.guard";
 
 @Controller("settings")
 export class SettingsController {
@@ -22,7 +14,8 @@ export class SettingsController {
     return this.settingsService.getTenantSettings(req.user.tenantId);
   }
 
-  @UseGuards(AuthGuard("jwt"))
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
+  @RequireRole('admin')
   @Put("tenant")
   updateTenantSettings(@Req() req: any, @Body() body: UpdateTenantSettingsDto) {
     return this.settingsService.updateTenantSettings(req.user.tenantId, body);

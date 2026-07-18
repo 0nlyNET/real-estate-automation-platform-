@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -12,10 +12,11 @@ import { LeadEvent } from './lead-event.entity';
 import { TenantsService } from '../tenants/tenants.service';
 import { MessagingService } from '../messaging/messaging.service';
 import { SequencesService } from '../sequences/sequences.service';
-import { IntegrationsService } from '../integrations/integrations.service';
 import { UserRole, hasAtLeastRole } from '../../common/rbac';
 import { User } from '../users/user.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
+import { Team } from '../teams/team.entity';
+import { RoutingService } from '../routing/routing.service';
 
 @Injectable()
 export class LeadsService {
@@ -34,11 +35,26 @@ export class LeadsService {
     @InjectRepository(TenantSettings)
     private readonly tenantSettingsRepository: Repository<TenantSettings>,
 
+    @InjectRepository(Team)
+    private readonly teamsRepository: Repository<Team>,
+
     private readonly tenantsService: TenantsService,
     private readonly messagingService: MessagingService,
     private readonly sequencesService: SequencesService,
-    private readonly integrationsService: IntegrationsService,
+    private readonly routingService: RoutingService,
   ) {}
+
+  private async applyRoutingRules(lead: Lead, plan: string) {
+    if (!['teams', 'enterprise'].includes(plan)) return lead;
+    const assignment = await this.routingService.routeLead(lead);
+    if (!assignment) return lead;
+    lead.assignedToUserId = assignment.assignedToUserId;
+    lead.assignedToTeamId = assignment.assignedToTeamId;
+    lead.assignedTo = assignment.assignedToLabel;
+    const saved = await this.leadsRepository.save(lead);
+    await this.logLeadEvent(saved, 'routed', assignment);
+    return saved;
+  }
 
   // -------------------------
   // Helpers
@@ -46,7 +62,8 @@ export class LeadsService {
 
   private normalizePhone(phone?: string): string | undefined {
     if (!phone) return undefined;
-    const digits = String(phone).replace(/\D/g, '');
+    let digits = String(phone).replace(/\D/g, '');
+    if (digits.length === 10) digits = `1${digits}`;
     return digits || undefined;
   }
 
@@ -217,24 +234,10 @@ export class LeadsService {
       lastActivityAt: new Date(),
     } as Partial<Lead>);
 
-    const saved = await this.leadsRepository.save(lead as Lead);
+    let saved = await this.leadsRepository.save(lead as Lead);
+    saved = await this.applyRoutingRules(saved, String(tenant.plan));
 
     await this.logLeadEvent(saved, 'created', payload as any);
-
-    // Webhooks (Phase 1)
-    try {
-      await this.integrationsService.fireWebhook(saved.tenantId, 'lead_created', {
-        id: saved.id,
-        fullName: saved.fullName,
-        email: saved.email,
-        phone: saved.phone,
-        source: saved.source,
-        stage: saved.stage,
-        temperature: saved.temperature,
-      });
-    } catch (e) {
-      // swallow
-    }
 
     // Automation hooks
     await this.messagingService.queueInstantResponses(saved);
@@ -247,7 +250,11 @@ export class LeadsService {
   // Protected: agent manually creates a lead
   // -------------------------
 
-  async createLead(tenantId: string | undefined, payload: CreateLeadDto): Promise<Lead> {
+  async createLead(
+    tenantId: string | undefined,
+    payload: CreateLeadDto,
+    ctx?: { userId?: string; role?: UserRole },
+  ): Promise<Lead> {
     const tenant = await this.requireTenant(tenantId);
 
     const fullName = this.normalizeName(payload.fullName ?? undefined);
@@ -265,6 +272,22 @@ export class LeadsService {
 
     let teamId = this.normalizeString((payload as any).assignedToTeamId ?? undefined) || null;
     let assigneeUserId = this.normalizeString((payload as any).assignedToUserId ?? undefined) || null;
+
+    const canAssign = ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : false;
+    if (!canAssign && ctx?.userId) {
+      const currentUser = await this.usersRepository.findOne({ where: { id: ctx.userId, tenantId: tenant.id, isActive: true } });
+      assigneeUserId = currentUser?.id || null;
+      teamId = currentUser?.teamId || null;
+    }
+
+    if (canAssign && assigneeUserId) {
+      const assignee = await this.usersRepository.findOne({ where: { id: assigneeUserId, tenantId: tenant.id, isActive: true } });
+      if (!assignee) throw new ForbiddenException('Assignee must be an active user in this tenant');
+    }
+    if (canAssign && teamId) {
+      const team = await this.teamsRepository.findOne({ where: { id: teamId, tenantId: tenant.id } });
+      if (!team) throw new ForbiddenException('Team must belong to this tenant');
+    }
 
     // Teams/Enterprise: if no manual assignee, apply round robin routing when enabled.
     if (!assigneeUserId && ['teams', 'enterprise'].includes(String(tenant.plan))) {
@@ -308,23 +331,9 @@ export class LeadsService {
       lastActivityAt: new Date(),
     } as Partial<Lead>);
 
-    const saved = await this.leadsRepository.save(lead as Lead);
+    let saved = await this.leadsRepository.save(lead as Lead);
+    if (!assigneeUserId) saved = await this.applyRoutingRules(saved, String(tenant.plan));
     await this.logLeadEvent(saved, 'created', payload as any);
-
-    // Webhooks (Phase 1)
-    try {
-      await this.integrationsService.fireWebhook(saved.tenantId, 'lead_created', {
-        id: saved.id,
-        fullName: saved.fullName,
-        email: saved.email,
-        phone: saved.phone,
-        source: saved.source,
-        stage: saved.stage,
-        temperature: saved.temperature,
-      });
-    } catch (e) {
-      // swallow
-    }
 
     const trigger = (payload as any).triggerAutomation !== false;
     if (trigger) {
@@ -343,11 +352,11 @@ export class LeadsService {
     if (!tenantId) throw new Error('Missing tenant');
 
     const lead = await this.leadsRepository.findOne({ where: { id, tenantId } });
-    if (!lead) throw new Error('Lead not found');
+    if (!lead) throw new NotFoundException('Lead not found');
 
     const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : true;
-    if (!canSeeAll && ctx?.userId && lead.assignedToUserId && lead.assignedToUserId !== ctx.userId) {
-      throw new Error('Forbidden');
+    if (!canSeeAll && lead.assignedToUserId !== ctx?.userId) {
+      throw new ForbiddenException('Lead is not assigned to this user');
     }
 
     if (payload.fullName !== undefined) {
@@ -426,7 +435,7 @@ export class LeadsService {
       {
         fullName: 'Marcus Lee',
         leadType: 'seller' as any,
-        stage: 'active' as any,
+        stage: 'contacted' as any,
         temperature: 'warm' as any,
         score: 62,
         source: 'Referral',
@@ -437,7 +446,7 @@ export class LeadsService {
       {
         fullName: 'Sofia Martinez',
         leadType: 'buyer' as any,
-        stage: 'hot' as any,
+        stage: 'qualified' as any,
         temperature: 'hot' as any,
         score: 88,
         source: 'Website',
@@ -447,7 +456,7 @@ export class LeadsService {
       {
         fullName: 'Daniel Kim',
         leadType: 'investor' as any,
-        stage: 'active' as any,
+        stage: 'contacted' as any,
         temperature: 'warm' as any,
         score: 73,
         source: 'Open house',
@@ -477,7 +486,7 @@ export class LeadsService {
       {
         fullName: 'Olivia Brown',
         leadType: 'renter' as any,
-        stage: 'active' as any,
+        stage: 'contacted' as any,
         temperature: 'warm' as any,
         score: 55,
         source: 'Website',
@@ -556,11 +565,11 @@ export class LeadsService {
       where: { id, tenantId },
     });
 
-    if (!lead) throw new Error('Lead not found');
+    if (!lead) throw new NotFoundException('Lead not found');
 
     const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : true;
-    if (!canSeeAll && ctx?.userId && lead.assignedToUserId && lead.assignedToUserId !== ctx.userId) {
-      throw new Error('Forbidden');
+    if (!canSeeAll && lead.assignedToUserId !== ctx?.userId) {
+      throw new ForbiddenException('Lead is not assigned to this user');
     }
 
     return lead;
@@ -570,6 +579,17 @@ export class LeadsService {
     if (!params.tenantId) throw new Error('Missing tenant');
     const lead = await this.leadsRepository.findOne({ where: { id: params.leadId, tenantId: params.tenantId } });
     if (!lead) throw new Error('Lead not found');
+
+    if (params.assignedToUserId) {
+      const user = await this.usersRepository.findOne({
+        where: { id: params.assignedToUserId, tenantId: params.tenantId, isActive: true },
+      });
+      if (!user) throw new ForbiddenException('Assignee must be an active user in this tenant');
+    }
+    if (params.assignedToTeamId) {
+      const team = await this.teamsRepository.findOne({ where: { id: params.assignedToTeamId, tenantId: params.tenantId } });
+      if (!team) throw new ForbiddenException('Team must belong to this tenant');
+    }
 
     lead.assignedToUserId = params.assignedToUserId ?? null;
     lead.assignedToTeamId = params.assignedToTeamId ?? null;

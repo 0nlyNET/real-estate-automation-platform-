@@ -6,6 +6,7 @@ import { Topbar } from "./topbar"
 import { fetchMePlan, formatDate, type MePlan } from "@/lib/plan"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
+import { apiFetch } from "@/lib/api"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [plan, setPlan] = useState<MePlan | null>(null)
@@ -23,10 +24,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     // re-check occasionally so UI stays truthful
     const interval = setInterval(load, 30_000)
+    apiFetch("/presence/heartbeat", { method: "POST", body: { status: "online" } }).catch(() => undefined)
+    const presenceInterval = setInterval(() => {
+      apiFetch("/presence/heartbeat", { method: "POST", body: { status: "online" } }).catch(() => undefined)
+    }, 60_000)
 
     return () => {
       mounted = false
       clearInterval(interval)
+      clearInterval(presenceInterval)
     }
   }, [])
 

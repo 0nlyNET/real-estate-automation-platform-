@@ -1,8 +1,8 @@
 import { IsEmail, IsIn, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
-const LEAD_TYPES = ['buyer', 'seller', 'renter', 'investor', 'other'] as const;
+const LEAD_TYPES = ['buyer', 'seller', 'renter', 'investor'] as const;
 const TEMPERATURES = ['cold', 'warm', 'hot'] as const;
-const STAGES = ['new', 'contacted', 'qualified', 'appointment_set', 'in_progress', 'closed', 'lost'] as const;
+const STAGES = ['new', 'contacted', 'qualified', 'appointment_set', 'showing_scheduled', 'offer_out', 'under_contract', 'closed', 'nurture', 'lost'] as const;
 
 export class IntakeLeadDto {
   @IsString()

@@ -19,6 +19,8 @@ import { InboxSendService } from './inbox-send.service';
 import { ComplianceService } from '../compliance/compliance.service';
 import { Lead } from '../leads/lead.entity';
 import { UserRole } from '../../common/rbac';
+import { RolesGuard, RequireRole } from '../../common/guards/roles.guard';
+import { SendMessageDto } from './messaging.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('messaging')
@@ -46,7 +48,7 @@ export class MessagingController {
       take ? parseInt(take, 10) : 50,
       skip ? parseInt(skip, 10) : 0,
       {
-        userId: req.user?.userId,
+        userId: req.user?.sub,
         role: req.user?.role as UserRole,
         scope: scope === 'shared' ? 'shared' : 'mine',
       },
@@ -59,11 +61,16 @@ export class MessagingController {
     if (!tenantId) throw new ForbiddenException('Missing tenant');
     if (!leadId?.trim()) throw new BadRequestException('leadId is required');
 
-    return this.messagingService.getThreadMessages(tenantId, leadId.trim());
+    return this.messagingService.getThreadMessages(tenantId, leadId.trim(), {
+      userId: req.user?.sub,
+      role: req.user?.role as UserRole,
+    });
   }
 
   @Post('send')
-  async send(@Req() req: any, @Body() body: { leadId?: string; body?: string }) {
+  @UseGuards(RolesGuard)
+  @RequireRole('tc')
+  async send(@Req() req: any, @Body() body: SendMessageDto) {
     const tenantId = req.user?.tenantId;
     if (!tenantId) throw new ForbiddenException('Missing tenant');
 
@@ -76,6 +83,10 @@ export class MessagingController {
 
     const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } });
     if (!lead) throw new ForbiddenException('Lead not found');
+    const role = req.user?.role as UserRole;
+    if (!['owner', 'admin'].includes(role) && lead.assignedToUserId !== req.user?.sub) {
+      throw new ForbiddenException('Lead is not assigned to this user');
+    }
 
     if (lead.phone) {
       const optedOut = await this.complianceService.isOptedOut(tenantId, 'sms', lead.phone);
@@ -85,27 +96,4 @@ export class MessagingController {
     return this.inboxSendService.sendSmsToLead(tenantId, leadId, messageBody);
   }
 
-  @Get('messages')
-  async getMessages(@Query("scope") scope?: string, @Req() req?: any) {
-    const normalizedScope: "mine" | "shared" | undefined =
-      scope === "shared" ? "shared" : "mine";
-
-    return {
-      ok: true,
-      scope: normalizedScope,
-      user: req?.user ?? null,
-      items: [],
-    };
-  }
-
-  @Post("manual")
-  async sendManual(@Body() body: any, @Req() req?: any) {
-    return {
-      ok: true,
-      user: req?.user ?? null,
-      received: body ?? null,
-      queued: false,
-      note: "Manual send is temporarily stubbed to unblock build",
-    };
-  }
 }

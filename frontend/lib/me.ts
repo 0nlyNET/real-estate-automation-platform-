@@ -37,6 +37,6 @@ export async function fetchMeWithPlan(): Promise<MeWithPlan> {
     })(),
   ]);
 
-  const planName: PlanName = (plan?.plan as any) || "pro";
+  const planName: PlanName = (plan?.plan as any) || "free";
   return { me, plan, planName };
 }
