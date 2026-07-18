@@ -9,6 +9,6 @@ import { Tenant } from '../modules/tenants/tenant.entity';
 @Module({
   imports: [TypeOrmModule.forFeature([Tenant])],
   providers: [Reflector, RolesGuard, TeamsPlanGuard, PlatformAdminGuard],
-  exports: [RolesGuard, TeamsPlanGuard, PlatformAdminGuard],
+  exports: [TypeOrmModule, RolesGuard, TeamsPlanGuard, PlatformAdminGuard],
 })
 export class CommonModule {}
