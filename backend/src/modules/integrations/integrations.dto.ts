@@ -47,3 +47,8 @@ export class UpsertFacebookLeadAdsDto {
   @IsString()
   verifyToken?: string;
 }
+
+export class SelectFacebookPageDto {
+  @IsString()
+  pageId!: string;
+}

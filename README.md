@@ -81,10 +81,27 @@ See `backend/.env.example` and `frontend/.env.example`. At minimum, configure:
 - PostgreSQL through `DATABASE_URL`
 - a 32-byte `INTEGRATIONS_ENCRYPTION_KEY`
 - `FRONTEND_URL`, `NEXT_PUBLIC_API_URL`, and the exact public `TWILIO_WEBHOOK_URL`
+- Meta app credentials, an active `FACEBOOK_GRAPH_API_VERSION`, and the exact
+  `FACEBOOK_WEBHOOK_URL` only when Facebook Lead Ads is enabled
 - SendGrid, Twilio, Stripe, and Facebook values only for integrations you enable
 - `SALES_INBOX_EMAIL` for public contact/application delivery
 
 Terminate HTTPS at the hosting platform, restrict database access, run migrations as a release step, and configure backups, logs, alerts, and secret rotation before handling customer data.
+
+### Facebook Lead Ads production setup
+
+1. In the Meta app, configure `FACEBOOK_REDIRECT_URL` as the backend OAuth
+   callback: `/integrations/facebook/callback`.
+2. Configure `FACEBOOK_WEBHOOK_URL` as the public backend endpoint:
+   `/webhooks/facebook/lead-ads`.
+3. Enter the same strong random value in Meta and
+   `FACEBOOK_WEBHOOK_VERIFY_TOKEN`, then subscribe the app's Page object to the
+   `leadgen` field.
+4. Pin `FACEBOOK_GRAPH_API_VERSION` to an active version supported by the Meta
+   app. Revalidate it before Meta's version retirement date.
+5. In RealtyTechAI, authorize Facebook, select the brokerage Page, and confirm
+   that the integration badge says **Connected**. OAuth authorization by itself
+   is intentionally shown as **Test required** until Page subscription succeeds.
 
 ## Validation
 

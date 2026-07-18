@@ -66,6 +66,8 @@ type RotatedKey = {
   endpointPath: string
 }
 
+type FacebookPage = { id: string; name: string }
+
 function statusBadge(item?: Integration) {
   if (item?.status === "connected") {
     return <Badge>Connected</Badge>
@@ -111,6 +113,8 @@ export default function IntegrationsPage() {
     fromEmail: "",
     toEmail: "",
   })
+  const [facebookPages, setFacebookPages] = useState<FacebookPage[]>([])
+  const [facebookPageId, setFacebookPageId] = useState("")
 
   const canManage = role === "owner" || role === "admin"
   const byProvider = useMemo(
@@ -121,6 +125,7 @@ export default function IntegrationsPage() {
   const twilioWebhookUrl = twilioStatus?.display?.webhookUrl || ""
   const sendgridStatus = byProvider.get("sendgrid")
   const facebookStatus = byProvider.get("facebook_lead_ads")
+  const facebookWebhookUrl = facebookStatus?.display?.webhookUrl || ""
 
   const load = useCallback(async () => {
     const [items, tenantSettings, me] = await fetchIntegrationData()
@@ -323,6 +328,56 @@ export default function IntegrationsPage() {
         description: errorMessage(error),
         variant: "destructive",
       })
+      setBusy(null)
+    }
+  }
+
+  const loadFacebookPages = async () => {
+    setBusy("facebook-pages")
+    try {
+      const result = await apiFetch<{ pages: FacebookPage[] }>(
+        "/integrations/facebook/pages",
+      )
+      setFacebookPages(result.pages)
+      if (result.pages.length === 1) setFacebookPageId(result.pages[0].id)
+      if (!result.pages.length) {
+        toast({
+          title: "No Facebook Pages found",
+          description:
+            "Use a Facebook account that administers the brokerage Page.",
+          variant: "destructive",
+        })
+      }
+    } catch (error: unknown) {
+      toast({
+        title: "Could not load Facebook Pages",
+        description: errorMessage(error),
+        variant: "destructive",
+      })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const selectFacebookPage = async () => {
+    setBusy("facebook-select")
+    try {
+      await apiFetch("/integrations/facebook/page", {
+        method: "POST",
+        body: { pageId: facebookPageId },
+      })
+      await load()
+      toast({
+        title: "Facebook Lead Ads is connected",
+        description: "New Page leads will now enter this workspace.",
+      })
+    } catch (error: unknown) {
+      toast({
+        title: "Facebook Page subscription failed",
+        description: errorMessage(error),
+        variant: "destructive",
+      })
+    } finally {
       setBusy(null)
     }
   }
@@ -777,17 +832,88 @@ export default function IntegrationsPage() {
               </Alert>
             ) : null}
             <p className="text-sm text-muted-foreground">
-              Facebook will open its permission screen. Use the account that
-              administers the Page, then return here to verify the selected Page
-              and form.
+              Authorize Facebook, select the brokerage Page, then RealtyTechAI
+              subscribes that Page to real-time lead delivery.
             </p>
+            {facebookStatus?.display?.pageName ? (
+              <Alert>
+                <CheckCircle2 />
+                <AlertTitle>Receiving leads from {facebookStatus.display.pageName}</AlertTitle>
+                <AlertDescription>
+                  Page ID: {facebookStatus.display.pageId}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {facebookStatus?.status === "configured" && canManage ? (
+              <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
+                <div className="font-medium">Finish Page connection</div>
+                {!facebookPages.length ? (
+                  <Button
+                    variant="outline"
+                    onClick={loadFacebookPages}
+                    disabled={Boolean(busy)}
+                  >
+                    <RefreshCw /> Load my Pages
+                  </Button>
+                ) : (
+                  <>
+                    <Label htmlFor="facebookPage">Brokerage Page</Label>
+                    <select
+                      id="facebookPage"
+                      className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                      value={facebookPageId}
+                      onChange={(event) => setFacebookPageId(event.target.value)}
+                    >
+                      <option value="">Select a Page</option>
+                      {facebookPages.map((page) => (
+                        <option key={page.id} value={page.id}>
+                          {page.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      onClick={selectFacebookPage}
+                      disabled={Boolean(busy) || !facebookPageId}
+                    >
+                      Connect selected Page
+                    </Button>
+                  </>
+                )}
+              </div>
+            ) : null}
+            {!facebookWebhookUrl ? (
+              <Alert variant="destructive">
+                <AlertTitle>Meta webhook setup is required</AlertTitle>
+                <AlertDescription>
+                  The platform administrator must configure the public Facebook
+                  webhook URL and verification token before onboarding clients.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <div className="space-y-2 rounded-lg border bg-muted/30 p-4">
+                <Label>Meta webhook callback URL</Label>
+                <div className="flex gap-2">
+                  <Input readOnly value={facebookWebhookUrl} className="font-mono text-xs" />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => copy(facebookWebhookUrl, "Facebook webhook URL")}
+                  >
+                    <Clipboard />
+                    <span className="sr-only">Copy Facebook webhook URL</span>
+                  </Button>
+                </div>
+              </div>
+            )}
             {canManage ? (
               <div className="flex flex-wrap gap-2">
                 <Button onClick={connectFacebook} disabled={Boolean(busy)}>
                   <ExternalLink />{" "}
                   {facebookStatus?.connected
                     ? "Reconnect Facebook"
-                    : "Connect Facebook"}
+                    : facebookStatus?.status === "configured"
+                      ? "Reauthorize Facebook"
+                      : "Authorize Facebook"}
                 </Button>
                 {facebookStatus?.connected ? (
                   <Button

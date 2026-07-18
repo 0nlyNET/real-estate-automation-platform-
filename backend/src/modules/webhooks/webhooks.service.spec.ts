@@ -13,7 +13,7 @@ describe('Twilio inbound webhooks', () => {
     else process.env.TWILIO_WEBHOOK_URL = originalWebhookUrl;
   });
 
-  it('matches Twilio\'s official fixed signature vector', () => {
+  it("matches Twilio's official fixed signature vector", () => {
     expect(
       validTwilioSignature(
         'https://example.com/myapp.php?foo=1&bar=2',
@@ -96,6 +96,7 @@ describe('Twilio inbound webhooks', () => {
       credentials as any,
       compliance as any,
       sequences as any,
+      { intake: jest.fn() } as any,
     );
     const signature = validSignature(body);
 
@@ -150,6 +151,7 @@ describe('Twilio inbound webhooks', () => {
       credentials as any,
       compliance as any,
       sequences as any,
+      { intake: jest.fn() } as any,
     );
 
     await expect(
@@ -179,5 +181,108 @@ describe('Twilio inbound webhooks', () => {
       .createHmac('sha1', authToken)
       .update(payload)
       .digest('base64');
+  }
+});
+
+describe('Facebook Lead Ads webhooks', () => {
+  const originalSecret = process.env.FACEBOOK_APP_SECRET;
+  const originalVerify = process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN;
+  const originalVersion = process.env.FACEBOOK_GRAPH_API_VERSION;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    setEnv('FACEBOOK_APP_SECRET', originalSecret);
+    setEnv('FACEBOOK_WEBHOOK_VERIFY_TOKEN', originalVerify);
+    setEnv('FACEBOOK_GRAPH_API_VERSION', originalVersion);
+  });
+
+  it('verifies the configured callback token without leaking it', () => {
+    process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN = 'verify-me';
+    const service = facebookService();
+    expect(
+      service.verifyFacebookWebhook('subscribe', 'verify-me', 'challenge-1'),
+    ).toBe('challenge-1');
+    expect(() =>
+      service.verifyFacebookWebhook('subscribe', 'wrong', 'challenge-1'),
+    ).toThrow('Facebook webhook verification failed');
+  });
+
+  it('validates the signature, retrieves the lead, and sends it through intake', async () => {
+    process.env.FACEBOOK_APP_SECRET = 'app-secret';
+    process.env.FACEBOOK_GRAPH_API_VERSION = 'v19.0';
+    const intake = jest.fn().mockResolvedValue({ id: 'lead-1' });
+    const service = facebookService(intake);
+    jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 'leadgen-1',
+        field_data: [
+          { name: 'full_name', values: ['Jordan Client'] },
+          { name: 'email', values: ['jordan@example.com'] },
+          { name: 'phone_number', values: ['+15555550100'] },
+          { name: 'lead_type', values: ['seller'] },
+        ],
+      }),
+    } as Response);
+    const body = {
+      object: 'page',
+      entry: [
+        {
+          id: 'page-1',
+          changes: [
+            {
+              field: 'leadgen',
+              value: { page_id: 'page-1', leadgen_id: 'leadgen-1' },
+            },
+          ],
+        },
+      ],
+    };
+    const raw = Buffer.from(JSON.stringify(body));
+    const crypto = require('crypto');
+    const signature = `sha256=${crypto
+      .createHmac('sha256', 'app-secret')
+      .update(raw)
+      .digest('hex')}`;
+
+    await expect(
+      service.handleFacebookLeadAds(body, raw, signature),
+    ).resolves.toEqual({ received: true, processed: 1 });
+    expect(intake).toHaveBeenCalledWith(
+      'tenant-1',
+      expect.objectContaining({
+        fullName: 'Jordan Client',
+        email: 'jordan@example.com',
+        phone: '+15555550100',
+        leadType: 'seller',
+        source: 'Facebook Lead Ads',
+      }),
+    );
+  });
+
+  function facebookService(intake = jest.fn()) {
+    const credentials = {
+      findOne: jest.fn().mockResolvedValue({
+        provider: 'facebook_lead_ads',
+        routingKey: 'page-1',
+        encryptedValue: JSON.stringify({
+          connected: true,
+          pageAccessToken: 'page-token',
+        }),
+        tenant: { id: 'tenant-1' },
+      }),
+    };
+    return new WebhooksService(
+      {} as any,
+      credentials as any,
+      {} as any,
+      {} as any,
+      { intake } as any,
+    );
+  }
+
+  function setEnv(name: string, value: string | undefined) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
   }
 });
