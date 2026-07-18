@@ -10,12 +10,14 @@ import { WebhooksController } from './webhooks.controller';
 import { WebhooksService } from './webhooks.service';
 import { ComplianceModule } from '../compliance/compliance.module';
 import { SequencesModule } from '../sequences/sequences.module';
+import { LeadsModule } from '../leads/leads.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Credential, Lead, Message, LeadEvent]),
     ComplianceModule,
     SequencesModule,
+    LeadsModule,
   ],
   controllers: [WebhooksController],
   providers: [WebhooksService],

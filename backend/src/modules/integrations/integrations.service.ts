@@ -3,7 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Credential } from "../settings/credential.entity";
 import * as crypto from "crypto";
-import { normalizePhoneE164 } from '../../common/phone';
+import { normalizePhoneE164 } from "../../common/phone";
 
 export type IntegrationProvider = "twilio" | "sendgrid" | "facebook_lead_ads";
 export type IntegrationStatus =
@@ -91,6 +91,16 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function facebookGraphBase() {
+  const version = String(
+    process.env.FACEBOOK_GRAPH_API_VERSION || "v19.0",
+  ).trim();
+  if (!/^v\d+\.\d+$/.test(version)) {
+    throw new BadRequestException("FACEBOOK_GRAPH_API_VERSION is invalid");
+  }
+  return `https://graph.facebook.com/${version}`;
+}
+
 function mask(value: string | null | undefined, keepEnd = 4) {
   if (!value) return null;
   const v = String(value);
@@ -99,7 +109,7 @@ function mask(value: string | null | undefined, keepEnd = 4) {
 }
 
 function isUniqueViolation(error: unknown) {
-  return String((error as { code?: string })?.code || '') === '23505';
+  return String((error as { code?: string })?.code || "") === "23505";
 }
 
 @Injectable()
@@ -155,9 +165,9 @@ export class IntegrationsService {
     try {
       await this.credentialsRepo.save(cred);
     } catch (error) {
-      if (provider === 'twilio' && routingKey && isUniqueViolation(error)) {
+      if (provider === "twilio" && routingKey && isUniqueViolation(error)) {
         throw new BadRequestException(
-          'That Twilio number is already connected to another workspace.',
+          "That Twilio number is already connected to another workspace.",
         );
       }
       throw error;
@@ -205,7 +215,8 @@ export class IntegrationsService {
         display = {
           fromNumber: parsed?.fromNumber || null,
           accountSid: parsed?.accountSid ? mask(parsed.accountSid, 6) : null,
-          webhookUrl: String(process.env.TWILIO_WEBHOOK_URL || '').trim() || null,
+          webhookUrl:
+            String(process.env.TWILIO_WEBHOOK_URL || "").trim() || null,
         };
       } else if (provider === "sendgrid") {
         display = {
@@ -217,7 +228,10 @@ export class IntegrationsService {
       } else if (provider === "facebook_lead_ads") {
         display = {
           pageId: parsed?.pageId || null,
+          pageName: parsed?.pageName || null,
           lastSync: parsed?.lastSync || null,
+          webhookUrl:
+            String(process.env.FACEBOOK_WEBHOOK_URL || "").trim() || null,
         };
       }
 
@@ -252,15 +266,20 @@ export class IntegrationsService {
       throw new BadRequestException("Missing Twilio credentials");
     }
 
-    await this.upsertEncrypted(tenantId, "twilio", {
-      connected: false,
-      configured: true,
-      accountSid,
-      authToken,
+    await this.upsertEncrypted(
+      tenantId,
+      "twilio",
+      {
+        connected: false,
+        configured: true,
+        accountSid,
+        authToken,
+        fromNumber,
+        lastSync: nowIso(),
+        error: null,
+      },
       fromNumber,
-      lastSync: nowIso(),
-      error: null,
-    }, fromNumber);
+    );
 
     return { ok: true };
   }
@@ -499,8 +518,14 @@ export class IntegrationsService {
       "pages_manage_metadata",
     ].join(",");
 
+    const version = String(
+      process.env.FACEBOOK_GRAPH_API_VERSION || "v19.0",
+    ).trim();
+    if (!/^v\d+\.\d+$/.test(version)) {
+      throw new BadRequestException("FACEBOOK_GRAPH_API_VERSION is invalid");
+    }
     const url =
-      "https://www.facebook.com/v19.0/dialog/oauth" +
+      `https://www.facebook.com/${version}/dialog/oauth` +
       `?client_id=${encodeURIComponent(appId)}` +
       `&redirect_uri=${encodeURIComponent(redirectUrl)}` +
       `&state=${encodeURIComponent(state)}` +
@@ -550,7 +575,7 @@ export class IntegrationsService {
       }
 
       const tokenUrl =
-        "https://graph.facebook.com/v19.0/oauth/access_token" +
+        `${facebookGraphBase()}/oauth/access_token` +
         `?client_id=${encodeURIComponent(appId)}` +
         `&redirect_uri=${encodeURIComponent(redirectUrl)}` +
         `&client_secret=${encodeURIComponent(appSecret)}` +
@@ -573,11 +598,13 @@ export class IntegrationsService {
         return { ok: false, error: msg };
       }
 
-      // For MVP: store token. PageId and webhook subscription wiring is next step.
+      // OAuth only authorizes access. A Page must still be selected and
+      // subscribed before lead delivery is considered connected.
       await this.upsertEncrypted(tenantId, "facebook_lead_ads", {
-        connected: true,
+        connected: false,
+        configured: true,
         pageId: null,
-        accessToken,
+        userAccessToken: accessToken,
         verifyToken:
           existing?.verifyToken || crypto.randomBytes(16).toString("hex"),
         lastSync: nowIso(),
@@ -598,13 +625,128 @@ export class IntegrationsService {
     }
   }
 
+  async listFacebookPages(tenantId: string) {
+    const existing = await this.getPayload(tenantId, "facebook_lead_ads");
+    const userAccessToken = String(existing?.userAccessToken || "").trim();
+    if (!userAccessToken) {
+      throw new BadRequestException(
+        "Authorize Facebook before selecting a Page",
+      );
+    }
+
+    const url = new URL(`${facebookGraphBase()}/me/accounts`);
+    url.searchParams.set("fields", "id,name,access_token,tasks");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${userAccessToken}` },
+    });
+    const payload: any = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message =
+        payload?.error?.message ||
+        `Facebook Page lookup failed (${response.status})`;
+      await this.setError(tenantId, "facebook_lead_ads", message);
+      throw new BadRequestException(message);
+    }
+
+    return {
+      pages: Array.isArray(payload?.data)
+        ? payload.data.map((page: any) => ({
+            id: String(page.id),
+            name: String(page.name || page.id),
+          }))
+        : [],
+    };
+  }
+
+  async selectFacebookPage(tenantId: string, selectedPageId: string) {
+    const pageId = String(selectedPageId || "").trim();
+    const existing = await this.getPayload(tenantId, "facebook_lead_ads");
+    const userAccessToken = String(existing?.userAccessToken || "").trim();
+    if (!pageId || !userAccessToken) {
+      throw new BadRequestException("Authorize Facebook and select a Page");
+    }
+
+    const pages = await this.fetchFacebookPages(userAccessToken);
+    const page = pages.find(
+      (candidate: any) => String(candidate.id) === pageId,
+    );
+    if (!page?.access_token) {
+      throw new BadRequestException(
+        "Selected Page is not available to this Facebook account",
+      );
+    }
+
+    const subscribeUrl = new URL(
+      `${facebookGraphBase()}/${encodeURIComponent(pageId)}/subscribed_apps`,
+    );
+    subscribeUrl.searchParams.set("subscribed_fields", "leadgen");
+    const subscribed = await fetch(subscribeUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${String(page.access_token)}` },
+    });
+    const subscription: any = await subscribed.json().catch(() => ({}));
+    if (!subscribed.ok || subscription?.success !== true) {
+      const message =
+        subscription?.error?.message ||
+        `Facebook Page subscription failed (${subscribed.status})`;
+      await this.setError(tenantId, "facebook_lead_ads", message);
+      throw new BadRequestException(message);
+    }
+
+    await this.upsertEncrypted(
+      tenantId,
+      "facebook_lead_ads",
+      {
+        ...existing,
+        configured: true,
+        connected: true,
+        pageId,
+        pageName: String(page.name || pageId),
+        pageAccessToken: String(page.access_token),
+        error: null,
+        lastSync: nowIso(),
+      },
+      pageId,
+    );
+
+    return {
+      ok: true,
+      page: { id: pageId, name: String(page.name || pageId) },
+    };
+  }
+
+  private async fetchFacebookPages(userAccessToken: string): Promise<any[]> {
+    const url = new URL(`${facebookGraphBase()}/me/accounts`);
+    url.searchParams.set("fields", "id,name,access_token,tasks");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${userAccessToken}` },
+    });
+    const payload: any = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new BadRequestException(
+        payload?.error?.message ||
+          `Facebook Page lookup failed (${response.status})`,
+      );
+    }
+    return Array.isArray(payload?.data) ? payload.data : [];
+  }
+
   async disconnect(tenantId: string, provider: IntegrationProvider) {
-    await this.upsertEncrypted(tenantId, provider, {
-      connected: false,
-      configured: false,
-      lastSync: null,
-      error: null,
-    }, provider === 'twilio' ? null : undefined);
+    await this.upsertEncrypted(
+      tenantId,
+      provider,
+      {
+        connected: false,
+        configured: false,
+        lastSync: null,
+        error: null,
+      },
+      provider === "twilio" || provider === "facebook_lead_ads"
+        ? null
+        : undefined,
+    );
 
     return { ok: true };
   }

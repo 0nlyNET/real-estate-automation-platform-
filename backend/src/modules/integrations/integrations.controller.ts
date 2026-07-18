@@ -19,6 +19,7 @@ import { IntegrationsService } from "./integrations.service";
 import {
   TestSendGridDto,
   TestTwilioDto,
+  SelectFacebookPageDto,
   UpsertSendGridDto,
   UpsertTwilioDto,
 } from "./integrations.dto";
@@ -99,6 +100,23 @@ export class IntegrationsController {
       req.user?.tenantId,
     );
     return { ok: true, ...result };
+  }
+
+  @Get("facebook/pages")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @RequireRole("admin")
+  async facebookPages(@Req() req: any) {
+    return this.integrationsService.listFacebookPages(req.user?.tenantId);
+  }
+
+  @Post("facebook/page")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @RequireRole("admin")
+  async facebookPage(@Req() req: any, @Body() body: SelectFacebookPageDto) {
+    return this.integrationsService.selectFacebookPage(
+      req.user?.tenantId,
+      body.pageId,
+    );
   }
 
   /**
