@@ -53,6 +53,7 @@ import { SupportModule } from './modules/support/support.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { buildDatabaseSslConfig } from './common/database-ssl';
 
 function buildDatabaseConfig() {
   const url = process.env.DATABASE_URL;
@@ -83,16 +84,13 @@ function buildDatabaseConfig() {
   if (url) {
     const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
     const allowSync = process.env.TYPEORM_SYNC === 'true' && isLocal;
-    const useSsl = !isLocal && process.env.DATABASE_SSL !== 'false';
 
     return {
       type: 'postgres' as const,
       url,
       entities,
       synchronize: allowSync,
-      ssl: useSsl
-        ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
-        : false,
+      ssl: buildDatabaseSslConfig(!isLocal),
     };
   }
 
@@ -105,9 +103,7 @@ function buildDatabaseConfig() {
     database: process.env.DB_NAME || 'real_estate',
     entities,
     synchronize: process.env.TYPEORM_SYNC === 'true',
-    ssl: process.env.DATABASE_SSL === 'true'
-      ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
-      : false,
+    ssl: buildDatabaseSslConfig(false),
   };
 }
 
