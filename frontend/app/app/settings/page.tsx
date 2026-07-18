@@ -34,6 +34,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [deleteConfirmation, setDeleteConfirmation] = useState("")
   const [deletionRequested, setDeletionRequested] = useState(false)
+  const [deletionNotificationSent, setDeletionNotificationSent] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -107,7 +108,7 @@ export default function SettingsPage() {
     setBusy("delete")
     setError("")
     try {
-      await apiFetch("/support/contact", {
+      const result = await apiFetch<{ notificationSent?: boolean }>("/support/contact", {
         method: "POST",
         body: {
           subject: "Workspace deletion request",
@@ -116,6 +117,7 @@ export default function SettingsPage() {
         },
       })
       setDeletionRequested(true)
+      setDeletionNotificationSent(Boolean(result.notificationSent))
       setDeleteConfirmation("")
     } catch (deleteError: unknown) {
       setError(message(deleteError, "Deletion request could not be submitted"))
@@ -282,8 +284,9 @@ export default function SettingsPage() {
               <CheckCircle2 />
               <AlertTitle>Deletion request received</AlertTitle>
               <AlertDescription>
-                Support will verify ownership, cancel active billing, and confirm the
-                deletion schedule before any data is permanently removed.
+                {deletionNotificationSent
+                  ? "Support was notified and will verify ownership, cancel active billing, and confirm the deletion schedule before any data is permanently removed."
+                  : "The request was saved, but operator email notification is not configured. Contact the platform operator directly before relying on the deletion schedule."}
               </AlertDescription>
             </Alert>
           ) : (

@@ -1,12 +1,32 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Logger,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantsService } from '../tenants/tenants.service';
 import { UsersService } from './users.service';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
-import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
+import {
+  RequireTeamsPlan,
+  TeamsPlanGuard,
+} from '../../common/guards/plan.guard';
 import { UserRole, canManageUsers } from '../../common/rbac';
-import { CreateTeamUserDto, UpdateUserActiveDto, UpdateUserRoleDto, UpdateUserTeamDto } from './users.dto';
+import {
+  CreateTeamUserDto,
+  UpdateUserActiveDto,
+  UpdateUserRoleDto,
+  UpdateUserTeamDto,
+} from './users.dto';
 import * as crypto from 'crypto';
+import { MailService } from '../../mail/mail.service';
 
 function randomTempPassword() {
   return `Temp-${crypto.randomBytes(18).toString('base64url')}`;
@@ -15,9 +35,12 @@ function randomTempPassword() {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('users')
 export class UsersController {
+  private readonly logger = new Logger(UsersController.name);
+
   constructor(
     private readonly users: UsersService,
     private readonly tenants: TenantsService,
+    private readonly mail: MailService,
   ) {}
 
   @Get()
@@ -36,14 +59,16 @@ export class UsersController {
       }));
     }
 
-    return [{
-      id: req.user?.sub || null,
-      email: req.user?.email || null,
-      role: req.user?.role || null,
-      teamId: null,
-      isActive: true,
-      isEmailVerified: true,
-    }];
+    return [
+      {
+        id: req.user?.sub || null,
+        email: req.user?.email || null,
+        role: req.user?.role || null,
+        teamId: null,
+        isActive: true,
+        isEmailVerified: true,
+      },
+    ];
   }
 
   @UseGuards(TeamsPlanGuard)
@@ -58,7 +83,9 @@ export class UsersController {
     const email = (body?.email || '').toString();
     const role = (body?.role || 'agent') as UserRole;
     const teamId = body?.teamId ? String(body.teamId) : null;
-    const tempPassword = body?.tempPassword ? String(body.tempPassword) : randomTempPassword();
+    const tempPassword = body?.tempPassword
+      ? String(body.tempPassword)
+      : randomTempPassword();
 
     const { user, verifyToken } = await this.users.createTeamUser({
       tenant,
@@ -70,6 +97,17 @@ export class UsersController {
 
     const frontend = process.env.FRONTEND_URL || 'http://localhost:3000';
     const verifyLink = `${frontend.replace(/\/+$/, '')}/verify-email?token=${verifyToken}`;
+    let verificationEmailSent = false;
+    try {
+      await this.mail.sendVerificationEmail({ to: user.email, verifyLink });
+      verificationEmailSent = true;
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Team user created but verification email was not delivered: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
 
     return {
       id: user.id,
@@ -79,6 +117,7 @@ export class UsersController {
       isActive: user.isActive,
       tempPassword,
       verifyLink,
+      verificationEmailSent,
     };
   }
 
@@ -86,29 +125,50 @@ export class UsersController {
   @RequireTeamsPlan()
   @RequireRole('admin')
   @Patch(':id/role')
-  async updateRole(@Req() req: any, @Param('id') id: string, @Body() body: UpdateUserRoleDto) {
+  async updateRole(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: UpdateUserRoleDto,
+  ) {
     const tenantId = req.user?.tenantId;
     const role = (body?.role || 'agent') as UserRole;
-    return this.users.updateRole(tenantId, id, role, { userId: req.user?.sub, role: req.user?.role });
+    return this.users.updateRole(tenantId, id, role, {
+      userId: req.user?.sub,
+      role: req.user?.role,
+    });
   }
 
   @UseGuards(TeamsPlanGuard)
   @RequireTeamsPlan()
   @RequireRole('admin')
   @Patch(':id/team')
-  async updateTeam(@Req() req: any, @Param('id') id: string, @Body() body: UpdateUserTeamDto) {
+  async updateTeam(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: UpdateUserTeamDto,
+  ) {
     const tenantId = req.user?.tenantId;
     const teamId = body?.teamId ? String(body.teamId) : null;
-    return this.users.updateTeam(tenantId, id, teamId, { userId: req.user?.sub, role: req.user?.role });
+    return this.users.updateTeam(tenantId, id, teamId, {
+      userId: req.user?.sub,
+      role: req.user?.role,
+    });
   }
 
   @UseGuards(TeamsPlanGuard)
   @RequireTeamsPlan()
   @RequireRole('admin')
   @Patch(':id/active')
-  async setActive(@Req() req: any, @Param('id') id: string, @Body() body: UpdateUserActiveDto) {
+  async setActive(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: UpdateUserActiveDto,
+  ) {
     const tenantId = req.user?.tenantId;
     const isActive = !!body?.isActive;
-    return this.users.setActive(tenantId, id, isActive, { userId: req.user?.sub, role: req.user?.role });
+    return this.users.setActive(tenantId, id, isActive, {
+      userId: req.user?.sub,
+      role: req.user?.role,
+    });
   }
 }

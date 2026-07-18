@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 type Team = { id: string; name: string }
 type UserRow = { id: string; email: string; role?: string }
-type InviteResult = { email: string; tempPassword: string; verifyLink: string }
+type InviteResult = { email: string; tempPassword: string; verifyLink: string; verificationEmailSent: boolean }
 
 export default function TeamPage() {
   const [loading, setLoading] = useState(true)
@@ -195,7 +195,11 @@ export default function TeamPage() {
                 {inviteResult ? (
                   <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
                     <div className="font-medium">Invite created for {inviteResult.email}</div>
-                    <p className="text-xs text-muted-foreground">Email delivery is not connected to this action yet. Share these one-time details through a secure channel.</p>
+                    <p className="text-xs text-muted-foreground">
+                      {inviteResult.verificationEmailSent
+                        ? "Verification email sent. Share the temporary password through a separate secure channel."
+                        : "Verification email could not be delivered. Share the verification link and temporary password separately through secure channels."}
+                    </p>
                     <div>
                       <div className="text-xs text-muted-foreground">Temporary password</div>
                       <code className="break-all">{inviteResult.tempPassword}</code>
