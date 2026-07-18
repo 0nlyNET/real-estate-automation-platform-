@@ -23,8 +23,9 @@ function isRailwayRuntime(env: NodeJS.ProcessEnv): boolean {
 
 /**
  * Railway Postgres presents a platform-managed certificate chain that is not
- * trusted by Node's default CA bundle. Keep verification strict elsewhere and
- * allow an explicit environment override in either direction.
+ * trusted by Node's default CA bundle. Preserve Railway's required behavior
+ * even when a stale strict-verification variable remains configured, while
+ * keeping verification strict by default everywhere else.
  */
 export function buildDatabaseSslConfig(
   defaultEnabled: boolean,
@@ -33,14 +34,15 @@ export function buildDatabaseSslConfig(
   const enabled = parseBoolean(env.DATABASE_SSL) ?? defaultEnabled;
   if (!enabled) return false;
 
+  if (isRailwayRuntime(env)) {
+    return { rejectUnauthorized: false };
+  }
+
   const explicitVerification = parseBoolean(
     env.DATABASE_SSL_REJECT_UNAUTHORIZED,
   );
 
   return {
-    rejectUnauthorized:
-      explicitVerification === undefined
-        ? !isRailwayRuntime(env)
-        : explicitVerification,
+    rejectUnauthorized: explicitVerification ?? true,
   };
 }
