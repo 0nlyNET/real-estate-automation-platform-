@@ -15,13 +15,21 @@ describe('database SSL configuration', () => {
     ).toEqual({ rejectUnauthorized: false });
   });
 
-  it('honors an explicit verification override on Railway', () => {
+  it('ignores a stale strict-verification override on Railway', () => {
     expect(
       buildDatabaseSslConfig(true, {
         RAILWAY_PROJECT_ID: 'project',
         DATABASE_SSL_REJECT_UNAUTHORIZED: 'true',
       }),
-    ).toEqual({ rejectUnauthorized: true });
+    ).toEqual({ rejectUnauthorized: false });
+  });
+
+  it('honors an explicit verification override outside Railway', () => {
+    expect(
+      buildDatabaseSslConfig(true, {
+        DATABASE_SSL_REJECT_UNAUTHORIZED: 'false',
+      }),
+    ).toEqual({ rejectUnauthorized: false });
   });
 
   it('allows SSL to be disabled explicitly', () => {
