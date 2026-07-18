@@ -1,13 +1,33 @@
-import { Body, Controller, Get, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ComplianceService } from './compliance.service';
 import { AddOptOutDto, QuietHoursDto } from './compliance.dto';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
+import { DataExportService } from './data-export.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('compliance')
 export class ComplianceController {
-  constructor(private readonly compliance: ComplianceService) {}
+  constructor(
+    private readonly compliance: ComplianceService,
+    private readonly dataExport: DataExportService,
+  ) {}
+
+  @Get('export')
+  @UseGuards(RolesGuard)
+  @RequireRole('admin')
+  exportWorkspace(@Req() req: any) {
+    return this.dataExport.exportWorkspace(req.user?.tenantId);
+  }
 
   @Post('optout')
   @UseGuards(RolesGuard)
@@ -35,10 +55,16 @@ export class ComplianceController {
   }
 
   @Get('events')
-  async events(@Req() req: any, @Query('take') take?: string, @Query('skip') skip?: string) {
-    const takeNum = Math.min(Math.max(parseInt(take || '50', 10) || 50, 1), 200);
+  async events(
+    @Req() req: any,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    const takeNum = Math.min(
+      Math.max(parseInt(take || '50', 10) || 50, 1),
+      200,
+    );
     const skipNum = Math.max(parseInt(skip || '0', 10) || 0, 0);
     return this.compliance.listEvents(req.user?.tenantId, takeNum, skipNum);
   }
-
 }
