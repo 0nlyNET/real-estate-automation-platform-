@@ -2,8 +2,12 @@ import { DataSourceOptions } from "typeorm";
 import { buildDatabaseSslConfig } from "../common/database-ssl";
 import { databaseEntities } from "./entities";
 import { LegacyAuthCompatibility1784332800001 } from "./migrations/202607180001-legacy-auth-compatibility";
+import { TenantSettingsIntakeKeys1784332800002 } from "./migrations/202607180002-tenant-settings-intake-keys";
 
-const databaseMigrations = [LegacyAuthCompatibility1784332800001];
+const databaseMigrations = [
+  LegacyAuthCompatibility1784332800001,
+  TenantSettingsIntakeKeys1784332800002,
+];
 
 function migrationOptions() {
   return {

@@ -5,6 +5,8 @@ import { databaseEntities } from "../entities";
 import { Tenant } from "../../modules/tenants/tenant.entity";
 import { User } from "../../modules/users/user.entity";
 import { LegacyAuthCompatibility1784332800001 } from "./202607180001-legacy-auth-compatibility";
+import { TenantSettingsIntakeKeys1784332800002 } from "./202607180002-tenant-settings-intake-keys";
+import { TenantSettings } from "../../modules/settings/tenant-settings.entity";
 
 function memoryDatabase() {
   const db = newDb({ autoCreateForeignKeyIndices: true });
@@ -71,7 +73,10 @@ describe("legacy auth compatibility migration", () => {
     const dataSource: DataSource = db.adapters.createTypeormDataSource({
       type: "postgres",
       entities: [...databaseEntities],
-      migrations: [LegacyAuthCompatibility1784332800001],
+      migrations: [
+        LegacyAuthCompatibility1784332800001,
+        TenantSettingsIntakeKeys1784332800002,
+      ],
       migrationsRun: true,
       migrationsTableName: "app_migrations",
     });
@@ -110,6 +115,21 @@ describe("legacy auth compatibility migration", () => {
         isActive: true,
       }),
     ).resolves.toMatchObject({ email: "new-agent@example.com" });
+
+    await expect(
+      dataSource.getRepository(TenantSettings).save({
+        tenantId,
+        timeZone: "America/New_York",
+        quietHoursStart: "21:00",
+        quietHoursEnd: "08:00",
+        automationsEnabled: true,
+        roundRobinEnabled: false,
+        intakeApiKeyHash: "a".repeat(64),
+        intakeApiKeyLast4: "test",
+        intakeApiKeyRotatedAt: new Date(),
+        facebookConnected: false,
+      }),
+    ).resolves.toMatchObject({ tenantId, intakeApiKeyLast4: "test" });
 
     await dataSource.destroy();
   });

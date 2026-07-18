@@ -5,10 +5,20 @@ import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Badge } from "@/components/ui/badge"
 import { apiFetch } from "@/lib/api"
-import { ChevronDown, CheckCircle2, Circle, Sparkles, ArrowRight } from "lucide-react"
+import {
+  ChevronDown,
+  CheckCircle2,
+  Circle,
+  Sparkles,
+  ArrowRight,
+} from "lucide-react"
 
 type TenantSettings = {
   tenantId: string
@@ -26,6 +36,11 @@ type StatsOverview = {
 
 type SequencesResp = {
   sequences: Array<{ id: string }>
+}
+
+type IntegrationSummary = {
+  provider: "twilio" | "sendgrid" | "facebook_lead_ads"
+  connected: boolean
 }
 
 function isValidHttpUrl(v: string) {
@@ -58,21 +73,31 @@ export function DashboardSetupSection() {
   const [settings, setSettings] = useState<TenantSettings | null>(null)
   const [stats, setStats] = useState<StatsOverview | null>(null)
   const [sequencesCount, setSequencesCount] = useState<number>(0)
+  const [integrations, setIntegrations] = useState<IntegrationSummary[]>([])
 
   useEffect(() => {
     let alive = true
     ;(async () => {
       try {
-        const [s, st, seq] = await Promise.all([
+        const [s, st, seq, connected] = await Promise.all([
           apiFetch<TenantSettings>("/settings/tenant").catch(() => null),
-          apiFetch<StatsOverview>("/stats/overview").catch(() => ({ leadsTotal: 0, messagesTotal: 0 })),
-          apiFetch<SequencesResp>("/sequences", { method: "GET" }).catch(() => ({ sequences: [] })),
+          apiFetch<StatsOverview>("/stats/overview").catch(() => ({
+            leadsTotal: 0,
+            messagesTotal: 0,
+          })),
+          apiFetch<SequencesResp>("/sequences", { method: "GET" }).catch(
+            () => ({ sequences: [] }),
+          ),
+          apiFetch<IntegrationSummary[]>("/integrations").catch(() => []),
         ])
 
         if (!alive) return
         setSettings(s)
         setStats(st)
-        setSequencesCount(Array.isArray((seq as any)?.sequences) ? (seq as any).sequences.length : 0)
+        setSequencesCount(
+          Array.isArray(seq.sequences) ? seq.sequences.length : 0,
+        )
+        setIntegrations(connected)
       } finally {
         if (alive) setLoading(false)
       }
@@ -84,11 +109,23 @@ export function DashboardSetupSection() {
 
   const items = useMemo(() => {
     const tzDone = Boolean((settings?.timeZone || "").trim())
-    const quietDone = Boolean((settings?.quietHoursStart || "").trim() && (settings?.quietHoursEnd || "").trim())
+    const quietDone = Boolean(
+      (settings?.quietHoursStart || "").trim() &&
+      (settings?.quietHoursEnd || "").trim(),
+    )
     const autoDone = Boolean(settings?.automationsEnabled)
-    const bookingDone = Boolean((settings?.bookingLink || "").trim() && isValidHttpUrl((settings?.bookingLink || "").trim()))
+    const bookingDone = Boolean(
+      (settings?.bookingLink || "").trim() &&
+      isValidHttpUrl((settings?.bookingLink || "").trim()),
+    )
     const leadsDone = (stats?.leadsTotal || 0) > 0
     const seqDone = sequencesCount > 0
+    const messagingDone = integrations.some(
+      (item) => item.provider === "twilio" && item.connected,
+    )
+    const emailDone = integrations.some(
+      (item) => item.provider === "sendgrid" && item.connected,
+    )
 
     return [
       {
@@ -127,19 +164,19 @@ export function DashboardSetupSection() {
         key: "messaging",
         title: "Connect messaging provider",
         desc: "Required for SMS sending and inbound replies in the inbox.",
-        done: false,
+        done: messagingDone,
         ctaHref: "/app/integrations",
         cta: "Open integrations",
-        soon: true,
+        soon: false,
       },
       {
         key: "email",
         title: "Connect email provider",
         desc: "Required for email sending from templates and automations.",
-        done: false,
+        done: emailDone,
         ctaHref: "/app/integrations",
         cta: "Open integrations",
-        soon: true,
+        soon: false,
       },
       {
         key: "booking",
@@ -151,22 +188,13 @@ export function DashboardSetupSection() {
         optional: true,
       },
     ]
-  }, [settings, stats, sequencesCount])
+  }, [settings, stats, sequencesCount, integrations])
 
   const progress = useMemo(() => {
     const total = items.filter((i) => !i.optional && !i.soon).length
     const done = items.filter((i) => !i.optional && !i.soon && i.done).length
     return { done, total }
   }, [items])
-
-  useEffect(() => {
-    if (loading) return
-    if (progress.total > 0 && progress.done >= progress.total) {
-      setOpen(false)
-    } else {
-      setOpen(true)
-    }
-  }, [loading, progress.done, progress.total])
 
   if (loading) {
     return (
@@ -177,7 +205,9 @@ export function DashboardSetupSection() {
               <Sparkles className="h-4 w-4 text-primary" />
               Setup
             </CardTitle>
-            <div className="text-sm text-muted-foreground">Loading checklist...</div>
+            <div className="text-sm text-muted-foreground">
+              Loading checklist...
+            </div>
           </div>
           <Skeleton className="h-5 w-40" />
         </CardHeader>
@@ -190,7 +220,10 @@ export function DashboardSetupSection() {
     )
   }
 
-  const showNudge = progress.total > 0 && progress.done >= Math.max(0, progress.total - 2) && progress.done < progress.total
+  const showNudge =
+    progress.total > 0 &&
+    progress.done >= Math.max(0, progress.total - 2) &&
+    progress.done < progress.total
 
   return (
     <Card className="border-border/60 bg-card/60 backdrop-blur">
@@ -219,7 +252,9 @@ export function DashboardSetupSection() {
             <CollapsibleTrigger asChild>
               <Button variant="outline" size="sm" className="gap-2">
                 {open ? "Collapse" : "Expand"}
-                <ChevronDown className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`} />
+                <ChevronDown
+                  className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`}
+                />
               </Button>
             </CollapsibleTrigger>
           </div>
@@ -231,7 +266,8 @@ export function DashboardSetupSection() {
               <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm">
                 <div className="font-medium">Almost done</div>
                 <div className="text-muted-foreground">
-                  Finish setup to avoid missed sends and get full inbox visibility.
+                  Finish setup to avoid missed sends and get full inbox
+                  visibility.
                 </div>
               </div>
             ) : null}
@@ -262,10 +298,17 @@ export function DashboardSetupSection() {
                           </Badge>
                         ) : null}
                       </div>
-                      <div className="text-sm text-muted-foreground">{i.desc}</div>
+                      <div className="text-sm text-muted-foreground">
+                        {i.desc}
+                      </div>
                     </div>
 
-                    <Button asChild variant="outline" size="sm" className="shrink-0">
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                    >
                       <Link href={i.ctaHref}>
                         {i.cta} <ArrowRight className="ml-2 h-4 w-4" />
                       </Link>
