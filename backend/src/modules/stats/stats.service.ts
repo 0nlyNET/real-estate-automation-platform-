@@ -14,9 +14,10 @@ export class StatsService {
     @InjectRepository(Message) private readonly messages: Repository<Message>,
   ) {}
 
-
   async overview(tenantId: string, ctx?: { userId?: string; role?: string }) {
-    const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role as UserRole, 'admin') : false;
+    const canSeeAll = ctx?.role
+      ? hasAtLeastRole(ctx.role as UserRole, 'admin')
+      : false;
     const scopedUserId = canSeeAll ? undefined : ctx?.userId;
     const leadWhere: any = { tenantId };
     if (scopedUserId) leadWhere.assignedToUserId = scopedUserId;
@@ -26,7 +27,9 @@ export class StatsService {
       .createQueryBuilder('m')
       .leftJoin('m.lead', 'l')
       .where('l.tenantId = :t', { t: tenantId })
-      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', {
+        uid: scopedUserId,
+      })
       .getCount();
 
     // Avg first response time across leads that have it
@@ -35,59 +38,120 @@ export class StatsService {
       .select('AVG(l.firstResponseTimeSec)', 'avg')
       .addSelect('COUNT(*)', 'count')
       .where('l.tenantId = :t', { t: tenantId })
-      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', {
+        uid: scopedUserId,
+      })
       .andWhere('l.firstResponseTimeSec IS NOT NULL')
       .getRawOne();
 
-    const avgFirstResponseSec = rtRows?.avg ? Math.round(Number(rtRows.avg)) : null;
+    const avgFirstResponseSec = rtRows?.avg
+      ? Math.round(Number(rtRows.avg))
+      : null;
     const responseSamples = rtRows?.count ? Number(rtRows.count) : 0;
 
     // % contacted within 5 minutes (createdAt -> firstContactSentAt)
     const contacted5 = await this.leads
       .createQueryBuilder('l')
       .where('l.tenantId = :t', { t: tenantId })
-      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', {
+        uid: scopedUserId,
+      })
       .andWhere('l.firstContactSentAt IS NOT NULL')
-      .andWhere("EXTRACT(EPOCH FROM (l.firstContactSentAt - l.createdAt)) <= 300")
+      .andWhere(
+        'EXTRACT(EPOCH FROM (l.firstContactSentAt - l.createdAt)) <= 300',
+      )
       .getCount();
 
     const contactedSample = await this.leads
       .createQueryBuilder('l')
       .where('l.tenantId = :t', { t: tenantId })
-      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', {
+        uid: scopedUserId,
+      })
       .andWhere('l.firstContactSentAt IS NOT NULL')
       .getCount();
 
     const pctContactedWithin5Min =
-      contactedSample > 0 ? Math.round((contacted5 / contactedSample) * 100) : null;
+      contactedSample > 0
+        ? Math.round((contacted5 / contactedSample) * 100)
+        : null;
 
     const since7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
     const appointmentsSet7d = await this.leads
       .createQueryBuilder('l')
       .where('l.tenantId = :t', { t: tenantId })
-      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', {
+        uid: scopedUserId,
+      })
       .andWhere("l.stage = 'appointment_set'")
       .andWhere('l.updatedAt >= :since', { since: since7 })
       .getCount();
 
+    const newLeads7d = await this.leads
+      .createQueryBuilder('l')
+      .where('l.tenantId = :t', { t: tenantId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', {
+        uid: scopedUserId,
+      })
+      .andWhere('l.createdAt >= :since', { since: since7 })
+      .getCount();
+
+    const stageRows = await this.leads
+      .createQueryBuilder('l')
+      .select('l.stage', 'label')
+      .addSelect('COUNT(*)', 'count')
+      .where('l.tenantId = :t', { t: tenantId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', {
+        uid: scopedUserId,
+      })
+      .groupBy('l.stage')
+      .orderBy('COUNT(*)', 'DESC')
+      .getRawMany();
+
+    const sourceRows = await this.leads
+      .createQueryBuilder('l')
+      .select("COALESCE(NULLIF(l.source, ''), 'Unknown')", 'label')
+      .addSelect('COUNT(*)', 'count')
+      .where('l.tenantId = :t', { t: tenantId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', {
+        uid: scopedUserId,
+      })
+      .groupBy("COALESCE(NULLIF(l.source, ''), 'Unknown')")
+      .orderBy('COUNT(*)', 'DESC')
+      .limit(8)
+      .getRawMany();
+
+    const toBreakdown = (rows: Array<{ label?: string; count?: string }>) =>
+      rows.map((row) => ({
+        label: String(row.label || 'Unknown'),
+        count: Number(row.count || 0),
+      }));
+
     return {
       leadsTotal,
       messagesTotal,
+      newLeads7d,
       avgFirstResponseSec,
       responseSamples,
       pctContactedWithin5Min,
       appointmentsSet7d,
+      stageBreakdown: toBreakdown(stageRows),
+      sourceBreakdown: toBreakdown(sourceRows),
     };
   }
 
   async agentPerformance(tenantId: string) {
-    const agents = await this.users.find({ where: { tenant: { id: tenantId }, isActive: true } as any });
+    const agents = await this.users.find({
+      where: { tenant: { id: tenantId }, isActive: true } as any,
+    });
     const since7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const out = [] as any[];
     for (const u of agents) {
-      const leadsAssigned = await this.leads.count({ where: { tenantId, assignedToUserId: u.id } as any });
+      const leadsAssigned = await this.leads.count({
+        where: { tenantId, assignedToUserId: u.id } as any,
+      });
       const leadsNew7d = await this.leads
         .createQueryBuilder('l')
         .where('l.tenantId = :t', { t: tenantId })
