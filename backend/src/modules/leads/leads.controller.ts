@@ -10,40 +10,50 @@ import {
   UnauthorizedException,
   Req,
   UseGuards,
-} from '@nestjs/common';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
-import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
+} from "@nestjs/common";
+import { JwtAuthGuard } from "../auth/jwt-auth.guard";
+import { RequireRole, RolesGuard } from "../../common/guards/roles.guard";
+import {
+  RequireTeamsPlan,
+  TeamsPlanGuard,
+} from "../../common/guards/plan.guard";
 
-import { LeadsService } from './leads.service';
-import { IntakeLeadDto } from './dto/intake-lead.dto';
-import { CreateLeadDto } from './dto/create-lead.dto';
-import { UpdateLeadDto } from './dto/update-lead.dto';
-import { AssignLeadDto } from './dto/assign-lead.dto';
-import { Throttle } from '@nestjs/throttler';
+import { LeadsService } from "./leads.service";
+import { IntakeLeadDto } from "./dto/intake-lead.dto";
+import { CreateLeadDto } from "./dto/create-lead.dto";
+import { UpdateLeadDto } from "./dto/update-lead.dto";
+import { AssignLeadDto } from "./dto/assign-lead.dto";
+import { Throttle } from "@nestjs/throttler";
+import { SettingsService } from "../settings/settings.service";
 
 @Controller()
 export class LeadsController {
-  constructor(private readonly leadsService: LeadsService) {}
+  constructor(
+    private readonly leadsService: LeadsService,
+    private readonly settingsService: SettingsService,
+  ) {}
 
-  @Post('leads/intake/:tenantId')
+  @Post("leads/intake/:tenantId")
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  intake(
-    @Param('tenantId') tenantId: string,
-    @Headers('x-intake-key') intakeKey: string | undefined,
+  async intake(
+    @Param("tenantId") tenantId: string,
+    @Headers("x-intake-key") intakeKey: string | undefined,
     @Body() payload: IntakeLeadDto,
   ) {
-    const secret = String(process.env.PUBLIC_INTAKE_SECRET || '');
-    if (!secret || intakeKey !== secret) throw new UnauthorizedException('Invalid intake key');
+    const valid = await this.settingsService.validateIntakeKey(
+      tenantId,
+      intakeKey,
+    );
+    if (!valid) throw new UnauthorizedException("Invalid intake key");
     return this.leadsService.intake(tenantId, payload);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('leads')
+  @Get("leads")
   list(
     @Req() req: any,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
+    @Query("take") take?: string,
+    @Query("skip") skip?: string,
   ) {
     return this.leadsService.listLeads({
       tenantId: req.user?.tenantId,
@@ -55,8 +65,8 @@ export class LeadsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole('tc')
-  @Post('leads')
+  @RequireRole("tc")
+  @Post("leads")
   create(@Req() req: any, @Body() payload: CreateLeadDto) {
     return this.leadsService.createLead(req.user?.tenantId, payload, {
       userId: req.user?.sub,
@@ -65,15 +75,15 @@ export class LeadsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole('admin')
-  @Post('leads/sample')
+  @RequireRole("admin")
+  @Post("leads/sample")
   seedSample(@Req() req: any) {
     return this.leadsService.createSampleLeads(req.user?.tenantId);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('leads/:id')
-  getOne(@Req() req: any, @Param('id') id: string) {
+  @Get("leads/:id")
+  getOne(@Req() req: any, @Param("id") id: string) {
     return this.leadsService.getLeadById(req.user?.tenantId, id, {
       userId: req.user?.sub,
       role: req.user?.role,
@@ -81,9 +91,13 @@ export class LeadsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole('tc')
-  @Patch('leads/:id')
-  update(@Req() req: any, @Param('id') id: string, @Body() payload: UpdateLeadDto) {
+  @RequireRole("tc")
+  @Patch("leads/:id")
+  update(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Body() payload: UpdateLeadDto,
+  ) {
     return this.leadsService.updateLead(req.user?.tenantId, id, payload, {
       userId: req.user?.sub,
       role: req.user?.role,
@@ -92,9 +106,13 @@ export class LeadsController {
 
   @UseGuards(JwtAuthGuard, TeamsPlanGuard, RolesGuard)
   @RequireTeamsPlan()
-  @RequireRole('admin')
-  @Post('leads/:id/assign')
-  assign(@Req() req: any, @Param('id') id: string, @Body() body: AssignLeadDto) {
+  @RequireRole("admin")
+  @Post("leads/:id/assign")
+  assign(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Body() body: AssignLeadDto,
+  ) {
     return this.leadsService.assignLead({
       tenantId: req.user?.tenantId,
       leadId: id,

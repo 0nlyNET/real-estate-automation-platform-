@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import * as crypto from "crypto";
 import { TenantSettings } from "./tenant-settings.entity";
 import { Team } from "../teams/team.entity";
 import { TenantQuietHours } from "../compliance/tenant-quiet-hours.entity";
@@ -12,14 +13,15 @@ export class SettingsService {
     @InjectRepository(TenantSettings)
     private readonly tenantSettingsRepo: Repository<TenantSettings>,
     @InjectRepository(Team) private readonly teamsRepo: Repository<Team>,
-    @InjectRepository(TenantQuietHours) private readonly quietHoursRepo: Repository<TenantQuietHours>,
+    @InjectRepository(TenantQuietHours)
+    private readonly quietHoursRepo: Repository<TenantQuietHours>,
   ) {}
 
   private async findByTenantId(tenantId: string) {
     return this.tenantSettingsRepo.findOne({ where: { tenantId } });
   }
 
-  async getTenantSettings(tenantId: string) {
+  private async getTenantSettingsEntity(tenantId: string) {
     let settings = await this.findByTenantId(tenantId);
 
     if (!settings) {
@@ -30,10 +32,14 @@ export class SettingsService {
       settings.tenantId = tenantId;
 
       // Set safe defaults ONLY if those properties exist on the entity.
-      if ("timeZone" in settings) (settings as any).timeZone = "America/New_York";
-      if ("quietHoursStart" in settings) (settings as any).quietHoursStart = "21:00";
-      if ("quietHoursEnd" in settings) (settings as any).quietHoursEnd = "08:00";
-      if ("automationsEnabled" in settings) (settings as any).automationsEnabled = true;
+      if ("timeZone" in settings)
+        (settings as any).timeZone = "America/New_York";
+      if ("quietHoursStart" in settings)
+        (settings as any).quietHoursStart = "21:00";
+      if ("quietHoursEnd" in settings)
+        (settings as any).quietHoursEnd = "08:00";
+      if ("automationsEnabled" in settings)
+        (settings as any).automationsEnabled = true;
 
       // bookingLink: do not set to null. If it exists, set to empty string.
       if ("bookingLink" in settings && (settings as any).bookingLink == null) {
@@ -44,6 +50,64 @@ export class SettingsService {
     }
 
     return settings;
+  }
+
+  private safeSettings(settings: TenantSettings) {
+    return {
+      id: settings.id,
+      tenantId: settings.tenantId,
+      timeZone: settings.timeZone,
+      quietHoursStart: settings.quietHoursStart,
+      quietHoursEnd: settings.quietHoursEnd,
+      bookingLink: settings.bookingLink || "",
+      automationsEnabled: settings.automationsEnabled,
+      roundRobinEnabled: settings.roundRobinEnabled,
+      roundRobinTeamId: settings.roundRobinTeamId || null,
+      leadSource: settings.leadSource || null,
+      leadSourceOtherLabel: settings.leadSourceOtherLabel || null,
+      intake: {
+        configured: Boolean(settings.intakeApiKeyHash),
+        last4: settings.intakeApiKeyLast4 || null,
+        rotatedAt: settings.intakeApiKeyRotatedAt || null,
+        endpointPath: `/leads/intake/${settings.tenantId}`,
+      },
+    };
+  }
+
+  async getTenantSettings(tenantId: string) {
+    return this.safeSettings(await this.getTenantSettingsEntity(tenantId));
+  }
+
+  async rotateIntakeKey(tenantId: string) {
+    const settings = await this.getTenantSettingsEntity(tenantId);
+    const key = `rta_live_${crypto.randomBytes(32).toString("base64url")}`;
+    settings.intakeApiKeyHash = hashIntakeKey(key);
+    settings.intakeApiKeyLast4 = key.slice(-4);
+    settings.intakeApiKeyRotatedAt = new Date();
+    const saved = await this.tenantSettingsRepo.save(settings);
+
+    return {
+      key,
+      last4: saved.intakeApiKeyLast4,
+      rotatedAt: saved.intakeApiKeyRotatedAt,
+      endpointPath: `/leads/intake/${tenantId}`,
+    };
+  }
+
+  async validateIntakeKey(tenantId: string, key?: string | null) {
+    const supplied = String(key || "").trim();
+    if (!supplied) return false;
+
+    const settings = await this.findByTenantId(tenantId);
+    const expected = settings?.intakeApiKeyHash;
+    if (!expected) return false;
+
+    const actualBuffer = Buffer.from(hashIntakeKey(supplied), "hex");
+    const expectedBuffer = Buffer.from(expected, "hex");
+    return (
+      actualBuffer.length === expectedBuffer.length &&
+      crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+    );
   }
 
   async updateTenantSettings(
@@ -58,43 +122,72 @@ export class SettingsService {
       roundRobinTeamId: string | null;
     }>,
   ) {
-    const current = await this.getTenantSettings(tenantId);
+    const current = await this.getTenantSettingsEntity(tenantId);
 
     if (updates.roundRobinTeamId) {
-      const team = await this.teamsRepo.findOne({ where: { id: updates.roundRobinTeamId, tenantId } });
-      if (!team) throw new BadRequestException('Round-robin team must belong to this tenant');
+      const team = await this.teamsRepo.findOne({
+        where: { id: updates.roundRobinTeamId, tenantId },
+      });
+      if (!team)
+        throw new BadRequestException(
+          "Round-robin team must belong to this tenant",
+        );
     }
 
-    if (typeof updates.timeZone === "string" && "timeZone" in current) (current as any).timeZone = updates.timeZone;
-    if (typeof updates.quietHoursStart === "string" && "quietHoursStart" in current)
+    if (typeof updates.timeZone === "string" && "timeZone" in current)
+      (current as any).timeZone = updates.timeZone;
+    if (
+      typeof updates.quietHoursStart === "string" &&
+      "quietHoursStart" in current
+    )
       (current as any).quietHoursStart = updates.quietHoursStart;
     if (typeof updates.quietHoursEnd === "string" && "quietHoursEnd" in current)
       (current as any).quietHoursEnd = updates.quietHoursEnd;
-    if (typeof updates.bookingLink === "string" && "bookingLink" in current) (current as any).bookingLink = updates.bookingLink;
-    if (typeof updates.automationsEnabled === "boolean" && "automationsEnabled" in current)
+    if (typeof updates.bookingLink === "string" && "bookingLink" in current)
+      (current as any).bookingLink = updates.bookingLink;
+    if (
+      typeof updates.automationsEnabled === "boolean" &&
+      "automationsEnabled" in current
+    )
       (current as any).automationsEnabled = updates.automationsEnabled;
 
-    if (typeof (updates as any).roundRobinEnabled === "boolean" && "roundRobinEnabled" in current)
+    if (
+      typeof (updates as any).roundRobinEnabled === "boolean" &&
+      "roundRobinEnabled" in current
+    )
       (current as any).roundRobinEnabled = (updates as any).roundRobinEnabled;
 
-    if (("roundRobinTeamId" in (updates as any)) && "roundRobinTeamId" in current)
+    if ("roundRobinTeamId" in (updates as any) && "roundRobinTeamId" in current)
       (current as any).roundRobinTeamId = (updates as any).roundRobinTeamId;
 
     const saved = await this.tenantSettingsRepo.save(current);
-    if (updates.timeZone !== undefined || updates.quietHoursStart !== undefined || updates.quietHoursEnd !== undefined) {
-      const existing = await this.quietHoursRepo.findOne({ where: { tenantId } });
+    if (
+      updates.timeZone !== undefined ||
+      updates.quietHoursStart !== undefined ||
+      updates.quietHoursEnd !== undefined
+    ) {
+      const existing = await this.quietHoursRepo.findOne({
+        where: { tenantId },
+      });
       const start = parseHHMM(saved.quietHoursStart);
       const end = parseHHMM(saved.quietHoursEnd);
-      if (!start || !end) throw new BadRequestException('Quiet hours must use HH:mm format');
-      await this.quietHoursRepo.save(this.quietHoursRepo.create({
-        id: existing?.id,
-        tenantId,
-        enabled: existing?.enabled ?? true,
-        startMinute: start.hour * 60 + start.minute,
-        endMinute: end.hour * 60 + end.minute,
-        timezone: saved.timeZone,
-      }));
+      if (!start || !end)
+        throw new BadRequestException("Quiet hours must use HH:mm format");
+      await this.quietHoursRepo.save(
+        this.quietHoursRepo.create({
+          id: existing?.id,
+          tenantId,
+          enabled: existing?.enabled ?? true,
+          startMinute: start.hour * 60 + start.minute,
+          endMinute: end.hour * 60 + end.minute,
+          timezone: saved.timeZone,
+        }),
+      );
     }
-    return saved;
+    return this.safeSettings(saved);
   }
+}
+
+export function hashIntakeKey(key: string) {
+  return crypto.createHash("sha256").update(key, "utf8").digest("hex");
 }

@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Put, Req, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
 import { AuthGuard } from "@nestjs/passport";
 import { SettingsService } from "./settings.service";
 import { UpdateTenantSettingsDto } from "./settings.dto";
@@ -15,9 +23,16 @@ export class SettingsController {
   }
 
   @UseGuards(AuthGuard("jwt"), RolesGuard)
-  @RequireRole('admin')
+  @RequireRole("admin")
   @Put("tenant")
   updateTenantSettings(@Req() req: any, @Body() body: UpdateTenantSettingsDto) {
     return this.settingsService.updateTenantSettings(req.user.tenantId, body);
+  }
+
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
+  @RequireRole("admin")
+  @Post("intake-key/rotate")
+  rotateIntakeKey(@Req() req: any) {
+    return this.settingsService.rotateIntakeKey(req.user.tenantId);
   }
 }
