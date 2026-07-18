@@ -1,0 +1,192 @@
+import { readFileSync } from "fs";
+import { resolve } from "path";
+import { randomUUID } from "crypto";
+import { DataType, newDb } from "pg-mem";
+import { DataSource } from "typeorm";
+import { databaseEntities } from "./entities";
+import { inspectDatabaseSchema } from "./schema-readiness";
+import { ProductionSchemaReconciliation1784332800004 } from "./migrations/202607180004-production-schema-reconciliation";
+import { Credential } from "../modules/settings/credential.entity";
+import { SequenceStep } from "../modules/sequences/sequence-step.entity";
+
+function legacySql(filename: string) {
+  return readFileSync(
+    resolve(__dirname, "../../migrations", filename),
+    "utf8",
+  ).replace(/CREATE EXTENSION IF NOT EXISTS [^;]+;/gi, "");
+}
+
+function memoryDatabase() {
+  const db = newDb({ autoCreateForeignKeyIndices: true });
+  db.public.registerFunction({
+    name: "current_database",
+    returns: DataType.text,
+    implementation: () => "realtytechai_test",
+  });
+  db.public.registerFunction({
+    name: "version",
+    returns: DataType.text,
+    implementation: () => "PostgreSQL 16.0",
+  });
+  db.public.registerFunction({
+    name: "gen_random_uuid",
+    returns: DataType.uuid,
+    impure: true,
+    implementation: randomUUID,
+  });
+  return db;
+}
+
+function dataSourceFor(db: ReturnType<typeof memoryDatabase>) {
+  return db.adapters.createTypeormDataSource({
+    type: "postgres",
+    entities: [...databaseEntities],
+    migrations: [],
+    migrationsRun: false,
+  });
+}
+
+describe("deployed legacy schema reproduction", () => {
+  it("repairs the legacy schema without losing integration data", async () => {
+    const db = memoryDatabase();
+
+    db.public.none(legacySql("001-init.fixed.sql"));
+    db.public.none(legacySql("20260202_add_first_contact_sent_at.sql"));
+    db.public.none(legacySql("20260312_create_password_reset_tokens.sql"));
+    db.public.none(`
+      CREATE TABLE tenant_settings (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now(),
+        tenant_id varchar,
+        time_zone varchar NOT NULL DEFAULT 'America/New_York',
+        quiet_hours_start varchar NOT NULL DEFAULT '21:00',
+        quiet_hours_end varchar NOT NULL DEFAULT '08:00',
+        booking_link varchar,
+        automations_enabled boolean NOT NULL DEFAULT true,
+        round_robin_enabled boolean NOT NULL DEFAULT false,
+        round_robin_team_id varchar,
+        round_robin_last_user_id varchar,
+        zapier_api_key_hash varchar,
+        zapier_api_key_last4 varchar,
+        webhook_url varchar,
+        webhook_events text,
+        facebook_connected boolean NOT NULL DEFAULT false,
+        facebook_page_name varchar,
+        facebook_form_id varchar,
+        twilio_account_sid varchar,
+        twilio_auth_token_enc varchar,
+        twilio_from_number varchar,
+        twilio_messaging_service_sid varchar,
+        sendgrid_api_key_enc varchar,
+        sendgrid_from_email varchar,
+        sendgrid_from_name varchar,
+        lead_source varchar,
+        lead_source_other_label varchar
+      );
+    `);
+
+    const tenantId = randomUUID();
+    const userId = randomUUID();
+    const sequenceId = randomUUID();
+    const stepId = randomUUID();
+    const credentialId = randomUUID();
+    db.public.none(`
+      INSERT INTO tenants (id, name, slug)
+      VALUES ('${tenantId}', 'Legacy Realty', 'legacy-realty');
+      INSERT INTO users (id, email, name, password_hash, tenant_id)
+      VALUES ('${userId}', 'broker@example.com', 'Broker', 'legacy-hash', '${tenantId}');
+      INSERT INTO sequences (id, tenant_id, name)
+      VALUES ('${sequenceId}', '${tenantId}', 'Legacy nurture');
+      INSERT INTO sequence_steps (id, sequence_id, offset_minutes, channel, template)
+      VALUES ('${stepId}', '${sequenceId}', 15, 'sms', 'Legacy follow-up');
+      INSERT INTO credentials (id, tenant_id, provider, encrypted_value)
+      VALUES ('${credentialId}', '${tenantId}', 'twilio', 'legacy-ciphertext');
+    `);
+
+    const dataSource: DataSource = dataSourceFor(db);
+    await dataSource.initialize();
+
+    const before = await inspectDatabaseSchema(dataSource);
+    expect(before).toMatchObject({
+      ok: false,
+      expectedTables: 20,
+      actualTables: 12,
+      missingTables: [
+        "agent_presence",
+        "compliance_events",
+        "compliance_optouts",
+        "routing_assignment_logs",
+        "routing_rules",
+        "support_tickets",
+        "teams",
+        "tenant_quiet_hours",
+      ],
+    });
+
+    const queryRunner = dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await new ProductionSchemaReconciliation1784332800004().up(queryRunner);
+    await queryRunner.release();
+
+    await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
+      ok: true,
+      expectedTables: 20,
+      actualTables: 20,
+      missingTables: [],
+      missingColumns: [],
+    });
+
+    await expect(
+      dataSource
+        .getRepository(Credential)
+        .findOneByOrFail({ id: credentialId }),
+    ).resolves.toMatchObject({
+      id: credentialId,
+      encryptedValue: "legacy-ciphertext",
+    });
+    await expect(
+      dataSource.getRepository(SequenceStep).findOneByOrFail({ id: stepId }),
+    ).resolves.toMatchObject({ id: stepId, offsetMinutes: 15 });
+
+    await expect(
+      dataSource.getRepository(Credential).save({
+        tenant: { id: tenantId },
+        provider: "sendgrid",
+        routingKey: "from@example.com",
+        encryptedValue: "new-ciphertext",
+      }),
+    ).resolves.toMatchObject({ provider: "sendgrid" });
+    await expect(
+      dataSource.getRepository(SequenceStep).save({
+        sequence: { id: sequenceId },
+        offsetMinutes: 30,
+        channel: "email",
+        template: "New follow-up",
+      }),
+    ).resolves.toMatchObject({ offsetMinutes: 30 });
+
+    await dataSource.destroy();
+  });
+
+  it("bootstraps all application tables on an empty database", async () => {
+    const db = memoryDatabase();
+    const dataSource: DataSource = dataSourceFor(db);
+    await dataSource.initialize();
+
+    const queryRunner = dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await new ProductionSchemaReconciliation1784332800004().up(queryRunner);
+    await queryRunner.release();
+
+    await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
+      ok: true,
+      expectedTables: 20,
+      actualTables: 20,
+      missingTables: [],
+      missingColumns: [],
+    });
+
+    await dataSource.destroy();
+  });
+});
