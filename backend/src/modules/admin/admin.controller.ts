@@ -1,9 +1,21 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  NotFoundException,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthService } from '../auth/auth.service';
 import { AdminService } from './admin.service';
 import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
 import { ImpersonateDto } from './admin.dto';
+import { AuditService } from '../audit/audit.service';
 
 @UseGuards(JwtAuthGuard, PlatformAdminGuard)
 @Controller('admin')
@@ -11,6 +23,7 @@ export class AdminController {
   constructor(
     private readonly admin: AdminService,
     private readonly auth: AuthService,
+    private readonly audit: AuditService,
   ) {}
 
   @Get('overview')
@@ -51,25 +64,48 @@ export class AdminController {
   @Post('impersonate')
   async impersonate(@Body() body: ImpersonateDto, @Req() req: any) {
     const userId = String(body?.userId || '').trim();
-    if (!userId) return { message: 'Missing userId' };
+    if (!userId) throw new BadRequestException('Missing userId');
 
     const target = await this.admin.findUserById(userId);
-    if (!target) return { message: 'User not found' };
+    if (!target) throw new NotFoundException('User not found');
+    if (!target.isActive || !target.isEmailVerified || !target.tenantId) {
+      throw new ForbiddenException('Target account is inactive or unverified');
+    }
 
-    const token = this.auth.signForUser(target as any);
+    const actorId = String(req.user?.sub || '');
+    const actorEmail = String(req.user?.email || '');
+    const token = this.auth.signForImpersonation(target, {
+      id: actorId,
+      email: actorEmail,
+    });
+
+    await this.audit.record({
+      tenantId: target.tenantId,
+      actorId,
+      actorEmail,
+      action: 'support.impersonation.started',
+      method: 'POST',
+      path: '/admin/impersonate',
+      statusCode: 201,
+      metadata: {
+        subjectUserId: target.id,
+        subjectEmail: target.email,
+      },
+    });
 
     return {
       accessToken: token,
       user: {
-        id: (target as any).id,
-        email: (target as any).email,
-        role: (target as any).role,
-        tenantId: (target as any).tenantId,
+        id: target.id,
+        email: target.email,
+        role: target.role,
+        tenantId: target.tenantId,
       },
       impersonatedBy: {
-        userId: req.user?.sub,
-        email: req.user?.email,
+        userId: actorId,
+        email: actorEmail,
       },
+      expiresInSeconds: 15 * 60,
     };
   }
 }

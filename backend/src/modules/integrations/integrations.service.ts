@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Credential } from "../settings/credential.entity";
 import * as crypto from "crypto";
+import { normalizePhoneE164 } from '../../common/phone';
 
 export type IntegrationProvider = "twilio" | "sendgrid" | "facebook_lead_ads";
 export type IntegrationStatus =
@@ -97,6 +98,10 @@ function mask(value: string | null | undefined, keepEnd = 4) {
   return `${"*".repeat(Math.max(0, v.length - keepEnd))}${v.slice(-keepEnd)}`;
 }
 
+function isUniqueViolation(error: unknown) {
+  return String((error as { code?: string })?.code || '') === '23505';
+}
+
 @Injectable()
 export class IntegrationsService {
   constructor(
@@ -129,6 +134,7 @@ export class IntegrationsService {
     tenantId: string,
     provider: IntegrationProvider,
     payload: any,
+    routingKey?: string | null,
   ) {
     let cred = await this.getRow(tenantId, provider);
 
@@ -139,12 +145,23 @@ export class IntegrationsService {
         tenant: { id: tenantId } as any,
         provider,
         encryptedValue,
+        routingKey: routingKey ?? null,
       });
     } else {
       cred.encryptedValue = encryptedValue;
+      if (routingKey !== undefined) cred.routingKey = routingKey;
     }
 
-    await this.credentialsRepo.save(cred);
+    try {
+      await this.credentialsRepo.save(cred);
+    } catch (error) {
+      if (provider === 'twilio' && routingKey && isUniqueViolation(error)) {
+        throw new BadRequestException(
+          'That Twilio number is already connected to another workspace.',
+        );
+      }
+      throw error;
+    }
   }
 
   private async setError(
@@ -188,6 +205,7 @@ export class IntegrationsService {
         display = {
           fromNumber: parsed?.fromNumber || null,
           accountSid: parsed?.accountSid ? mask(parsed.accountSid, 6) : null,
+          webhookUrl: String(process.env.TWILIO_WEBHOOK_URL || '').trim() || null,
         };
       } else if (provider === "sendgrid") {
         display = {
@@ -228,7 +246,7 @@ export class IntegrationsService {
   ) {
     const accountSid = dto.accountSid?.trim();
     const authToken = dto.authToken?.trim();
-    const fromNumber = dto.fromNumber?.trim();
+    const fromNumber = normalizePhoneE164(dto.fromNumber);
 
     if (!accountSid || !authToken || !fromNumber) {
       throw new BadRequestException("Missing Twilio credentials");
@@ -242,7 +260,7 @@ export class IntegrationsService {
       fromNumber,
       lastSync: nowIso(),
       error: null,
-    });
+    }, fromNumber);
 
     return { ok: true };
   }
@@ -583,9 +601,10 @@ export class IntegrationsService {
   async disconnect(tenantId: string, provider: IntegrationProvider) {
     await this.upsertEncrypted(tenantId, provider, {
       connected: false,
+      configured: false,
       lastSync: null,
       error: null,
-    });
+    }, provider === 'twilio' ? null : undefined);
 
     return { ok: true };
   }

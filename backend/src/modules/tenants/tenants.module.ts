@@ -1,5 +1,3 @@
-import { Message } from '../messaging/message.entity';
-import { LeadEvent } from '../leads/lead-event.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Credential } from '../settings/credential.entity';
 import { Lead } from '../leads/lead.entity';

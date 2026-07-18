@@ -71,7 +71,17 @@ export class ComplianceService {
       source,
     });
 
-    const saved = await this.optRepo.save(row).catch(async () => row);
+    let saved: ComplianceOptOut;
+    try {
+      saved = await this.optRepo.save(row);
+    } catch (error: any) {
+      if (String(error?.code || '') !== '23505') throw error;
+      const existing = await this.optRepo.findOne({
+        where: { tenantId, channel, value: normalized } as any,
+      });
+      if (!existing) throw error;
+      return existing;
+    }
 
     await this.recordEvent(tenantId, {
       type: 'opt_out_recorded',

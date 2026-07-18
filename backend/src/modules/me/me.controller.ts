@@ -14,6 +14,10 @@ export class MeController {
       tenantId: req.user?.tenantId || null,
       role: req.user?.role || null,
       email: req.user?.email || null,
+      isPlatformAdmin: req.user?.platformAdmin === true,
+      impersonated: Boolean(req.user?.impersonatedBy),
+      impersonatedBy: req.user?.impersonatedBy || null,
+      sessionExpiresAt: req.user?.sessionExpiresAt || null,
     };
   }
 

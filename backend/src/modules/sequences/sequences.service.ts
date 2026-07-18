@@ -1,7 +1,7 @@
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { ForbiddenException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { Sequence } from './sequence.entity';
 import { SequenceEnrollment } from './sequence-enrollment.entity';
@@ -164,7 +164,7 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
   async toggleSequence(tenantId: string, id: string) {
     const seq = await this.sequenceRepository.findOne({ where: { id, tenantId } as any });
     if (!seq) return { ok: false, message: 'Not found' };
-    (seq as any).active = !Boolean((seq as any).active);
+    (seq as any).active = !(seq as any).active;
     await this.sequenceRepository.save(seq);
     return { ok: true, active: (seq as any).active };
   }
@@ -322,13 +322,16 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
   async stopForLead(leadId: string, reason: 'reply' | 'manual' | 'other' | 'opt_out' = 'other') {
     try {
       const enrollments = await this.enrollmentRepository.find({
-        where: { lead: { id: leadId }, status: 'active' } as any,
+        where: {
+          lead: { id: leadId },
+          status: In(['active', 'paused']),
+        } as any,
       });
 
       for (const enrollment of enrollments) {
         enrollment.status = 'stopped';
-        (enrollment as any).stoppedReason = reason;
-        (enrollment as any).nextRunAt = undefined;
+        enrollment.stoppedReason = reason;
+        enrollment.nextRunAt = undefined;
         await this.enrollmentRepository.save(enrollment);
       }
     } catch (err: any) {
@@ -336,6 +339,7 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
         `stopForLead failed (leadId=${leadId}): ${err?.message ?? err}`,
         err?.stack,
       );
+      throw err;
     }
   }
 

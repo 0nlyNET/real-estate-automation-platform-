@@ -32,6 +32,24 @@ export class AuthService {
     return this.jwtService.sign(payload);
   }
 
+  signForImpersonation(
+    user: User,
+    actor: { id: string; email: string },
+  ) {
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      tenantId: user.tenantId,
+      platformAdmin: false,
+      impersonatedBy: {
+        userId: actor.id,
+        email: actor.email,
+      },
+    };
+    return this.jwtService.sign(payload, { expiresIn: '15m' });
+  }
+
   async login(email: string, password: string) {
     const user = await this.usersService.findByEmail(email);
 

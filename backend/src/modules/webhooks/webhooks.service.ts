@@ -1,16 +1,23 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 
+import { normalizePhoneDigits, normalizePhoneE164 } from '../../common/phone';
 import { Credential } from '../settings/credential.entity';
 import { Lead } from '../leads/lead.entity';
+import { LeadEvent } from '../leads/lead-event.entity';
 import { Message } from '../messaging/message.entity';
 import { decryptIntegrationPayload } from '../integrations/integrations.service';
 import { ComplianceService } from '../compliance/compliance.service';
 import { SequencesService } from '../sequences/sequences.service';
 
-type TwilioInboundBody = {
+export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
   To?: string;
   Body?: string;
@@ -18,136 +25,253 @@ type TwilioInboundBody = {
   SmsSid?: string;
 };
 
-function normalizePhone(v?: string | null) {
-  if (!v) return null;
-  const s = String(v).trim();
-  if (!s) return null;
-  let digits = s.replace(/\D/g, '');
-  if (digits.length === 10) digits = `1${digits}`;
-  return digits;
-}
-
-function now() {
-  return new Date();
-}
-
-function validTwilioSignature(
+export function validTwilioSignature(
   url: string,
   params: Record<string, unknown>,
   authToken: string,
   supplied: string,
 ) {
-  const payload = url + Object.keys(params).sort().map((key) => `${key}${String(params[key] ?? '')}`).join('');
-  const expected = crypto.createHmac('sha1', authToken).update(payload).digest('base64');
-  const a = Buffer.from(expected);
-  const b = Buffer.from(supplied || '');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  const payload =
+    url +
+    Object.keys(params)
+      .sort()
+      .map((key) => `${key}${String(params[key] ?? '')}`)
+      .join('');
+  const expected = crypto
+    .createHmac('sha1', authToken)
+    .update(payload)
+    .digest('base64');
+  const expectedBuffer = Buffer.from(expected);
+  const suppliedBuffer = Buffer.from(supplied || '');
+  return (
+    expectedBuffer.length === suppliedBuffer.length &&
+    crypto.timingSafeEqual(expectedBuffer, suppliedBuffer)
+  );
 }
+
+type PersistedInbound = {
+  duplicate: boolean;
+  tenantId?: string;
+  leadId?: string;
+  stopKeyword?: boolean;
+};
 
 @Injectable()
 export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
 
   constructor(
+    private readonly dataSource: DataSource,
     @InjectRepository(Credential)
     private readonly credentialsRepo: Repository<Credential>,
-    @InjectRepository(Lead)
-    private readonly leadsRepo: Repository<Lead>,
-    @InjectRepository(Message)
-    private readonly messagesRepo: Repository<Message>,
     private readonly compliance: ComplianceService,
     private readonly sequences: SequencesService,
   ) {}
 
-  async handleTwilioInbound(body: TwilioInboundBody, headers: Record<string, string | undefined>) {
-    const from = normalizePhone(body.From);
-    const to = normalizePhone(body.To);
-    const text = (body.Body || '').toString();
-    const providerMessageId = (body.MessageSid || body.SmsSid || '').toString() || undefined;
-
-    if (!from || !to || !text) {
-      this.logger.warn('Twilio inbound ignored because required fields were missing');
-      return;
-    }
-
-    // Find tenant by matching To against saved twilio.fromNumber
-    const creds = await this.credentialsRepo.find({
-      where: { provider: 'twilio' as any },
+  private async findTwilioCredential(
+    routingKey: string,
+  ): Promise<Credential | null> {
+    const direct = await this.credentialsRepo.findOne({
+      where: { provider: 'twilio', routingKey },
       relations: ['tenant'],
     });
+    if (direct) return direct;
 
-    let tenantId: string | null = null;
-    let authToken: string | null = null;
+    // Existing encrypted rows predate routing keys. Backfill the one exact
+    // match once, then all subsequent webhooks use the indexed lookup.
+    const legacy = await this.credentialsRepo.find({
+      where: { provider: 'twilio', routingKey: IsNull() },
+      relations: ['tenant'],
+    });
+    const matches = legacy.filter((row) => {
+      const payload = decryptIntegrationPayload(row.encryptedValue);
+      return (
+        Boolean(payload?.connected) &&
+        normalizePhoneE164(payload?.fromNumber) === routingKey
+      );
+    });
+    if (matches.length !== 1) return null;
 
-    for (const c of creds) {
-      const payload = decryptIntegrationPayload(c.encryptedValue);
-      const connected = Boolean(payload?.connected);
-      const fromNumber = normalizePhone(payload?.fromNumber);
+    matches[0].routingKey = routingKey;
+    try {
+      return await this.credentialsRepo.save(matches[0]);
+    } catch (error: any) {
+      if (String(error?.code || '') !== '23505') throw error;
+      return this.credentialsRepo.findOne({
+        where: { provider: 'twilio', routingKey },
+        relations: ['tenant'],
+      });
+    }
+  }
 
-      if (connected && fromNumber && fromNumber === to) {
-        tenantId = c.tenant?.id || null;
-        authToken = payload?.authToken ? String(payload.authToken) : null;
-        break;
-      }
+  async handleTwilioInbound(
+    body: TwilioInboundBody,
+    headers: Record<string, string | string[] | undefined>,
+  ) {
+    const from = normalizePhoneDigits(String(body.From || ''));
+    const toRoutingKey = normalizePhoneE164(String(body.To || ''));
+    const text = String(body.Body ?? '');
+    const providerMessageId = String(body.MessageSid || body.SmsSid || '').trim();
+
+    if (!from || !toRoutingKey || !providerMessageId) {
+      throw new BadRequestException('Missing required Twilio message fields');
     }
 
-    if (!tenantId) {
+    const credential = await this.findTwilioCredential(toRoutingKey);
+    if (!credential?.tenant?.id) {
       this.logger.warn('Twilio inbound did not match a connected tenant number');
-      return;
+      return { status: 'ignored' } as const;
     }
 
-    const signature = String(headers['x-twilio-signature'] || '');
+    const integration = decryptIntegrationPayload(credential.encryptedValue);
+    const authToken = String(integration?.authToken || '');
+    const signatureHeader = headers['x-twilio-signature'];
+    const signature = Array.isArray(signatureHeader)
+      ? signatureHeader[0] || ''
+      : String(signatureHeader || '');
     const webhookUrl = String(process.env.TWILIO_WEBHOOK_URL || '').trim();
-    if (!authToken || !webhookUrl || !validTwilioSignature(webhookUrl, body as any, authToken, signature)) {
+    if (
+      !integration?.connected ||
+      !authToken ||
+      !webhookUrl ||
+      !validTwilioSignature(webhookUrl, body, authToken, signature)
+    ) {
       throw new UnauthorizedException('Invalid webhook signature');
     }
 
-    if (providerMessageId) {
-      const duplicate = await this.messagesRepo.findOne({ where: { providerMessageId } as any });
-      if (duplicate) return;
-    }
+    const tenantId = credential.tenant.id;
+    const stopKeyword = this.compliance.isStopKeyword(text);
+    const persisted = await this.dataSource.transaction((manager) =>
+      this.persistInbound(manager, {
+        tenantId,
+        from,
+        text,
+        providerMessageId,
+        stopKeyword,
+      }),
+    );
 
-    // Find lead by tenantId + phone
-    let lead: Lead | null = await this.leadsRepo.findOne({
-      where: { tenantId: tenantId as any, phone: from as any } as any,
+    if (!persisted.leadId) return { status: 'ignored' } as const;
+
+    if (stopKeyword) {
+      await this.compliance.addOptOut(
+        tenantId,
+        'sms',
+        from,
+        'stop_keyword',
+        'twilio_webhook',
+      );
+    }
+    await this.sequences.stopForLead(
+      persisted.leadId,
+      stopKeyword ? 'opt_out' : 'reply',
+    );
+
+    this.logger.log(
+      `Twilio inbound saved for tenant=${tenantId} lead=${persisted.leadId}`,
+    );
+    return {
+      status: persisted.duplicate ? 'duplicate' : 'ok',
+    } as const;
+  }
+
+  private async persistInbound(
+    manager: EntityManager,
+    input: {
+      tenantId: string;
+      from: string;
+      text: string;
+      providerMessageId: string;
+      stopKeyword: boolean;
+    },
+  ): Promise<PersistedInbound> {
+    await manager.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      [`twilio:${input.providerMessageId}`],
+    );
+
+    const messageRepository = manager.getRepository(Message);
+    const leadRepository = manager.getRepository(Lead);
+    const leadEventRepository = manager.getRepository(LeadEvent);
+    const duplicate = await messageRepository.findOne({
+      where: { providerMessageId: input.providerMessageId },
+      relations: ['lead'],
     });
+    if (duplicate) {
+      return {
+        duplicate: true,
+        tenantId: input.tenantId,
+        leadId: duplicate.leadId || duplicate.lead?.id,
+        stopKeyword: input.stopKeyword,
+      };
+    }
 
+    let lead = await leadRepository.findOne({
+      where: { tenantId: input.tenantId, phone: input.from },
+    });
     if (!lead) {
-      const l = new Lead() as any;
-      l.tenantId = tenantId;
-      l.fullName = from;
-      l.phone = from;
-      l.source = 'twilio';
-      l.stage = 'new';
-      l.score = 50;
-
-      lead = await this.leadsRepo.save(l);
+      lead = leadRepository.create({
+        tenantId: input.tenantId,
+        fullName: input.from,
+        phone: input.from,
+        source: 'twilio',
+        stage: 'new',
+        score: 50,
+        leadType: 'buyer',
+        temperature: 'warm',
+        sequenceStatus: 'idle',
+      });
+      lead = await leadRepository.save(lead);
     }
 
-    // Save inbound message
-    const msg = new Message() as any;
-    msg.lead = lead as any;
-    msg.channel = 'sms';
-    msg.direction = 'inbound';
-    msg.body = text;
-    msg.providerMessageId = providerMessageId;
-    msg.status = 'received';
-    msg.sentAt = now();
-    msg.attemptCount = 0;
+    const receivedAt = new Date();
+    const message = await messageRepository.save(
+      messageRepository.create({
+        lead,
+        leadId: lead.id,
+        channel: 'sms',
+        direction: 'inbound',
+        body: input.text,
+        providerMessageId: input.providerMessageId,
+        status: 'received',
+        sentAt: receivedAt,
+        attemptCount: 0,
+      }),
+    );
 
-    await this.messagesRepo.save(msg);
-
-    if (this.compliance.isStopKeyword(text)) {
-      await this.compliance.addOptOut(tenantId, 'sms', from, 'stop_keyword', 'twilio_webhook');
-      await this.sequences.stopForLead((lead as Lead).id, 'opt_out');
-      (lead as any).sequenceStatus = 'stopped';
+    if (!lead.firstResponseReceivedAt) {
+      lead.firstResponseReceivedAt = receivedAt;
+      if (lead.firstContactSentAt) {
+        lead.firstResponseTimeSec = Math.max(
+          0,
+          Math.floor(
+            (receivedAt.getTime() - lead.firstContactSentAt.getTime()) / 1000,
+          ),
+        );
+      }
     }
+    lead.lastActivityAt = receivedAt;
+    lead.nextFollowUpAt = undefined;
+    lead.sequenceStatus = 'stopped';
+    await leadRepository.save(lead);
 
-    // Update lead activity timestamps (if fields exist on entity)
-    (lead as any).lastActivityAt = now();
-    (lead as any).lastContactedAt = now();
-    await this.leadsRepo.save(lead as any);
+    await leadEventRepository.save(
+      leadEventRepository.create({
+        lead,
+        eventType: input.stopKeyword ? 'sms_opt_out_received' : 'lead_replied',
+        metadata: {
+          channel: 'sms',
+          messageId: message.id,
+          providerMessageId: input.providerMessageId,
+        },
+      }),
+    );
 
-    this.logger.log(`Twilio inbound saved for tenant=${tenantId} lead=${(lead as any).id}`);
+    return {
+      duplicate: false,
+      tenantId: input.tenantId,
+      leadId: lead.id,
+      stopKeyword: input.stopKeyword,
+    };
   }
 }

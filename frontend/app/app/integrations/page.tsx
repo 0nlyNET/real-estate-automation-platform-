@@ -118,6 +118,7 @@ export default function IntegrationsPage() {
     [integrations],
   )
   const twilioStatus = byProvider.get("twilio")
+  const twilioWebhookUrl = twilioStatus?.display?.webhookUrl || ""
   const sendgridStatus = byProvider.get("sendgrid")
   const facebookStatus = byProvider.get("facebook_lead_ads")
 
@@ -529,6 +530,42 @@ export default function IntegrationsPage() {
                 Sending number: {twilioStatus.display.fromNumber}
               </p>
             ) : null}
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-4">
+              <Label htmlFor="twilioWebhook">Inbound message webhook</Label>
+              {twilioWebhookUrl ? (
+                <div className="flex gap-2">
+                  <Input
+                    id="twilioWebhook"
+                    readOnly
+                    value={twilioWebhookUrl}
+                    className="font-mono text-xs"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => copy(twilioWebhookUrl, "Twilio webhook URL")}
+                  >
+                    <Clipboard />
+                    <span className="sr-only">Copy Twilio webhook URL</span>
+                  </Button>
+                </div>
+              ) : (
+                <Alert variant="destructive">
+                  <AlertTitle>Inbound replies are not ready</AlertTitle>
+                  <AlertDescription>
+                    The platform administrator must configure the exact public
+                    Twilio webhook URL before client onboarding.
+                  </AlertDescription>
+                </Alert>
+              )}
+              <p className="text-xs text-muted-foreground">
+                In Twilio, open Phone Numbers → Active Numbers → your number →
+                Messaging. For “A message comes in,” paste this exact URL,
+                select HTTP POST, and save. Twilio signatures depend on an exact
+                match, including HTTPS, path, and any query string.
+              </p>
+            </div>
             {canManage ? (
               <>
                 <div className="space-y-2">
