@@ -1,22 +1,22 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { TenantSettings } from "./tenant-settings.entity";
+import { Team } from "../teams/team.entity";
+import { TenantQuietHours } from "../compliance/tenant-quiet-hours.entity";
+import { parseHHMM } from "../../common/time";
 
 @Injectable()
 export class SettingsService {
   constructor(
     @InjectRepository(TenantSettings)
     private readonly tenantSettingsRepo: Repository<TenantSettings>,
+    @InjectRepository(Team) private readonly teamsRepo: Repository<Team>,
+    @InjectRepository(TenantQuietHours) private readonly quietHoursRepo: Repository<TenantQuietHours>,
   ) {}
 
   private async findByTenantId(tenantId: string) {
-    // Works whether TenantSettings has tenantId column OR tenant relation.
-    return this.tenantSettingsRepo
-      .createQueryBuilder("s")
-      .leftJoin("s.tenant", "t")
-      .where("t.id = :tenantId", { tenantId })
-      .getOne();
+    return this.tenantSettingsRepo.findOne({ where: { tenantId } });
   }
 
   async getTenantSettings(tenantId: string) {
@@ -27,9 +27,7 @@ export class SettingsService {
       // We avoid null assignments to satisfy strict TS types.
       settings = this.tenantSettingsRepo.create() as TenantSettings;
 
-      // Attach tenant relation without needing Tenant repository:
-      // TypeORM allows partial relation objects.
-      (settings as any).tenant = { id: tenantId };
+      settings.tenantId = tenantId;
 
       // Set safe defaults ONLY if those properties exist on the entity.
       if ("timeZone" in settings) (settings as any).timeZone = "America/New_York";
@@ -62,6 +60,11 @@ export class SettingsService {
   ) {
     const current = await this.getTenantSettings(tenantId);
 
+    if (updates.roundRobinTeamId) {
+      const team = await this.teamsRepo.findOne({ where: { id: updates.roundRobinTeamId, tenantId } });
+      if (!team) throw new BadRequestException('Round-robin team must belong to this tenant');
+    }
+
     if (typeof updates.timeZone === "string" && "timeZone" in current) (current as any).timeZone = updates.timeZone;
     if (typeof updates.quietHoursStart === "string" && "quietHoursStart" in current)
       (current as any).quietHoursStart = updates.quietHoursStart;
@@ -77,6 +80,21 @@ export class SettingsService {
     if (("roundRobinTeamId" in (updates as any)) && "roundRobinTeamId" in current)
       (current as any).roundRobinTeamId = (updates as any).roundRobinTeamId;
 
-    return this.tenantSettingsRepo.save(current);
+    const saved = await this.tenantSettingsRepo.save(current);
+    if (updates.timeZone !== undefined || updates.quietHoursStart !== undefined || updates.quietHoursEnd !== undefined) {
+      const existing = await this.quietHoursRepo.findOne({ where: { tenantId } });
+      const start = parseHHMM(saved.quietHoursStart);
+      const end = parseHHMM(saved.quietHoursEnd);
+      if (!start || !end) throw new BadRequestException('Quiet hours must use HH:mm format');
+      await this.quietHoursRepo.save(this.quietHoursRepo.create({
+        id: existing?.id,
+        tenantId,
+        enabled: existing?.enabled ?? true,
+        startMinute: start.hour * 60 + start.minute,
+        endMinute: end.hour * 60 + end.minute,
+        timezone: saved.timeZone,
+      }));
+    }
+    return saved;
   }
 }

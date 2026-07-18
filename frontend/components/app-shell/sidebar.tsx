@@ -9,7 +9,6 @@ import {
   Users,
   Inbox,
   Zap,
-  FileText,
   BarChart3,
   Settings,
   Plug,
@@ -33,7 +32,6 @@ const mainNavItems = [
 
 const automationItems = [
   { label: "Automations", href: "/app/automations", icon: Zap },
-  { label: "Templates", href: "/app/templates", icon: FileText },
 ]
 
 const analyticsItems = [
@@ -58,7 +56,7 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
   const pathname = usePathname()
   const [automationOpen, setAutomationOpen] = useState(true)
   const [analyticsOpen, setAnalyticsOpen] = useState(true)
-  const [plan, setPlan] = useState<PlanName>("pro")
+  const [plan, setPlan] = useState<PlanName>("free")
   const [hasTeams, setHasTeams] = useState(false)
   const [hasEnterprise, setHasEnterprise] = useState(false)
 
@@ -67,14 +65,14 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
     fetchMePlan()
       .then((d) => {
         if (!mounted) return
-        const p = ((d?.plan as any) || "pro") as PlanName
+        const p = ((d?.plan as any) || "free") as PlanName
         setPlan(p)
         setHasTeams(canUseTeams(p))
         setHasEnterprise(canUseBrokerage(p))
       })
       .catch(() => {
         if (!mounted) return
-        setPlan("pro")
+        setPlan("free")
         setHasTeams(false)
         setHasEnterprise(false)
       })

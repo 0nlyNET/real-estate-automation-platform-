@@ -16,19 +16,11 @@ import { Logo } from "@/components/logo";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
-type DestChoice = "auto" | "client" | "admin";
-
 function setAuthCookie(token: string) {
   // Not httpOnly (because we set it in the browser), but it makes Next middleware work.
   // 7 days expiry.
   const maxAge = 60 * 60 * 24 * 7;
   document.cookie = `rtai_token=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
-}
-
-function redirectForRole(role?: string) {
-  const r = (role || "").toLowerCase();
-  if (r === "owner" || r === "admin") return "/admin/dashboard";
-  return "/app/dashboard";
 }
 
 export default function LoginPage() {
@@ -41,7 +33,6 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const [dest, setDest] = useState<DestChoice>("auto");
   const [error, setError] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -90,21 +81,7 @@ export default function LoginPage() {
         description: "You have successfully logged in.",
       });
 
-      const role = String(data?.user?.role || "").toLowerCase();
-
-      // You choose where to land. No forced redirect.
-      if (dest === "client") {
-        router.push("/app/dashboard");
-        return;
-      }
-      if (dest === "admin") {
-        // If not actually admin/owner, middleware will push you to /app/dashboard.
-        router.push("/admin/dashboard");
-        return;
-      }
-
-      // auto
-      router.push(redirectForRole(role));
+      router.push(data?.user?.isPlatformAdmin ? "/admin/dashboard" : "/app/dashboard");
     } catch (err: any) {
       setError(err?.message || "Login failed");
     } finally {
@@ -189,45 +166,6 @@ export default function LoginPage() {
                       )}
                       <span className="sr-only">{showPassword ? "Hide password" : "Show password"}</span>
                     </Button>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-foreground">After login</Label>
-                  <div className="grid gap-2">
-                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <input
-                        type="radio"
-                        name="dest"
-                        value="auto"
-                        checked={dest === "auto"}
-                        onChange={() => setDest("auto")}
-                        disabled={loading}
-                      />
-                      Auto (based on role)
-                    </label>
-                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <input
-                        type="radio"
-                        name="dest"
-                        value="client"
-                        checked={dest === "client"}
-                        onChange={() => setDest("client")}
-                        disabled={loading}
-                      />
-                      Client dashboard
-                    </label>
-                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <input
-                        type="radio"
-                        name="dest"
-                        value="admin"
-                        checked={dest === "admin"}
-                        onChange={() => setDest("admin")}
-                        disabled={loading}
-                      />
-                      Admin dashboard
-                    </label>
                   </div>
                 </div>
 

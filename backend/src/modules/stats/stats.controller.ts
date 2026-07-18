@@ -13,7 +13,7 @@ export class StatsController {
   @Get('overview')
   async overview(@Req() req: any) {
     return await this.stats.overview(req.user?.tenantId, {
-      userId: req.user?.userId,
+      userId: req.user?.sub,
       role: req.user?.role,
     });
   }

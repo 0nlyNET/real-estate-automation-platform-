@@ -1,12 +1,12 @@
 import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import axios from 'axios';
 import * as crypto from 'crypto';
 
 import { Lead } from '../leads/lead.entity';
 import { Message } from './message.entity';
 import { Credential } from '../settings/credential.entity';
+import { sendTwilioSms } from '../../common/providers';
 
 function isV1Encrypted(v: string) {
   return typeof v === 'string' && v.startsWith('v1:');
@@ -121,20 +121,15 @@ export class InboxSendService {
     const saved = await this.messagesRepo.save(msg as any);
 
     try {
-      const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Messages.json`;
-
-      const params = new URLSearchParams();
-      params.set('To', to);
-      params.set('From', fromNumber);
-      params.set('Body', text);
-
-      const resp = await axios.post(url, params.toString(), {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        auth: { username: accountSid, password: authToken },
-        timeout: 20_000,
+      const resp = await sendTwilioSms({
+        accountSid,
+        authToken,
+        to,
+        from: fromNumber,
+        body: text,
       });
 
-      const sid = resp?.data?.sid ? String(resp.data.sid) : undefined;
+      const sid = resp.sid ? String(resp.sid) : undefined;
 
       (saved as any).providerMessageId = sid;
       (saved as any).status = 'sent';
@@ -146,7 +141,7 @@ export class InboxSendService {
       (lead as any).lastContactedAt = new Date();
       await this.leadsRepo.save(lead as any);
 
-      this.logger.log(`Outbound SMS sent. tenant=${tenantId} lead=${lead.id} to=${to} sid=${sid || 'n/a'}`);
+      this.logger.log(`Outbound SMS sent. tenant=${tenantId} lead=${lead.id} sid=${sid || 'n/a'}`);
 
       return {
         status: 'sent',
@@ -162,19 +157,14 @@ export class InboxSendService {
         },
       };
     } catch (e: any) {
-      const errMsg =
-        e?.response?.data?.message ||
-        e?.response?.data?.error ||
-        e?.response?.data?.details ||
-        e?.message ||
-        'Twilio send failed';
+      const errMsg = e?.message || 'Twilio send failed';
 
       (saved as any).status = 'failed';
       (saved as any).attemptCount = ((saved as any).attemptCount || 0) + 1;
       (saved as any).lastError = String(errMsg);
       await this.messagesRepo.save(saved as any);
 
-      this.logger.warn(`Outbound SMS failed. tenant=${tenantId} lead=${lead.id} to=${to} err=${String(errMsg)}`);
+      this.logger.warn(`Outbound SMS failed. tenant=${tenantId} lead=${lead.id} err=${String(errMsg)}`);
 
       return {
         status: 'failed',

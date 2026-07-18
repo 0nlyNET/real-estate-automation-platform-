@@ -5,29 +5,6 @@ import { MarketingHeader } from "@/components/ui/marketing-header"
 import { Footer } from "@/components/ui/footer"
 import { ArrowRight, Target, Heart, Zap } from "lucide-react"
 
-const team = [
-  {
-    name: "Alex Rivera",
-    role: "CEO & Co-founder",
-    image: "/professional-headshot-ceo-male.jpg",
-  },
-  {
-    name: "Sarah Chen",
-    role: "CTO & Co-founder",
-    image: "/professional-headshot-cto-female.jpg",
-  },
-  {
-    name: "Marcus Johnson",
-    role: "Head of Product",
-    image: "/professional-headshot-product-male.jpg",
-  },
-  {
-    name: "Emily Park",
-    role: "Head of Customer Success",
-    image: "/professional-headshot-success-female.jpg",
-  },
-]
-
 const values = [
   {
     icon: Zap,
@@ -59,7 +36,7 @@ export default function AboutPage() {
               About <span className="text-primary">RealtyTechAI</span>
             </h1>
             <p className="mt-6 text-lg text-muted-foreground">
-              We're on a mission to help real estate professionals close more deals with less effort.
+              We build practical lead-response and follow-up tools for real estate professionals.
             </p>
           </div>
         </div>
@@ -72,21 +49,20 @@ export default function AboutPage() {
             <h2 className="text-3xl font-bold text-foreground">Our story</h2>
             <div className="mt-6 space-y-4 text-muted-foreground">
               <p>
-                RealtyTechAI was born from a simple observation: in real estate, the first agent to respond usually wins
-                the deal. Yet most agents were losing leads simply because they couldn't respond fast enough.
+                RealtyTechAI is built around a simple problem: new inquiries arrive while agents are showing homes,
+                meeting clients, and running their business.
               </p>
               <p>
-                Our founders, both coming from real estate families, experienced this problem firsthand. They watched
-                talented agents lose deals to competitors who happened to be near their phone at the right moment.
+                The platform brings lead intake, assignment, messaging, follow-up sequences, and response reporting
+                into one tenant-isolated workspace.
               </p>
               <p>
-                In 2022, they set out to build a solution. Not just another CRM, but a true automation platform that
-                could respond to leads instantly, nurture them automatically, and book appointments without manual
-                intervention.
+                It is designed to help teams respond consistently while keeping people in control of conversations,
+                routing rules, compliance settings, and billing.
               </p>
               <p>
-                Today, RealtyTechAI powers thousands of agents and teams across North America, helping them respond
-                faster, follow up consistently, and close more deals.
+                RealtyTechAI is under active development. Capabilities described on this site reflect the current
+                product; results depend on each team's process, providers, and lead volume.
               </p>
             </div>
           </div>
@@ -113,33 +89,23 @@ export default function AboutPage() {
         </div>
       </section>
 
-      {/* Team */}
+      {/* Product approach */}
       <section className="py-24">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <h2 className="text-center text-3xl font-bold text-foreground">Meet our team</h2>
+          <h2 className="text-center text-3xl font-bold text-foreground">How we build</h2>
           <p className="mx-auto mt-4 max-w-2xl text-center text-muted-foreground">
-            A passionate group of builders, real estate enthusiasts, and automation nerds.
+            We favor clear workflows, tenant-safe data access, honest product claims, and automation that agents can
+            inspect and control.
           </p>
-          <div className="mt-12 grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
-            {team.map((member, index) => (
-              <Card key={index} className="border-border bg-card overflow-hidden">
-                <img src={member.image || "/placeholder.svg"} alt={member.name} className="h-48 w-full object-cover" />
-                <CardContent className="p-4 text-center">
-                  <h3 className="font-semibold text-foreground">{member.name}</h3>
-                  <p className="text-sm text-muted-foreground">{member.role}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
         </div>
       </section>
 
       {/* CTA */}
       <section className="border-t border-border bg-card/50 py-24">
         <div className="mx-auto max-w-7xl px-4 text-center sm:px-6 lg:px-8">
-          <h2 className="text-3xl font-bold text-foreground">Join us on our mission</h2>
+          <h2 className="text-3xl font-bold text-foreground">See whether RealtyTechAI fits your workflow</h2>
           <p className="mx-auto mt-4 max-w-2xl text-muted-foreground">
-            We're always looking for talented people who want to make a difference in real estate tech.
+            Create an account or contact us to discuss your lead sources, team structure, and messaging providers.
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <Button size="lg" asChild className="bg-primary text-primary-foreground hover:bg-primary/90">
@@ -149,7 +115,7 @@ export default function AboutPage() {
               </Link>
             </Button>
             <Button size="lg" variant="outline" asChild>
-              <Link href="/contact">View open positions</Link>
+              <Link href="/contact">Contact us</Link>
             </Button>
           </div>
         </div>

@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Lead } from '../leads/lead.entity';
 import { Message } from '../messaging/message.entity';
 import { User } from '../users/user.entity';
+import { hasAtLeastRole, UserRole } from '../../common/rbac';
 
 @Injectable()
 export class StatsService {
@@ -15,12 +16,17 @@ export class StatsService {
 
 
   async overview(tenantId: string, ctx?: { userId?: string; role?: string }) {
-    const leadsTotal = await this.leads.count({ where: { tenantId } as any });
+    const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role as UserRole, 'admin') : false;
+    const scopedUserId = canSeeAll ? undefined : ctx?.userId;
+    const leadWhere: any = { tenantId };
+    if (scopedUserId) leadWhere.assignedToUserId = scopedUserId;
+    const leadsTotal = await this.leads.count({ where: leadWhere });
 
     const messagesTotal = await this.messages
       .createQueryBuilder('m')
       .leftJoin('m.lead', 'l')
       .where('l.tenantId = :t', { t: tenantId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
       .getCount();
 
     // Avg first response time across leads that have it
@@ -29,6 +35,7 @@ export class StatsService {
       .select('AVG(l.firstResponseTimeSec)', 'avg')
       .addSelect('COUNT(*)', 'count')
       .where('l.tenantId = :t', { t: tenantId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
       .andWhere('l.firstResponseTimeSec IS NOT NULL')
       .getRawOne();
 
@@ -39,6 +46,7 @@ export class StatsService {
     const contacted5 = await this.leads
       .createQueryBuilder('l')
       .where('l.tenantId = :t', { t: tenantId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
       .andWhere('l.firstContactSentAt IS NOT NULL')
       .andWhere("EXTRACT(EPOCH FROM (l.firstContactSentAt - l.createdAt)) <= 300")
       .getCount();
@@ -46,6 +54,7 @@ export class StatsService {
     const contactedSample = await this.leads
       .createQueryBuilder('l')
       .where('l.tenantId = :t', { t: tenantId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
       .andWhere('l.firstContactSentAt IS NOT NULL')
       .getCount();
 
@@ -57,6 +66,7 @@ export class StatsService {
     const appointmentsSet7d = await this.leads
       .createQueryBuilder('l')
       .where('l.tenantId = :t', { t: tenantId })
+      .andWhere(scopedUserId ? 'l.assignedToUserId = :uid' : '1=1', { uid: scopedUserId })
       .andWhere("l.stage = 'appointment_set'")
       .andWhere('l.updatedAt >= :since', { since: since7 })
       .getCount();

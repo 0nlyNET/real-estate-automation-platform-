@@ -1,1 +1,96 @@
-# Real Estate Agent Automation Platform\n\nProduction-ready, multi-tenant automation for speed-to-lead, follow-up, CRM sync, and booking automation.\n\n## Stack\n- Frontend: Next.js (TypeScript)\n- Backend: NestJS (TypeScript)\n- Database: PostgreSQL\n- Queue: Redis + BullMQ\n- Auth: NextAuth (frontend), JWT/RBAC (backend placeholder)\n- SMS: Twilio (stub)\n- Email: SendGrid (stub) + Gmail OAuth placeholder\n- Calendar: Google Calendar integration stub\n- CRM: HubSpot + Follow Up Boss adapters with extensible interface\n- Observability: Sentry, health endpoint, structured logs\n\n## Monorepo\n- `frontend/` Next.js app for onboarding, inbox, reporting\n- `backend/` NestJS API, sequences, CRM connectors\n- `docker-compose.yml` Postgres + Redis + app scaffolding\n\n## Getting started\n1. Copy envs: `cp backend/.env.example backend/.env` and `cp frontend/.env.example frontend/.env`.\n2. Run services: `docker compose up --build`.\n3. Run migrations: `psql -h localhost -U postgres -d real_estate -f backend/migrations/001-init.sql`.\n4. Seed data: `cd backend && npm install && npm run seed`.\n5. Frontend dev: `cd frontend && npm install && npm run dev` (API at `http://localhost:4000/api`).\n\n## API\n- `POST /api/leads/intake/:tenantId` – JSON lead intake, dedupe by email/phone, queues instant SMS/email and sequences.\n- `GET /api/health` – health check.\n\n## Sequences & Messaging\n- Config-driven sequences stored in DB (lead type + temperature).\n- BullMQ queues for instant SMS/email and follow-up steps; worker stub is ready for provider implementations.\n- Opt-out and reply stop are handled by the sequence service hook stubs.\n\n## CRM Connectors\n- Adapters live in `backend/src/modules/crm/`. Implement `syncLead` per provider. Mock implementations log actions for local dev.\n\n## Onboarding & Admin\n- Onboarding checklist UI at `/onboarding`.\n- Inbox UI at `/inbox` with AI suggestion interface stub (`frontend/src/lib/ai/suggestions.ts`).\n- Reporting dashboard at `/reporting`.\n\n## Development notes\n- Entities and migrations define multi-tenant tables with unique constraints per tenant for dedupe.\n- Queue service provides BullMQ setup; extend worker handler for retries and DLQ.\n- Calendar service stub demonstrates booking event creation.\n- Seed script creates demo tenant, admin, and buyer warm sequence.\n\n## Testing\n- Backend unit tests: `cd backend && npm test` (sample coverage for lead intake dedupe).\n\n## Adding a new CRM connector\n1. Create an adapter implementing `syncLead` in `backend/src/modules/crm/`.\n2. Register it in `CrmService.adapters` map.\n3. Add configuration/env keys and wiring to call adapter on lead events.\n\n## Onboarding a tenant\n- Create tenant with timezone and quiet hours.\n- Connect Twilio/SendGrid/Calendar/CRM via credentials table (encrypted at rest in production via KMS).\n- Define sequences per lead type + temperature.\n- Configure lead routing rules and invite agents with roles (admin, agent, team_lead).\n\n## Reliability & Security\n- Health checks via Terminus.\n- Input validation via class-validator DTOs.\n- Sentry integration hook in `src/main.ts`.\n- TODO: add webhook signing, encryption for credentials, RBAC guards, and audit log triggers.\n*** End Patch"ưở to=functions.apply_patch code## Commentрисида JSON Multi കൊണ്ട!]]## JSON Hjson]])
+# RealtyTechAI
+
+RealtyTechAI is a multi-tenant lead-response and follow-up platform for real estate teams. The repository contains a Next.js web application and a NestJS/PostgreSQL API.
+
+## What is implemented
+
+- Tenant-scoped leads, users, teams, assignments, messaging, and reporting
+- JWT authentication, verified accounts, password reset, role checks, and platform-admin allow-listing
+- SMS/email provider credentials encrypted at rest
+- Twilio inbound signature verification, opt-outs, quiet hours, and follow-up sequence controls
+- Stripe-hosted checkout, billing portal, and subscription webhooks
+- Teams-plan routing with fixed-user and round-robin actions
+- Public inquiry and protected lead-intake endpoints with validation and rate limits
+
+Provider accounts and production infrastructure are not included. Results, uptime, certifications, and legal compliance depend on the deployment and operating process.
+
+## Repository layout
+
+- `frontend/` — Next.js 16 application, including the tenant and platform-admin interfaces
+- `backend/` — NestJS 11 API and TypeORM entities
+- `docker-compose.yml` — local PostgreSQL, API, and web stack
+- `.github/workflows/ci.yml` — build, test, and dependency-audit checks
+- `admin-ui/` — archived prototype; the active admin interface is in `frontend/app/admin`
+
+## Run locally with Docker
+
+Requirements: Docker with Compose.
+
+1. Create a root `.env` with at least:
+
+   ```dotenv
+   JWT_SECRET=replace-with-at-least-32-random-characters
+   INTEGRATIONS_ENCRYPTION_KEY=replace-with-base64-of-32-random-bytes
+   ```
+
+   Generate values with `openssl rand -hex 32` and `openssl rand -base64 32`.
+
+2. Start the stack:
+
+   ```bash
+   docker compose up --build
+   ```
+
+3. Open `http://localhost:3000`. The API health endpoint is `http://localhost:4000/health`.
+
+To create the first verified owner, add `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` to the root `.env`, then run `docker compose exec backend npm run seed`. Add the same email to `PLATFORM_ADMIN_EMAILS` only if that account should manage every tenant.
+
+The local Compose stack enables TypeORM schema synchronization for an empty development database. Do not enable `TYPEORM_SYNC` in production.
+
+## Run without Docker
+
+Requirements: Node.js 22 and PostgreSQL 15 or newer.
+
+```bash
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env.local
+
+cd backend
+npm ci
+npm run build
+npm run start:dev
+```
+
+In another terminal:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+For a fresh local database, temporarily set `TYPEORM_SYNC=true`. Use reviewed migrations for production schema changes.
+
+After building the backend, `npm run seed` creates the initial verified owner from the explicit `SEED_ADMIN_*` environment values.
+
+## Production configuration
+
+See `backend/.env.example` and `frontend/.env.example`. At minimum, configure:
+
+- a strong `JWT_SECRET` and comma-separated `PLATFORM_ADMIN_EMAILS`
+- PostgreSQL through `DATABASE_URL`
+- a 32-byte `INTEGRATIONS_ENCRYPTION_KEY`
+- `FRONTEND_URL`, `NEXT_PUBLIC_API_URL`, and the exact public `TWILIO_WEBHOOK_URL`
+- SendGrid, Twilio, Stripe, and Facebook values only for integrations you enable
+- `SALES_INBOX_EMAIL` for public contact/application delivery
+
+Terminate HTTPS at the hosting platform, restrict database access, run migrations as a release step, and configure backups, logs, alerts, and secret rotation before handling customer data.
+
+## Validation
+
+```bash
+cd backend && npm test && npm run build
+cd frontend && npm run build
+```
+
+GitHub stores and validates the source but does not host this full-stack application through GitHub Pages. Deploy `frontend/` and `backend/` to suitable application hosts and attach a managed PostgreSQL database.

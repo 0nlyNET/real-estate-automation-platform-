@@ -12,7 +12,7 @@ export class SequenceEnrollment extends BaseEntity {
   lead!: Lead;
 
   @Column({ default: 'active' })
-  status!: 'active' | 'completed' | 'stopped';
+  status!: 'active' | 'paused' | 'completed' | 'stopped';
 
   @Column({ name: 'current_step_index', type: 'int', default: 0 })
   currentStepIndex!: number;
@@ -21,5 +21,5 @@ export class SequenceEnrollment extends BaseEntity {
   nextRunAt?: Date;
 
   @Column({ name: 'stopped_reason', type: 'varchar', nullable: true })
-  stoppedReason?: 'reply' | 'manual' | 'other';
+  stoppedReason?: 'reply' | 'manual' | 'other' | 'opt_out';
 }

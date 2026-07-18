@@ -10,11 +10,13 @@ import { User } from '../users/user.entity';
 import { Lead } from '../leads/lead.entity';
 import { Message } from '../messaging/message.entity';
 import { Credential } from '../settings/credential.entity';
+import { CommonModule } from '../../common/common.module';
 
 @Module({
   imports: [
     AuthModule,
     TypeOrmModule.forFeature([Tenant, User, Lead, Message, Credential]),
+    CommonModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],

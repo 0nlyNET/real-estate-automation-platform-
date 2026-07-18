@@ -5,6 +5,7 @@ import { UsersService } from './users.service';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
 import { UserRole, canManageUsers } from '../../common/rbac';
+import { CreateTeamUserDto, UpdateUserActiveDto, UpdateUserRoleDto, UpdateUserTeamDto } from './users.dto';
 
 function randomTempPassword() {
   return `Temp-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -48,7 +49,7 @@ export class UsersController {
   @RequireTeamsPlan()
   @RequireRole('admin')
   @Post()
-  async create(@Req() req: any, @Body() body: any) {
+  async create(@Req() req: any, @Body() body: CreateTeamUserDto) {
     const tenantId = req.user?.tenantId;
     const tenant = await this.tenants.findById(tenantId);
     if (!tenant) throw new BadRequestException('Tenant not found');
@@ -84,29 +85,29 @@ export class UsersController {
   @RequireTeamsPlan()
   @RequireRole('admin')
   @Patch(':id/role')
-  async updateRole(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+  async updateRole(@Req() req: any, @Param('id') id: string, @Body() body: UpdateUserRoleDto) {
     const tenantId = req.user?.tenantId;
     const role = (body?.role || 'agent') as UserRole;
-    return await this.users.updateRole(tenantId, id, role);
+    return this.users.updateRole(tenantId, id, role, { userId: req.user?.sub, role: req.user?.role });
   }
 
   @UseGuards(TeamsPlanGuard)
   @RequireTeamsPlan()
   @RequireRole('admin')
   @Patch(':id/team')
-  async updateTeam(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+  async updateTeam(@Req() req: any, @Param('id') id: string, @Body() body: UpdateUserTeamDto) {
     const tenantId = req.user?.tenantId;
     const teamId = body?.teamId ? String(body.teamId) : null;
-    return await this.users.updateTeam(tenantId, id, teamId);
+    return this.users.updateTeam(tenantId, id, teamId, { userId: req.user?.sub, role: req.user?.role });
   }
 
   @UseGuards(TeamsPlanGuard)
   @RequireTeamsPlan()
   @RequireRole('admin')
   @Patch(':id/active')
-  async setActive(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+  async setActive(@Req() req: any, @Param('id') id: string, @Body() body: UpdateUserActiveDto) {
     const tenantId = req.user?.tenantId;
     const isActive = !!body?.isActive;
-    return await this.users.setActive(tenantId, id, isActive);
+    return this.users.setActive(tenantId, id, isActive, { userId: req.user?.sub, role: req.user?.role });
   }
 }

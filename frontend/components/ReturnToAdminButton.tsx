@@ -15,11 +15,12 @@ export function ReturnToAdminButton() {
 
   function restore() {
     try {
+      if (!raw) return
       const snap = JSON.parse(raw)
       if (!snap?.token || !snap?.user) return
 
       localStorage.setItem("rta_token", snap.token)
-      localStorage.setItem("rta_user", snap.user)
+      localStorage.setItem("rta_user", typeof snap.user === "string" ? snap.user : JSON.stringify(snap.user))
       setAuthCookie(snap.token)
 
       // optional: keep snapshot so you can go back/forth, or remove it

@@ -23,15 +23,18 @@ type Rule = {
   actionConfig: any
 }
 
+type Team = { id: string; name: string }
+type User = { id: string; email: string; teamId?: string | null; isActive?: boolean }
+
 export default function RoutingPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
   const [hasTeams, setHasTeams] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
-  const [tenantId, setTenantId] = useState<string | null>(null)
-
   const [rules, setRules] = useState<Rule[]>([])
+  const [teams, setTeams] = useState<Team[]>([])
+  const [users, setUsers] = useState<User[]>([])
 
   const [name, setName] = useState("")
   const [priority, setPriority] = useState("100")
@@ -51,14 +54,19 @@ export default function RoutingPage() {
         const { me, planName } = await fetchMeWithPlan()
         if (!mounted) return
 
-        setTenantId(me?.tenantId || null)
         setHasTeams(canUseTeams(planName))
         setIsAdmin(isAdminRole(me?.role))
 
         if (!canUseTeams(planName)) return
 
-        const rs = await apiFetch("/routing/rules")
+        const [rs, teamRows, userRows] = await Promise.all([
+          apiFetch("/routing/rules"),
+          apiFetch<Team[]>("/teams"),
+          apiFetch<User[]>("/users"),
+        ])
         setRules(Array.isArray(rs) ? rs : (rs?.items || []))
+        setTeams(Array.isArray(teamRows) ? teamRows : [])
+        setUsers(Array.isArray(userRows) ? userRows.filter((user) => user.isActive !== false) : [])
       } catch (e: any) {
         if (!mounted) return
         setErr(e?.message || "Failed to load routing")
@@ -183,9 +191,19 @@ export default function RoutingPage() {
                 </Select>
 
                 {actionType === "round_robin_team" ? (
-                  <Input value={teamId} onChange={(e) => setTeamId(e.target.value)} placeholder="teamId (wire selector later)" />
+                  <Select value={teamId} onValueChange={setTeamId}>
+                    <SelectTrigger><SelectValue placeholder="Choose a team" /></SelectTrigger>
+                    <SelectContent>
+                      {teams.map((team) => <SelectItem key={team.id} value={team.id}>{team.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 ) : (
-                  <Input value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="userId (wire selector later)" />
+                  <Select value={userId} onValueChange={setUserId}>
+                    <SelectTrigger><SelectValue placeholder="Choose a user" /></SelectTrigger>
+                    <SelectContent>
+                      {users.map((user) => <SelectItem key={user.id} value={user.id}>{user.email}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 )}
 
                 <div className="flex items-center gap-2">

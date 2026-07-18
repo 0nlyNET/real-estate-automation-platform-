@@ -44,7 +44,7 @@ function encryptJson(obj: any): string {
   return `v1:${iv.toString('base64')}:${tag.toString('base64')}:${ciphertext.toString('base64')}`;
 }
 
-function decryptToJson(value: string | null | undefined): any {
+export function decryptIntegrationPayload(value: string | null | undefined): any {
   if (!value) return null;
 
   // Backward compatible: older rows stored plain JSON
@@ -105,7 +105,7 @@ export class IntegrationsService {
   private async getPayload(tenantId: string, provider: IntegrationProvider): Promise<any | null> {
     const row = await this.getRow(tenantId, provider);
     if (!row) return null;
-    return decryptToJson(row.encryptedValue);
+    return decryptIntegrationPayload(row.encryptedValue);
   }
 
   private async upsertEncrypted(tenantId: string, provider: IntegrationProvider, payload: any) {
@@ -149,7 +149,7 @@ export class IntegrationsService {
 
     return providers.map((provider) => {
       const row = byProvider.get(provider);
-      const parsed = row ? decryptToJson(row.encryptedValue) : null;
+      const parsed = row ? decryptIntegrationPayload(row.encryptedValue) : null;
       const connected = Boolean(parsed && parsed.connected);
 
       // Return safe display metadata only (never secrets)
@@ -441,7 +441,8 @@ export class IntegrationsService {
       const tenantId = state.split('.')[0];
 
       const existing = await this.getPayload(tenantId, 'facebook_lead_ads');
-      if (!existing?.pendingState || existing.pendingState !== state) {
+      const pendingAt = existing?.pendingStateAt ? new Date(existing.pendingStateAt).getTime() : 0;
+      if (!existing?.pendingState || existing.pendingState !== state || Date.now() - pendingAt > 10 * 60 * 1000) {
         return { ok: false, error: 'Facebook state mismatch. Please retry connect.' };
       }
 
@@ -501,10 +502,4 @@ export class IntegrationsService {
     return { ok: true };
   }
 
-  async fireWebhook(tenantId: string, event: string, payload: Record<string, any>): Promise<void> {
-    void tenantId;
-    void event;
-    void payload;
-    return;
-  }
 }

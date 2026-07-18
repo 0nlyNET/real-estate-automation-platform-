@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import Stripe from 'stripe';
 import { TenantsService } from '../tenants/tenants.service';
+import { mapStripeStatusToTenantStatus } from '../tenants/stripe-billing-update';
 
 @Injectable()
 export class BillingService {
@@ -8,7 +9,14 @@ export class BillingService {
 
   constructor(private readonly tenants: TenantsService) {
     const key = process.env.STRIPE_SECRET_KEY || '';
-    this.stripe = new Stripe(key, { apiVersion: '2024-06-20' as any });
+    this.stripe = new Stripe(key);
+  }
+
+  private subscriptionPeriodEnd(subscription: Stripe.Subscription) {
+    const periodEnds = subscription.items.data
+      .map((item) => item.current_period_end)
+      .filter((value): value is number => Number.isFinite(value));
+    return periodEnds.length ? new Date(Math.max(...periodEnds) * 1000) : null;
   }
 
   private requireStripe() {
@@ -95,10 +103,9 @@ export class BillingService {
 
     const secret = process.env.STRIPE_WEBHOOK_SECRET || '';
     if (!secret) throw new BadRequestException('STRIPE_WEBHOOK_SECRET missing');
+    if (!rawBody) throw new BadRequestException('Stripe webhook raw body is unavailable');
 
     const event = this.stripe.webhooks.constructEvent(rawBody, signature, secret);
-
-    console.log("[stripe] event:", event.type);
 
     switch (event.type) {
       case 'checkout.session.completed': {
@@ -108,21 +115,44 @@ export class BillingService {
         if (tenantId && subscriptionId) {
           const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
           const plan = (subscription.metadata?.plan as any) || (session.metadata?.plan as any) || 'pro';
-          const currentPeriodEnd = subscription.current_period_end ? new Date(subscription.current_period_end * 1000) : null;
-          await this.tenants.setPlan(tenantId, plan === 'teams' ? 'teams' : 'pro', subscription.status, currentPeriodEnd, subscription.id);
+          const currentPeriodEnd = this.subscriptionPeriodEnd(subscription);
+          await this.tenants.setPlan(tenantId, plan === 'teams' ? 'teams' : 'pro', mapStripeStatusToTenantStatus(subscription.status), currentPeriodEnd, subscription.id);
         }
         break;
       }
 
+      case 'customer.subscription.created':
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted': {
         const sub = event.data.object as Stripe.Subscription;
         const tenantId = (sub.metadata?.tenantId || '').toString();
         if (tenantId) {
           const plan = (sub.metadata?.plan as any) || 'pro';
-          const currentPeriodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000) : null;
-          const status = sub.status;
-          await this.tenants.setPlan(tenantId, plan === 'teams' ? 'teams' : 'pro', status, currentPeriodEnd, sub.id);
+          const currentPeriodEnd = this.subscriptionPeriodEnd(sub);
+          const deleted = event.type === 'customer.subscription.deleted';
+          await this.tenants.setPlan(
+            tenantId,
+            deleted ? 'free' : plan === 'teams' ? 'teams' : 'pro',
+            deleted ? 'canceled' : mapStripeStatusToTenantStatus(sub.status),
+            currentPeriodEnd,
+            deleted ? null : sub.id,
+          );
+        }
+        break;
+      }
+
+      case 'invoice.payment_failed':
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const subscriptionRef = (invoice as any).subscription;
+        const subscriptionId = typeof subscriptionRef === 'string' ? subscriptionRef : subscriptionRef?.id;
+        if (subscriptionId) {
+          const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+          const tenantId = String(subscription.metadata?.tenantId || '');
+          if (tenantId) {
+            if (event.type === 'invoice.payment_failed') await this.tenants.setPastDue(tenantId);
+            else await this.tenants.setActive(tenantId);
+          }
         }
         break;
       }

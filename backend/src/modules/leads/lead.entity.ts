@@ -1,4 +1,4 @@
-import { Column, Entity, Index, ManyToOne, OneToMany } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { BaseEntity } from '../../common/base.entity';
 import { Tenant } from '../tenants/tenant.entity';
 import { Message } from '../messaging/message.entity';
@@ -114,18 +114,21 @@ export class Lead extends BaseEntity {
   assignedToUserId?: string | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'assigned_to_user_id' })
   assignedToUser?: User | null;
 
   @Column({ name: 'assigned_to_team_id', type: 'uuid', nullable: true })
   assignedToTeamId?: string | null;
 
   @ManyToOne(() => Team, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'assigned_to_team_id' })
   assignedToTeam?: Team | null;
 
   @Column({ name: 'sequence_status', default: 'idle' })
   sequenceStatus!: 'idle' | 'active' | 'stopped';
 
   @ManyToOne(() => Tenant, (tenant) => tenant.leads)
+  @JoinColumn({ name: 'tenant_id' })
   tenant!: Tenant;
 
   @Column({ name: 'tenant_id', type: 'uuid' })

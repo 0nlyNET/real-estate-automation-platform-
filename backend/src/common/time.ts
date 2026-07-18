@@ -63,6 +63,11 @@ export function minutesSinceMidnight(h: number, m: number): number {
   return h * 60 + m;
 }
 
+export function formatHHMM(totalMinutes: number): string {
+  const normalized = Math.max(0, Math.min(1439, Math.trunc(totalMinutes)));
+  return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
+}
+
 export function isWithinQuietHours(opts: {
   now: Date;
   timeZone: string;

@@ -109,9 +109,9 @@ export default function ResultsPage() {
             "Track conversations in one place",
           ]}
           stats={[
-            { value: "5x", label: "Faster response time" },
-            { value: "40%", label: "More appointments booked" },
-            { value: "12hrs", label: "Saved per week" },
+            { value: "24/7", label: "Lead intake window" },
+            { value: "1", label: "Conversation workspace" },
+            { value: "Auto", label: "Follow-up scheduling" },
           ]}
         />
 
@@ -127,9 +127,9 @@ export default function ResultsPage() {
             "Manager override and reassignment",
           ]}
           stats={[
-            { value: "2x", label: "Team productivity" },
-            { value: "60%", label: "Faster lead assignment" },
-            { value: "35%", label: "Higher conversion" },
+            { value: "Rules", label: "Configurable routing" },
+            { value: "Roles", label: "Scoped permissions" },
+            { value: "Teams", label: "Shared assignment" },
           ]}
         />
 
@@ -140,14 +140,14 @@ export default function ResultsPage() {
           body="Brokerages need compliance, visibility, and consistency across multiple teams. RealtyTechAI supports multi-team operations with centralized control."
           bullets={[
             "Multi-team management",
-            "Custom branding and white-labeling",
-            "Compliance and audit trails",
-            "API access and custom integrations",
+            "Role-aware user management",
+            "Messaging consent and quiet-hours controls",
+            "Saved provider integrations",
           ]}
           stats={[
-            { value: "100+", label: "Agents supported" },
-            { value: "99.9%", label: "Uptime SLA" },
-            { value: "24/7", label: "Priority support" },
+            { value: "Multi", label: "Tenant architecture" },
+            { value: "Scoped", label: "Data access" },
+            { value: "Admin", label: "Central controls" },
           ]}
         />
       </div>

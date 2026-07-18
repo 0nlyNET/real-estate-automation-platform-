@@ -3,6 +3,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
 import { TeamsService } from './teams.service';
+import { TeamNameDto } from './teams.dto';
 
 @UseGuards(JwtAuthGuard, TeamsPlanGuard, RolesGuard)
 @RequireTeamsPlan()
@@ -18,14 +19,14 @@ export class TeamsController {
 
   @RequireRole('admin')
   @Post()
-  async create(@Req() req: any, @Body() body: any) {
+  async create(@Req() req: any, @Body() body: TeamNameDto) {
     const tenantId = req.user?.tenantId;
     return await this.teams.create(tenantId, body?.name);
   }
 
   @RequireRole('admin')
   @Patch(':teamId')
-  async rename(@Req() req: any, @Param('teamId') teamId: string, @Body() body: any) {
+  async rename(@Req() req: any, @Param('teamId') teamId: string, @Body() body: TeamNameDto) {
     const tenantId = req.user?.tenantId;
     return await this.teams.rename(tenantId, teamId, body?.name);
   }

@@ -1,8 +1,12 @@
-import { Body, Controller, Delete, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RoutingService } from './routing.service';
+import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
+import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
+import { UpsertRoutingRuleDto } from './routing.dto';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TeamsPlanGuard, RolesGuard)
+@RequireTeamsPlan()
 @Controller('routing')
 export class RoutingController {
   constructor(private readonly routing: RoutingService) {}
@@ -13,12 +17,14 @@ export class RoutingController {
   }
 
   @Post('rules')
-  async upsert(@Req() req: any, @Body() body: any) {
-    return this.routing.upsertRule(req.user?.tenantId, body?.rule);
+  @RequireRole('admin')
+  async upsert(@Req() req: any, @Body() body: UpsertRoutingRuleDto) {
+    return this.routing.upsertRule(req.user?.tenantId, body.rule);
   }
 
-  @Delete('rules')
-  async del(@Req() req: any, @Body() body: any) {
-    return this.routing.deleteRule(req.user?.tenantId, body?.id);
+  @Delete('rules/:id')
+  @RequireRole('admin')
+  async del(@Req() req: any, @Param('id') id: string) {
+    return this.routing.deleteRule(req.user?.tenantId, id);
   }
 }
