@@ -6,6 +6,7 @@ import { TenantSettings } from "./tenant-settings.entity";
 import { Team } from "../teams/team.entity";
 import { TenantQuietHours } from "../compliance/tenant-quiet-hours.entity";
 import { parseHHMM } from "../../common/time";
+import { EntitlementService } from "../entitlements/entitlement.service";
 
 @Injectable()
 export class SettingsService {
@@ -15,6 +16,7 @@ export class SettingsService {
     @InjectRepository(Team) private readonly teamsRepo: Repository<Team>,
     @InjectRepository(TenantQuietHours)
     private readonly quietHoursRepo: Repository<TenantQuietHours>,
+    private readonly entitlements: EntitlementService,
   ) {}
 
   private async findByTenantId(tenantId: string) {
@@ -39,7 +41,7 @@ export class SettingsService {
       if ("quietHoursEnd" in settings)
         (settings as any).quietHoursEnd = "08:00";
       if ("automationsEnabled" in settings)
-        (settings as any).automationsEnabled = true;
+        (settings as any).automationsEnabled = false;
 
       // bookingLink: do not set to null. If it exists, set to empty string.
       if ("bookingLink" in settings && (settings as any).bookingLink == null) {
@@ -123,6 +125,10 @@ export class SettingsService {
     }>,
   ) {
     const current = await this.getTenantSettingsEntity(tenantId);
+
+    if (updates.automationsEnabled === true) {
+      await this.entitlements.assertAllowed(tenantId, "enable_automation");
+    }
 
     if (updates.roundRobinTeamId) {
       const team = await this.teamsRepo.findOne({

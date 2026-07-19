@@ -11,7 +11,6 @@ import { Lead } from '../leads/lead.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity'; // ADD THIS
 import { SequencesController } from './sequences.controller';
 import { ComplianceModule } from '../compliance/compliance.module';
-import { CommonModule } from '../../common/common.module';
 
 @Module({
   imports: [
@@ -26,7 +25,6 @@ import { CommonModule } from '../../common/common.module';
       TenantSettings, // ADD THIS
     ]),
     ComplianceModule,
-    CommonModule,
   ],
   controllers: [SequencesController],
   providers: [SequencesService],

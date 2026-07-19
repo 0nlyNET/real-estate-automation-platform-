@@ -100,8 +100,8 @@ export default function SecurityPage() {
             <div>
               <h3 className="text-lg font-semibold text-foreground">Authentication & Access</h3>
               <p className="mt-2">
-                The application uses signed JWTs, verified email accounts, strong password requirements, and
-                server-side role checks. MFA and SSO are not currently included.
+                The application uses signed, revocable sessions in HttpOnly cookies, verified email accounts, strong
+                password requirements, and server-side role checks. MFA and SSO are not currently included.
               </p>
             </div>
 

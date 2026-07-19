@@ -8,14 +8,24 @@ import {
   Param,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthService } from '../auth/auth.service';
 import { AdminService } from './admin.service';
 import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
 import { CreateClientDto, ImpersonateDto } from './admin.dto';
 import { AuditService } from '../audit/audit.service';
+import { OnboardingService } from '../onboarding/onboarding.service';
+import { OperatorOnboardingEvidenceDto } from '../onboarding/onboarding.dto';
+import {
+  PRIMARY_SESSION_COOKIE,
+  readCookie,
+  SESSION_COOKIE,
+  setSessionCookie,
+} from '../auth/session-cookie';
 
 @UseGuards(JwtAuthGuard, PlatformAdminGuard)
 @Controller('admin')
@@ -24,11 +34,40 @@ export class AdminController {
     private readonly admin: AdminService,
     private readonly auth: AuthService,
     private readonly audit: AuditService,
+    private readonly onboarding: OnboardingService,
   ) {}
 
   @Get('overview')
   async overview() {
     return this.admin.overview();
+  }
+
+  @Get('tenants/:tenantId/readiness')
+  readiness(@Param('tenantId') tenantId: string) {
+    return this.onboarding.readiness(tenantId);
+  }
+
+  @Post('tenants/:tenantId/onboarding-evidence')
+  onboardingEvidence(
+    @Param('tenantId') tenantId: string,
+    @Body() body: OperatorOnboardingEvidenceDto,
+    @Req() req: any,
+  ) {
+    return this.onboarding.recordOperatorEvidence(
+      tenantId,
+      body,
+      req.user.sub,
+    );
+  }
+
+  @Post('tenants/:tenantId/activate')
+  activate(@Param('tenantId') tenantId: string, @Req() req: any) {
+    return this.onboarding.activate(tenantId, req.user.sub);
+  }
+
+  @Post('tenants/:tenantId/pause')
+  pause(@Param('tenantId') tenantId: string) {
+    return this.onboarding.pause(tenantId);
   }
 
   @Get('system-health')
@@ -87,7 +126,11 @@ export class AdminController {
   }
 
   @Post('impersonate')
-  async impersonate(@Body() body: ImpersonateDto, @Req() req: any) {
+  async impersonate(
+    @Body() body: ImpersonateDto,
+    @Req() req: Request & { user?: any },
+    @Res({ passthrough: true }) response: Response,
+  ) {
     const userId = String(body?.userId || '').trim();
     if (!userId) throw new BadRequestException('Missing userId');
 
@@ -103,6 +146,11 @@ export class AdminController {
       id: actorId,
       email: actorEmail,
     });
+    const primary =
+      readCookie(req, PRIMARY_SESSION_COOKIE) || readCookie(req, SESSION_COOKIE);
+    if (!primary) throw new ForbiddenException('Primary admin session is unavailable');
+    setSessionCookie(response, primary, PRIMARY_SESSION_COOKIE);
+    setSessionCookie(response, token, SESSION_COOKIE, 15 * 60 * 1000);
 
     await this.audit.record({
       tenantId: target.tenantId,
@@ -119,7 +167,6 @@ export class AdminController {
     });
 
     return {
-      accessToken: token,
       user: {
         id: target.id,
         email: target.email,

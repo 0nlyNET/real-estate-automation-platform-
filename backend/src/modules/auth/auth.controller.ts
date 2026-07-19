@@ -1,7 +1,10 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { Throttle } from '@nestjs/throttler';
-import { ForgotPasswordDto, LoginDto, ResetPasswordDto, VerifyEmailDto } from './auth.dto';
+import { ChangeTemporaryPasswordDto, ForgotPasswordDto, LoginDto, ResetPasswordDto, VerifyEmailDto } from './auth.dto';
+import { JwtAuthGuard } from './jwt-auth.guard';
+import { clearSessionCookie, PRIMARY_SESSION_COOKIE, readCookie, SESSION_COOKIE, setSessionCookie } from './session-cookie';
 
 @Controller('auth')
 export class AuthController {
@@ -9,8 +12,51 @@ export class AuthController {
 
   @Post('login')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  async login(@Body() dto: LoginDto) {
-    return await this.auth.login(dto.email, dto.password);
+  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) response: Response) {
+    const result = await this.auth.login(dto.email, dto.password);
+    setSessionCookie(response, result.accessToken);
+    clearSessionCookie(response, PRIMARY_SESSION_COOKIE);
+    return { user: result.user };
+  }
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  async logout(
+    @Req() request: Request & { user?: { sub?: string; impersonatedBy?: unknown } },
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    if (request.user?.sub && !request.user.impersonatedBy) {
+      await this.auth.revokeSession(request.user.sub);
+    }
+    clearSessionCookie(response);
+    clearSessionCookie(response, PRIMARY_SESSION_COOKIE);
+    return { ok: true };
+  }
+
+  @Post('stop-impersonation')
+  @UseGuards(JwtAuthGuard)
+  stopImpersonation(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const primary = readCookie(request, PRIMARY_SESSION_COOKIE);
+    if (!primary) {
+      clearSessionCookie(response);
+      return { ok: false, restored: false };
+    }
+    setSessionCookie(response, primary, SESSION_COOKIE);
+    clearSessionCookie(response, PRIMARY_SESSION_COOKIE);
+    return { ok: true, restored: true };
+  }
+
+  @Post('change-temporary-password')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  changeTemporaryPassword(@Body() dto: ChangeTemporaryPasswordDto) {
+    return this.auth.changeTemporaryPassword(
+      dto.email,
+      dto.temporaryPassword,
+      dto.newPassword,
+    );
   }
 
   @Post('verify-email')

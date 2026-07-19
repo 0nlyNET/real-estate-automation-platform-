@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
 
 type SequenceSummary = { id: string; name: string; active: boolean; leadType?: string; temperature?: string; stepsCount: number }
-type SequenceDetail = SequenceSummary & { description?: string; steps: Array<{ id: string; channel: "sms" | "email"; template: string; offsetMinutes: number }> }
+type SequenceDetail = SequenceSummary & { description?: string; steps: Array<{ id: string; channel: "sms" | "email"; template: string; offsetMinutes: number; approvalStatus: "draft" | "approved" | "rejected"; identityLabel?: string | null; templateVersion: number }> }
 type LeadType = "buyer" | "seller" | "investor" | "renter"
 type Temperature = "hot" | "warm" | "cold"
 
@@ -22,6 +22,7 @@ export default function AutomationsPage() {
   const [channel, setChannel] = useState<"sms" | "email">("sms")
   const [offset, setOffset] = useState("0")
   const [template, setTemplate] = useState("")
+  const [identityLabel, setIdentityLabel] = useState("")
   const [error, setError] = useState("")
 
   async function refresh() {
@@ -40,7 +41,7 @@ export default function AutomationsPage() {
       setError("")
       const result = await apiFetch<{ id: string }>("/sequences", {
         method: "POST",
-        body: { name: name.trim(), leadType, temperature, active: true },
+        body: { name: name.trim(), leadType, temperature, active: false },
       })
       setName("")
       await refresh()
@@ -61,13 +62,28 @@ export default function AutomationsPage() {
     try {
       await apiFetch(`/sequences/${selected.id}/steps`, {
         method: "POST",
-        body: { channel, template: template.trim(), offsetMinutes: Number(offset) },
+        body: { channel, template: template.trim(), offsetMinutes: Number(offset), identityLabel: identityLabel.trim() },
       })
       setTemplate("")
       setOffset("0")
+      setIdentityLabel("")
       await open(selected.id)
       await refresh()
     } catch (e: any) { setError(e?.message || "Failed to add step") }
+  }
+
+  async function approveStep(stepId: string, currentIdentity?: string | null) {
+    if (!selected) return
+    const identity = window.prompt("Confirm the sender identity exactly as it appears in this template", currentIdentity || identityLabel)
+    if (!identity) return
+    try {
+      await apiFetch(`/sequences/${selected.id}/steps/${stepId}/approve`, {
+        method: "POST",
+        body: { identityLabel: identity },
+      })
+      await open(selected.id)
+      await refresh()
+    } catch (e: any) { setError(e?.message || "Template approval failed") }
   }
 
   async function removeStep(stepId: string) {
@@ -80,7 +96,7 @@ export default function AutomationsPage() {
   }
 
   return (
-    <PageShell title="Automations" subtitle="Build linear SMS and email follow-up sequences.">
+    <PageShell title="Automations" subtitle="Build, review, and explicitly approve SMS and email follow-up sequences.">
       {error ? <div className="text-sm text-red-500">{error}</div> : null}
       <Card>
         <CardHeader><CardTitle>Create automation</CardTitle></CardHeader>
@@ -122,8 +138,11 @@ export default function AutomationsPage() {
                   {selected.steps.map((step) => (
                     <div key={step.id} className="rounded border p-3 text-sm">
                       <div className="flex justify-between gap-2">
-                        <span className="font-medium">{step.channel.toUpperCase()} after {step.offsetMinutes} minutes</span>
-                        <Button size="sm" variant="destructive" onClick={() => removeStep(step.id)}>Remove</Button>
+                        <span className="font-medium">{step.channel.toUpperCase()} after {step.offsetMinutes} minutes · {step.approvalStatus} · v{step.templateVersion}</span>
+                        <div className="flex gap-2">
+                          {step.approvalStatus !== "approved" ? <Button size="sm" variant="outline" onClick={() => approveStep(step.id, step.identityLabel)}>Approve</Button> : null}
+                          <Button size="sm" variant="destructive" onClick={() => removeStep(step.id)}>Remove</Button>
+                        </div>
                       </div>
                       <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{step.template}</p>
                     </div>
@@ -137,6 +156,8 @@ export default function AutomationsPage() {
                     <Input type="number" min="0" value={offset} onChange={(e) => setOffset(e.target.value)} placeholder="Delay in minutes" />
                   </div>
                   <Textarea value={template} onChange={(e) => setTemplate(e.target.value)} placeholder="Hi {{leadName}}, when can we talk?" />
+                  <Input value={identityLabel} onChange={(e) => setIdentityLabel(e.target.value)} placeholder="Sender identity exactly used in the message" />
+                  <p className="text-xs text-muted-foreground">SMS must identify the sender and include STOP language. Email must identify the sender and include {"{{unsubscribeUrl}}"}. New or edited content remains inactive until approved.</p>
                   <Button disabled={!template.trim()} onClick={addStep}>Add step</Button>
                 </div>
               </>

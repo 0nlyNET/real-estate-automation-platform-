@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
@@ -10,6 +10,7 @@ import { User } from '../users/user.entity';
 import { PasswordResetToken } from './password-reset-token.entity';
 import { isPlatformAdminEmail } from '../../common/env';
 import { MailService } from '../../mail/mail.service';
+import { OperationsService } from '../operations/operations.service';
 
 @Injectable()
 export class AuthService {
@@ -19,6 +20,7 @@ export class AuthService {
     @InjectRepository(PasswordResetToken)
     private readonly passwordResetRepo: Repository<PasswordResetToken>,
     private readonly mail: MailService,
+    private readonly operations: OperationsService,
   ) {}
 
   signForUser(user: User) {
@@ -28,6 +30,7 @@ export class AuthService {
       role: user.role,
       tenantId: user.tenantId,
       platformAdmin: isPlatformAdminEmail(user.email),
+      sessionVersion: user.sessionVersion,
     };
     return this.jwtService.sign(payload);
   }
@@ -46,6 +49,7 @@ export class AuthService {
         userId: actor.id,
         email: actor.email,
       },
+      sessionVersion: user.sessionVersion,
     };
     return this.jwtService.sign(payload, { expiresIn: '15m' });
   }
@@ -70,6 +74,16 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    if (user.mustChangePassword) {
+      throw new ForbiddenException({
+        code: 'PASSWORD_CHANGE_REQUIRED',
+        message: 'Change the temporary password before signing in.',
+      });
+    }
+
+    user.lastLoginAt = new Date();
+    await this.usersService.save(user);
+
     return {
       accessToken: this.signForUser(user),
       user: {
@@ -84,6 +98,24 @@ export class AuthService {
 
   async verifyEmail(token: string) {
     const user = await this.usersService.verifyEmail(token);
+    const claimedAt = await this.usersService.claimWelcomeEmail(user.id);
+    if (claimedAt) {
+      try {
+        await this.mail.sendWelcomeEmail({ to: user.email });
+      } catch {
+        await this.usersService.releaseWelcomeEmail(user.id, claimedAt);
+        await this.operations.createTask({
+          tenantId: user.tenantId,
+          category: 'notification_failure',
+          title: 'Welcome email failed',
+          description: 'Retry the welcome and onboarding email after system mail is restored.',
+          priority: 'normal',
+          relatedEntityType: 'user',
+          relatedEntityId: user.id,
+          dedupeOpen: true,
+        });
+      }
+    }
     return {
       ok: true,
       userId: user.id,
@@ -199,11 +231,42 @@ export class AuthService {
     if (claim.affected !== 1) throw new BadRequestException('Token already used or expired');
 
     user.passwordHash = await bcrypt.hash(passwordClean, 12);
+    user.mustChangePassword = false;
+    user.passwordChangedAt = new Date();
+    user.sessionVersion += 1;
     await this.usersService.save(user);
 
     return {
       ok: true,
       message: 'Password updated successfully.',
     };
+  }
+
+  async changeTemporaryPassword(email: string, temporaryPassword: string, newPassword: string) {
+    const user = await this.usersService.findByEmail(email);
+    if (!user?.passwordHash || !user.mustChangePassword) {
+      throw new UnauthorizedException('Invalid temporary credentials');
+    }
+    if (!(await bcrypt.compare(temporaryPassword, user.passwordHash))) {
+      throw new UnauthorizedException('Invalid temporary credentials');
+    }
+    if (newPassword.length < 12 || newPassword === temporaryPassword) {
+      throw new BadRequestException('Choose a new password with at least 12 characters');
+    }
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+    user.mustChangePassword = false;
+    user.passwordChangedAt = new Date();
+    user.sessionVersion += 1;
+    await this.usersService.save(user);
+    return { ok: true, message: 'Password changed. You can now sign in.' };
+  }
+
+  async revokeSession(userId: string) {
+    const user = await this.usersService.findById(userId);
+    if (user) {
+      user.sessionVersion += 1;
+      await this.usersService.save(user);
+    }
+    return { ok: true };
   }
 }

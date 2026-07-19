@@ -28,6 +28,9 @@ import { IntegrationsModule } from "./modules/integrations/integrations.module";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { buildDatabaseOptions } from "./database/database-options";
 import { AuditInterceptor } from "./modules/audit/audit.interceptor";
+import { OperationsModule } from './modules/operations/operations.module';
+import { EntitlementsModule } from './modules/entitlements/entitlements.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
 
 @Module({
   imports: [
@@ -56,6 +59,9 @@ import { AuditInterceptor } from "./modules/audit/audit.interceptor";
     PublicModule,
     SupportModule,
     AuditModule,
+    OperationsModule,
+    EntitlementsModule,
+    OnboardingModule,
   ],
   controllers: [AppController],
   providers: [

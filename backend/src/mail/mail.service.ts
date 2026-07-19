@@ -58,16 +58,16 @@ export class MailService {
     const dashboardLink = `${appUrl}/app/dashboard`;
 
     const text =
-      `You're in.\n\n` +
-      `Next step: finish setup so leads and messages flow automatically.\n` +
+      `Your RealtyTechAI workspace account has been created.\n\n` +
+      `Next step: complete setup and testing. Service remains inactive until the readiness checks pass and an operator activates the workspace.\n` +
       `Open setup: ${dashboardLink}\n\n` +
       `If you need help, reply to this email.`;
 
     const html = `
       <div style="font-family: Arial, sans-serif; line-height: 1.5;">
         <h2 style="margin: 0 0 12px 0;">Welcome to RealtyTechAI</h2>
-        <p style="margin: 0 0 12px 0;">You're in. Your account is ready.</p>
-        <p style="margin: 0 0 16px 0;">Finish setup so leads, SMS, and email automations run smoothly.</p>
+        <p style="margin: 0 0 12px 0;">Your workspace account has been created.</p>
+        <p style="margin: 0 0 16px 0;">Complete setup and testing. Service remains inactive until readiness checks pass and an operator activates the workspace.</p>
         <p style="margin: 0 0 16px 0;">
           <a href="${dashboardLink}" style="display:inline-block;padding:10px 14px;background:#111827;color:#ffffff;text-decoration:none;border-radius:6px;">Complete setup</a>
         </p>

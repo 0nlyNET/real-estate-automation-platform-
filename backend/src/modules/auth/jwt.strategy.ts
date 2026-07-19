@@ -3,6 +3,8 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { isPlatformAdminEmail, requireJwtSecret } from '../../common/env';
 import { UsersService } from '../users/users.service';
+import type { Request } from 'express';
+import { readCookie, SESSION_COOKIE } from './session-cookie';
 
 type JwtPayload = {
   sub?: string;
@@ -11,13 +13,17 @@ type JwtPayload = {
     userId?: string;
     email?: string;
   };
+  sessionVersion?: number;
 };
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(private readonly users: UsersService) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (request: Request) => readCookie(request, SESSION_COOKIE),
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ]),
       ignoreExpiration: false,
       secretOrKey: requireJwtSecret(),
     });
@@ -29,6 +35,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     const user = await this.users.findById(payload.sub);
     if (!user || !user.isActive || !user.isEmailVerified || !user.tenantId) {
       throw new UnauthorizedException('Account is inactive or session is invalid');
+    }
+    if (payload.sessionVersion !== user.sessionVersion || user.mustChangePassword) {
+      throw new UnauthorizedException('Session has been revoked');
     }
 
     let impersonatedBy:

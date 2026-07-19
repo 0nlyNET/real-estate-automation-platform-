@@ -1,17 +1,16 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 
 @Injectable()
 export class CalendarService {
-  private readonly logger = new Logger(CalendarService.name);
-
-  async createBookingEvent(payload: {
+  async createBookingEvent(_payload: {
     tenantId: string;
     leadId: string;
     start: Date;
     end: Date;
     summary: string;
   }) {
-    this.logger.log(`Mock create calendar event ${payload.summary}`);
-    return { eventId: 'mock-event' };
+    throw new ServiceUnavailableException(
+      'Calendar synchronization is not available. Use the configured external booking link.',
+    );
   }
 }

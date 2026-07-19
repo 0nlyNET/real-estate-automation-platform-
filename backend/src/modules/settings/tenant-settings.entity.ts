@@ -19,7 +19,7 @@ export class TenantSettings extends BaseEntity {
   @Column({ name: "booking_link", type: "varchar", nullable: true })
   bookingLink?: string;
 
-  @Column({ name: "automations_enabled", type: "bool", default: true })
+  @Column({ name: "automations_enabled", type: "bool", default: false })
   automationsEnabled!: boolean;
 
   // -------- Teams/Brokerages (routing) --------

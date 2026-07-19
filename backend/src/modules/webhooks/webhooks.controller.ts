@@ -29,6 +29,14 @@ export class WebhooksController {
     );
   }
 
+  @Post('twilio/status')
+  twilioStatus(
+    @Body() body: any,
+    @Headers() headers: Record<string, string | undefined>,
+  ) {
+    return this.webhooks.handleTwilioStatus(body, headers);
+  }
+
   @Get('facebook/lead-ads')
   facebookVerify(
     @Query('hub.mode') mode: string | undefined,

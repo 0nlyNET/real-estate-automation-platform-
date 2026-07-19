@@ -6,9 +6,12 @@ import { Message } from '../messaging/message.entity';
 import { User } from '../users/user.entity';
 import { StatsController } from './stats.controller';
 import { StatsService } from './stats.service';
+import { ComplianceOptOut } from '../compliance/compliance-optout.entity';
+import { LeadStageEvent } from '../leads/lead-stage-event.entity';
+import { TenantSettings } from '../settings/tenant-settings.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Lead, Message]), CommonModule],
+  imports: [TypeOrmModule.forFeature([User, Lead, Message, ComplianceOptOut, LeadStageEvent, TenantSettings]), CommonModule],
   controllers: [StatsController],
   providers: [StatsService],
 })

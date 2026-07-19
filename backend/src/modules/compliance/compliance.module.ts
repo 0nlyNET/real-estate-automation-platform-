@@ -17,6 +17,9 @@ import { RoutingRule } from '../routing/routing-rule.entity';
 import { SupportTicket } from '../support/support-ticket.entity';
 import { AuditLog } from '../audit/audit-log.entity';
 import { IntegrationsModule } from '../integrations/integrations.module';
+import { LeadConsentRecord } from './lead-consent-record.entity';
+import { Message } from '../messaging/message.entity';
+import { UnsubscribeController } from './unsubscribe.controller';
 
 @Module({
   imports: [
@@ -33,12 +36,14 @@ import { IntegrationsModule } from '../integrations/integrations.module';
       RoutingRule,
       SupportTicket,
       AuditLog,
+      LeadConsentRecord,
+      Message,
     ]),
     CommonModule,
     IntegrationsModule,
   ],
   providers: [ComplianceService, DataExportService],
-  controllers: [ComplianceController],
+  controllers: [ComplianceController, UnsubscribeController],
   exports: [ComplianceService],
 })
 export class ComplianceModule {}

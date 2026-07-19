@@ -13,7 +13,11 @@ describe('SupportService notifications', () => {
     process.env.SALES_INBOX_EMAIL = 'ops@realtytechai.app';
     const repo = repository();
     const mail = { sendEmail: jest.fn().mockResolvedValue(undefined) };
-    const service = new SupportService(repo as any, mail as any);
+    const service = new SupportService(
+      repo as any,
+      mail as any,
+      { createTask: jest.fn().mockResolvedValue({ id: 'task-1' }) } as any,
+    );
 
     await expect(service.createTicket(ticketInput())).resolves.toEqual({
       ok: true,
@@ -38,6 +42,7 @@ describe('SupportService notifications', () => {
           .fn()
           .mockRejectedValue(new Error('provider unavailable')),
       } as any,
+      { createTask: jest.fn().mockResolvedValue({ id: 'task-1' }) } as any,
     );
 
     await expect(service.createTicket(ticketInput())).resolves.toEqual({
@@ -47,6 +52,40 @@ describe('SupportService notifications', () => {
     });
     expect(repo.save).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['cancellation', 'deletion'] as const)(
+    'creates durable operations work for a %s request',
+    async (kind) => {
+      const operations = {
+        createTask: jest
+          .fn()
+          .mockResolvedValueOnce({ id: 'primary-task', title: `${kind} request`, description: 'saved' })
+          .mockResolvedValue({ id: 'follow-up' }),
+      };
+      const service = new SupportService(
+        repository() as any,
+        { sendEmail: jest.fn().mockRejectedValue(new Error('mail unavailable')) } as any,
+        operations as any,
+      );
+      await expect(
+        service.createAccountRequest({
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+          email: 'owner@example.com',
+          kind,
+        }),
+      ).resolves.toMatchObject({ ok: true, requestId: 'primary-task' });
+      expect(operations.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: kind === 'cancellation' ? 'cancellation_request' : 'deletion_request',
+          priority: 'high',
+        }),
+      );
+      expect(operations.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ category: 'provider_disable_follow_up' }),
+      );
+    },
+  );
 
   function repository() {
     return {

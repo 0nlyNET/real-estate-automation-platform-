@@ -14,14 +14,7 @@ import { Eye, EyeOff, Loader2, ArrowRight } from "lucide-react";
 import { Footer } from "@/components/ui/footer";
 import { Logo } from "@/components/logo";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-
-function setAuthCookie(token: string) {
-  // Not httpOnly (because we set it in the browser), but it makes Next middleware work.
-  // 7 days expiry.
-  const maxAge = 60 * 60 * 24 * 7;
-  document.cookie = `rtai_token=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
-}
+const API_URL = "/api/backend";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -54,27 +47,24 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: emailClean, password: passwordClean }),
+        credentials: "include",
       });
 
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
+        const detail = typeof data?.message === "object" ? data.message : data;
+        if (detail?.code === "PASSWORD_CHANGE_REQUIRED") {
+          router.push(`/change-temporary-password?email=${encodeURIComponent(emailClean)}`);
+          return;
+        }
         const msg = Array.isArray(data?.message)
           ? data.message.join(", ")
           : data?.message || "Login failed";
         throw new Error(msg);
       }
 
-      if (!data?.accessToken) throw new Error("Login failed: missing token");
       if (!data?.user) throw new Error("Login failed: missing user");
-
-      // Local storage (used by apiFetch)
-      localStorage.setItem("rta_token", data.accessToken);
-      localStorage.setItem("rta_user", JSON.stringify(data.user));
-      localStorage.setItem("rta_pending_email", emailClean);
-
-      // Cookie (used by Next middleware)
-      setAuthCookie(data.accessToken);
 
       toast({
         title: "Welcome back!",

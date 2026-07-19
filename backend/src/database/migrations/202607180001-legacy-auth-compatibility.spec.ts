@@ -6,6 +6,8 @@ import { Tenant } from "../../modules/tenants/tenant.entity";
 import { User } from "../../modules/users/user.entity";
 import { LegacyAuthCompatibility1784332800001 } from "./202607180001-legacy-auth-compatibility";
 import { TenantSettingsIntakeKeys1784332800002 } from "./202607180002-tenant-settings-intake-keys";
+import { ProductionSchemaReconciliation1784332800004 } from "./202607180004-production-schema-reconciliation";
+import { ClientReadinessFoundations1784419200001 } from "./202607190001-client-readiness-foundations";
 import { TenantSettings } from "../../modules/settings/tenant-settings.entity";
 
 function memoryDatabase() {
@@ -81,6 +83,8 @@ describe("legacy auth compatibility migration", () => {
       migrations: [
         LegacyAuthCompatibility1784332800001,
         TenantSettingsIntakeKeys1784332800002,
+        ProductionSchemaReconciliation1784332800004,
+        ClientReadinessFoundations1784419200001,
       ],
       migrationsRun: true,
       migrationsTableName: "app_migrations",

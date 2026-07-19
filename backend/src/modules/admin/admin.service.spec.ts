@@ -59,7 +59,7 @@ describe('AdminService client onboarding', () => {
     };
   }
 
-  it('creates a trial workspace and owner in one transaction', async () => {
+  it('creates an inactive onboarding workspace and owner in one transaction', async () => {
     process.env.FRONTEND_URL = 'https://www.realtytechai.app/';
     const { service, dataSource, mail, tenantRepository, userRepository } =
       setup();
@@ -74,7 +74,8 @@ describe('AdminService client onboarding', () => {
       expect.objectContaining({
         name: 'Lakeview Realty',
         plan: 'trial',
-        status: 'trialing',
+        status: 'incomplete',
+        lifecycleStatus: 'ONBOARDING',
       }),
     );
     expect(userRepository.create).toHaveBeenCalledWith(
@@ -83,6 +84,7 @@ describe('AdminService client onboarding', () => {
         email: 'broker@example.com',
         role: 'owner',
         isEmailVerified: false,
+        mustChangePassword: true,
         passwordHash: expect.not.stringContaining('Temp-'),
       }),
     );

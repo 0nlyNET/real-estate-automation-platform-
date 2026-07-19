@@ -22,9 +22,19 @@ type Msg = {
   direction?: "inbound" | "outbound"
   body?: string
   createdAt?: string
+  status?: "created" | "queued" | "sending" | "provider_accepted" | "sent" | "delivered" | "failed" | "received" | "skipped" | "canceled"
+  providerStatus?: string | null
+  errorCode?: string | null
+  errorMessage?: string | null
 }
 
 type Scope = "mine" | "team" | "shared"
+
+function statusLabel(status?: Msg["status"]) {
+  if (!status) return "Unknown"
+  if (status === "provider_accepted") return "Provider accepted"
+  return status.charAt(0).toUpperCase() + status.slice(1).replaceAll("_", " ")
+}
 
 export default function InboxPage() {
   const [scope, setScope] = useState<Scope>("mine")
@@ -202,7 +212,14 @@ export default function InboxPage() {
                   key={m.id}
                   className={`max-w-[85%] rounded px-3 py-2 text-sm ${m.direction === "outbound" ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}
                 >
-                  {m.body || ""}
+                  <div>{m.body || ""}</div>
+                  <div className={`mt-1 text-[11px] ${m.direction === "outbound" ? "text-primary-foreground/80" : "text-muted-foreground"}`}>
+                    {statusLabel(m.status)}
+                    {m.providerStatus ? ` · provider: ${m.providerStatus}` : ""}
+                  </div>
+                  {m.status === "failed" && m.errorMessage ? (
+                    <div className="mt-1 text-xs font-medium">Failed: {m.errorMessage}</div>
+                  ) : null}
                 </div>
               ))}
               {messages.length === 0 ? <div className="text-sm text-muted-foreground">No messages.</div> : null}

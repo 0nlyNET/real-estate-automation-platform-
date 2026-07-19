@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { MarketingHeader } from "@/components/ui/marketing-header"
 import { Footer } from "@/components/ui/footer"
-import { CookieBanner } from "@/components/ui/cookie-banner"
 import { ArrowRight, CheckCircle2 } from "lucide-react"
 import { apiFetch } from "@/lib/api"
 
@@ -21,19 +20,24 @@ export default function ApplyPage() {
     const formElement = event.currentTarget
     const form = new FormData(formElement)
     try {
-      await apiFetch("/public/inquiry", {
+      const response = await apiFetch<{ message?: string }>("/public/inquiry", {
         method: "POST",
         body: {
           name: String(form.get("name") || ""),
           email: String(form.get("email") || ""),
           company: String(form.get("business") || ""),
+          phone: String(form.get("phone") || ""),
+          website: String(form.get("website") || "") || undefined,
+          estimatedMonthlyLeadVolume: Number(form.get("lead_volume") || 0),
+          requestedService: String(form.get("requested_service") || ""),
           topic: "setup",
           source: String(form.get("lead_source") || ""),
           message: String(form.get("goal") || ""),
+          websiteConfirmation: String(form.get("website_confirmation") || ""),
         },
       })
       formElement.reset()
-      setResult("Thanks — your application was submitted.")
+      setResult(response.message || "Your application was received. Our team will review it and contact you using the information provided.")
     } catch (error) {
       setResult(error instanceof Error ? error.message : "Application could not be submitted.")
     } finally {
@@ -67,9 +71,9 @@ export default function ApplyPage() {
               <ul className="mt-6 space-y-4">
                 {[
                   "Generate online leads (Facebook, website, portals)",
-                  "Want instant response and consistent follow-up",
+                  "Want prompt, approved response and consistent follow-up",
                   "Are tired of manually chasing leads",
-                  "Care more about booked appointments than dashboards",
+                  "Want observable lead handling rather than unsupported outcome claims",
                 ].map((item, i) => (
                   <li key={i} className="flex items-start gap-3">
                     <CheckCircle2 className="mt-1 h-5 w-5 text-primary" />
@@ -93,10 +97,11 @@ export default function ApplyPage() {
                 <h2 className="text-xl font-semibold text-foreground">Application</h2>
 
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Answer honestly. This helps us launch faster.
+                  These details help us plan the pilot scope accurately.
                 </p>
 
                 <form className="mt-8 space-y-4" onSubmit={submitApplication}>
+                  <input name="website_confirmation" tabIndex={-1} autoComplete="off" className="hidden" aria-hidden="true" />
                   <input
                     required
                     name="name"
@@ -118,6 +123,38 @@ export default function ApplyPage() {
                     placeholder="Business name"
                     className="w-full rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
                   />
+
+                  <input
+                    required
+                    name="phone"
+                    type="tel"
+                    placeholder="Phone number"
+                    className="w-full rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
+                  />
+
+                  <input
+                    name="website"
+                    type="url"
+                    placeholder="Website (https://…)"
+                    className="w-full rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
+                  />
+
+                  <input
+                    required
+                    name="lead_volume"
+                    type="number"
+                    min="0"
+                    placeholder="Estimated monthly lead volume"
+                    className="w-full rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
+                  />
+
+                  <select required name="requested_service" defaultValue="" className="w-full rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground">
+                    <option value="" disabled>Requested service</option>
+                    <option value="managed-pilot">Managed paid pilot</option>
+                    <option value="sms-email-follow-up">SMS and email follow-up</option>
+                    <option value="lead-intake-routing">Lead intake and routing</option>
+                    <option value="consultation">Fit consultation</option>
+                  </select>
 
                   <input
                     required
@@ -152,7 +189,6 @@ export default function ApplyPage() {
       </section>
 
       <Footer />
-      <CookieBanner />
     </div>
   )
 }

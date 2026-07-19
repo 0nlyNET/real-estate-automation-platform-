@@ -78,7 +78,7 @@ export function GettingStartedCard() {
 
   const completion = useMemo(() => {
     // Keep this simple: these are the fields that actually affect MVP behavior right now.
-    // Timezone + quiet hours determine send scheduling. Booking link helps conversion.
+    // Timezone and quiet hours determine scheduling; the booking link is inserted only in approved copy.
     let total = 3
     let done = 0
 
@@ -237,7 +237,7 @@ export function GettingStartedCard() {
                   placeholder="https://calendly.com/yourname/15min"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Used in automated follow-ups to convert leads into booked calls.
+                  Used in approved follow-ups when booking is included in the agreed service scope.
                 </p>
               </div>
             </div>

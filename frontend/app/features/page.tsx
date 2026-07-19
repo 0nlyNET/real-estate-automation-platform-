@@ -7,10 +7,10 @@ import { Zap, MessageSquare, Calendar, BarChart3, ArrowRight, Bot, FileText } fr
 const featureCategories = [
   {
     title: "Speed-to-Lead",
-    description: "Respond to leads before your competition even sees them.",
+    description: "Queue approved outreach promptly after an eligible lead is captured.",
     icon: Zap,
     features: [
-      "Instant lead capture from multiple sources",
+      "Lead capture from configured sources",
       "Queued automated responses",
       "Source-aware team and fixed-user routing",
       "Quiet-hours controls",
@@ -19,7 +19,7 @@ const featureCategories = [
   },
   {
     title: "Unified Inbox",
-    description: "All your conversations in one powerful interface.",
+    description: "Review supported channel history in one workspace.",
     icon: MessageSquare,
     features: [
       "Threaded conversations across channels",
@@ -31,7 +31,7 @@ const featureCategories = [
   },
   {
     title: "Automation Engine",
-    description: "Set it and forget it. Your follow-ups on autopilot.",
+    description: "Run approved linear follow-up under human and compliance controls.",
     icon: Bot,
     features: [
       "Editable follow-up sequences",
@@ -42,8 +42,8 @@ const featureCategories = [
     screenshot: "/automation-workflow-builder-dark-theme.jpg",
   },
   {
-    title: "Appointment Booking",
-    description: "Let leads book time with you automatically.",
+    title: "Booking links",
+    description: "Include a configured external booking link in approved follow-up.",
     icon: Calendar,
     features: [
       "Share a configured booking link",
@@ -55,12 +55,12 @@ const featureCategories = [
   },
   {
     title: "Smart Reporting",
-    description: "Know exactly what's working and what's not.",
+    description: "Review defined lead, provider-state, reply, and pipeline metrics.",
     icon: BarChart3,
     features: [
       "Response time tracking",
       "Lead-stage counts",
-      "Lead source performance",
+      "Lead source counts",
       "Agent-scoped overview metrics",
     ],
     screenshot: "/analytics-dashboard-charts-dark-theme.jpg",
@@ -92,7 +92,7 @@ export default function FeaturesPage() {
               Powerful features for <span className="text-primary">modern agents</span>
             </h1>
             <p className="mt-6 text-lg text-muted-foreground">
-              Everything you need to capture leads, automate follow-ups, and close more deals.
+              Current capabilities for managed intake, approved follow-up, shared history, and basic reporting.
             </p>
           </div>
         </div>
@@ -129,7 +129,7 @@ export default function FeaturesPage() {
                 <div className="flex-1">
                   <div className="overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
                     <img
-                      src={category.screenshot || "/placeholder.svg"}
+                      src={category.screenshot}
                       alt={category.title}
                       className="h-auto w-full"
                     />
@@ -146,17 +146,17 @@ export default function FeaturesPage() {
         <div className="mx-auto max-w-7xl px-4 text-center sm:px-6 lg:px-8">
           <h2 className="text-3xl font-bold text-foreground">Ready to see it in action?</h2>
           <p className="mx-auto mt-4 max-w-2xl text-muted-foreground">
-            Start your free trial today and experience the power of automated lead management.
+            Apply for a supervised paid pilot and review the exact service scope before checkout.
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <Button size="lg" asChild className="bg-primary text-primary-foreground hover:bg-primary/90">
-              <Link href="/signup">
-                Start free trial
+              <Link href="/apply">
+                Apply for pilot
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
             <Button size="lg" variant="outline" asChild>
-              <Link href="/contact">Request a demo</Link>
+              <Link href="/apply">Request a demo</Link>
             </Button>
           </div>
         </div>

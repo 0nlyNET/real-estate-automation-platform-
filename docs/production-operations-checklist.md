@@ -1,78 +1,43 @@
-# RealtyTechAI production operations checklist
+# Production operations checklist
 
-Complete every **Required before onboarding** item before giving a client access. Record the date, operator, and evidence link for each check. Never paste secrets into this document or a support ticket.
+The pre-launch source of truth is `docs/production-launch-owner-checklist.md`; the release/migration source of truth is `docs/database-migration-runbook.md`; the acceptance source of truth is `docs/first-client-uat.md`. This page covers recurring controls after an approved pilot launches.
 
-## Required before onboarding
+Never paste secrets, access tokens, message bodies containing personal data, or database URLs into evidence. Use safe record/provider IDs and dated links.
 
-### Application and database
+## Every business day during the pilot
 
-- [ ] `GET https://real-estate-automation-platform-production.up.railway.app/ready` returns HTTP 200 with `database.status` and `schema.status` both `up`, and both missing counts equal to zero.
-- [ ] Railway runs the backend from the repository root configuration and the latest `main` commit is healthy.
-- [ ] Railway PostgreSQL backups are enabled on a schedule appropriate for client data.
-- [ ] A restore drill has been completed into a non-production database and the restored app passes `/ready`.
-- [ ] Railway service alerts have a monitored recipient and cover deployment failure, crashes, and sustained resource pressure.
-- [ ] `JWT_SECRET` is unique and at least 32 random characters; `INTEGRATIONS_ENCRYPTION_KEY` is a base64-encoded 32-byte key.
-- [ ] `TYPEORM_SYNC=false`, `NODE_ENV=production`, and `GLOBAL_AUTOMATIONS_DISABLED=false` unless automation is intentionally paused.
+- [ ] `GET <api-origin>/health/readiness` returns HTTP 200 `status: ready`; investigate database, schema, pending migrations, production config, system email, billing, worker, or plaintext-credential failure before allowing new work.
+- [ ] Admin → Operations has no unowned critical/high-priority application, integration, messaging, payment, support, cancellation, deletion, compliance, or onboarding task.
+- [ ] Stripe Workbench has no unreviewed webhook failure and local `stripe_webhook_events` failed rows are reconciled.
+- [ ] Twilio Messaging Logs delivery errors reconcile to local Failed messages and operations tasks.
+- [ ] SendGrid Activity blocks/bounces for system email are assigned; verify/reset/welcome/application/support flows are not silently failing.
+- [ ] The monitored operations mailbox has a primary and backup reviewer.
 
-### System email and operator delivery
+## Weekly
 
-- [ ] `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, and `SENDGRID_FROM_NAME` are configured in Railway.
-- [ ] The SendGrid sender/domain is authenticated and a real verification email arrives outside the sending domain.
-- [ ] `SALES_INBOX_EMAIL` is a monitored operator mailbox.
-- [ ] Submit the public contact form and an authenticated support ticket; confirm both reach that mailbox.
-- [ ] Invite a test team member; confirm the verification email arrives and its link opens the production frontend.
+- [ ] Review Railway failed deployments, crashes/restarts, CPU, memory, storage, and request-error alerts.
+- [ ] Review Vercel failed deployments and public/mobile flow availability.
+- [ ] Review Stripe dunning/past-due accounts against `BILLING_GRACE_DAYS`; confirm protected activity stops at the boundary without deleting data.
+- [ ] Review provider integration status and expire/retest any credential changed during the week.
+- [ ] Review admin/platform membership, open impersonation/audit anomalies, and tenant lifecycle/automation mismatches.
+- [ ] Export operations queue status and assign due dates/resolution evidence.
 
-### Twilio SMS
+## Monthly
 
-- [ ] Global Twilio variables are configured, or the client has saved tenant-specific credentials under Integrations.
-- [ ] The Twilio phone number's inbound messaging webhook is an HTTP POST to `https://real-estate-automation-platform-production.up.railway.app/webhooks/twilio/inbound`.
-- [ ] `TWILIO_WEBHOOK_URL` exactly matches that public URL. This exact match is used for signature verification.
-- [ ] Send one outbound SMS and reply to it. Confirm the outbound and inbound events appear on the correct lead and workspace only.
-- [ ] Confirm opt-out language is present and a STOP reply prevents further automated SMS.
+- [ ] Confirm the newest PostgreSQL backup and PITR window; restore into isolated nonproduction and run readiness, migration state, login, lead/report read, and row-count/checksum checks.
+- [ ] Run a controlled lead through consent → approved message → callback/reply → STOP/unsubscribe → reporting reconciliation.
+- [ ] Run a Tenant A/Tenant B direct-ID isolation smoke test.
+- [ ] Reconcile a Stripe subscription/invoice/event to local tenant and webhook-ledger state.
+- [ ] Review retention/deletion requests, legal-policy versions, consent disclosures, provider authorizations, and incident contacts.
 
-### Facebook Lead Ads
+## Incident stop procedure
 
-- [ ] `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_REDIRECT_URL`, `FACEBOOK_WEBHOOK_VERIFY_TOKEN`, and an active `FACEBOOK_GRAPH_API_VERSION` are configured.
-- [ ] The OAuth redirect is `https://real-estate-automation-platform-production.up.railway.app/integrations/facebook/callback`.
-- [ ] The Page webhook callback is `https://real-estate-automation-platform-production.up.railway.app/webhooks/facebook/lead-ads` and uses the same verify token as Railway.
-- [ ] Connect the client Page in Integrations and confirm the selected Page reports connected.
-- [ ] Submit a Meta test lead. Confirm it creates exactly one lead in the correct workspace, assigns it as configured, and starts only the intended active sequence.
+Use this for tenant isolation uncertainty, wrong-recipient messaging, invalid webhook trust, opt-out failure, corrupted billing entitlement, or unsafe schema/readiness:
 
-### Stripe billing
-
-- [ ] `STRIPE_SECRET_KEY`, all four `STRIPE_PRICE_*` IDs, and `STRIPE_WEBHOOK_SECRET` are configured for the same Stripe mode.
-- [ ] Stripe sends events to `https://real-estate-automation-platform-production.up.railway.app/billing/webhook`.
-- [ ] Complete a test-mode checkout and confirm the workspace plan changes only after the signed webhook is processed.
-- [ ] Open the billing portal and test cancellation/plan-change behavior before switching to live keys.
-
-### Client acceptance test
-
-- [ ] Create a fresh client workspace through the platform-admin onboarding flow.
-- [ ] Verify the owner email, sign in, finish the dashboard checklist, and set timezone, quiet hours, booking link, and automation state.
-- [ ] Create/import one lead, assign it, add a note, change its stage, and confirm reporting updates.
-- [ ] Install one template inactive, review every step, activate it, and verify its first real delivery with a test contact owned by the client.
-- [ ] Confirm an agent cannot access another workspace or admin-only settings.
-- [ ] Export workspace data and inspect it for expected business records and absence of credentials/secrets.
-
-## Recurring controls
-
-### Weekly
-
-- Review failed Railway deployments, crashes, schema readiness, and provider delivery errors.
-- Review open support and deletion-request tickets; record ownership and resolution.
-- Check SendGrid/Twilio/Meta/Stripe dashboards for delivery or webhook failures.
-
-### Monthly
-
-- Restore the newest backup into a non-production database and run readiness plus a login/lead smoke test.
-- Review platform-admin membership, provider users, webhook endpoints, and least-privilege access.
-- Test one client journey from lead capture through assignment, follow-up, reporting, export, and support.
-
-### Quarterly
-
-- Rotate credentials according to provider policy and immediately test every affected integration.
-- Review retention, deletion requests, privacy terms, opt-out behavior, and incident contacts with the business owner.
-
-## Incident stop conditions
-
-Pause onboarding and set `GLOBAL_AUTOMATIONS_DISABLED=true` when tenant isolation, schema readiness, incorrect-recipient messaging, webhook authenticity, or opt-out enforcement is uncertain. Resume only after the cause is identified, the fix is tested, and a production smoke test succeeds.
+1. Set Railway `GLOBAL_AUTOMATIONS_DISABLED=true` and redeploy/restart.
+2. Use platform Admin Pause for every affected tenant.
+3. Stop public checkout/onboarding if billing or tenant routing is implicated.
+4. Preserve request IDs, safe provider IDs, audit/operations rows, deployed commit, and UTC timeline; do not copy secrets or full unnecessary message content.
+5. Confirm no message/sequence worker advances protected work and `/health/readiness` reports the global pause.
+6. Notify primary/backup incident contacts and affected client under the approved incident plan.
+7. Resume only after a tested fix, two-person review, controlled UAT, written owner authorization, and recorded UTC resume time.

@@ -71,6 +71,28 @@ export class UsersService {
     return await this.repo.save(user);
   }
 
+  async claimWelcomeEmail(userId: string) {
+    const claimedAt = new Date();
+    const result = await this.repo
+      .createQueryBuilder()
+      .update(User)
+      .set({ welcomeEmailSentAt: claimedAt })
+      .where('id = :userId', { userId })
+      .andWhere('welcome_email_sent_at IS NULL')
+      .execute();
+    return result.affected === 1 ? claimedAt : null;
+  }
+
+  async releaseWelcomeEmail(userId: string, claimedAt: Date) {
+    await this.repo
+      .createQueryBuilder()
+      .update(User)
+      .set({ welcomeEmailSentAt: null })
+      .where('id = :userId', { userId })
+      .andWhere('welcome_email_sent_at = :claimedAt', { claimedAt })
+      .execute();
+  }
+
   async createUser(params: {
     email: string;
     password: string;
@@ -100,6 +122,7 @@ export class UsersService {
       role: params.role || "owner",
       teamId: params.teamId ?? null,
       isActive: true,
+      mustChangePassword: params.password.startsWith('Temp-'),
     });
 
     return { user: await this.repo.save(user), verifyToken };

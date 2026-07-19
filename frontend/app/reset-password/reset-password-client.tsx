@@ -19,7 +19,7 @@ export default function ResetPasswordClient() {
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
+  const apiUrl = "/api/backend"
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()

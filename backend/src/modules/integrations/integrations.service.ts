@@ -1,9 +1,11 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Credential } from "../settings/credential.entity";
 import * as crypto from "crypto";
 import { normalizePhoneE164 } from "../../common/phone";
+import { OperationsService } from "../operations/operations.service";
+import { operationalEvent } from "../../common/operational-log";
 
 export type IntegrationProvider = "twilio" | "sendgrid" | "facebook_lead_ads";
 export type IntegrationStatus =
@@ -114,9 +116,12 @@ function isUniqueViolation(error: unknown) {
 
 @Injectable()
 export class IntegrationsService {
+  private readonly logger = new Logger(IntegrationsService.name);
+
   constructor(
     @InjectRepository(Credential)
     private readonly credentialsRepo: Repository<Credential>,
+    private readonly operations: OperationsService,
   ) {}
 
   private async getRow(
@@ -186,6 +191,37 @@ export class IntegrationsService {
       error,
       lastSync: nowIso(),
     });
+  }
+
+  private async recordFailure(
+    tenantId: string,
+    provider: IntegrationProvider,
+    error: string,
+  ) {
+    await this.setError(tenantId, provider, error);
+    try {
+      await this.operations.createTask({
+        tenantId,
+        category: "integration_test_failure",
+        title: `${provider} connection needs attention`,
+        description:
+          `The ${provider} connection or test failed. Review the provider activity log and ` +
+          `workspace connection settings. Safe error summary: ${error.slice(0, 500)}`,
+        priority: "high",
+        relatedEntityType: `integration:${provider}`,
+        relatedEntityId: tenantId,
+        dedupeOpen: true,
+      });
+    } catch (taskError: unknown) {
+      this.logger.error(
+        operationalEvent("integration_failure_task_failed", {
+          tenantId,
+          provider,
+          error:
+            taskError instanceof Error ? taskError.message : String(taskError),
+        }),
+      );
+    }
   }
 
   async list(tenantId: string): Promise<IntegrationSummary[]> {
@@ -317,7 +353,7 @@ export class IntegrationsService {
       if (!r.ok) {
         const t = await r.text().catch(() => "");
         const msg = `Twilio test failed (${r.status}): ${t || "Unauthorized or invalid credentials"}`;
-        await this.setError(tenantId, "twilio", msg);
+        await this.recordFailure(tenantId, "twilio", msg);
         return { ok: false, error: msg };
       }
 
@@ -345,7 +381,7 @@ export class IntegrationsService {
         if (!s.ok) {
           const st = await s.text().catch(() => "");
           const msg = `Twilio send failed (${s.status}): ${st || "Could not send test message"}`;
-          await this.setError(tenantId, "twilio", msg);
+          await this.recordFailure(tenantId, "twilio", msg);
           return { ok: false, error: msg };
         }
       }
@@ -361,7 +397,7 @@ export class IntegrationsService {
       return { ok: true };
     } catch (e: any) {
       const msg = e?.message ? String(e.message) : "Twilio test failed";
-      await this.setError(tenantId, "twilio", msg);
+      await this.recordFailure(tenantId, "twilio", msg);
       return { ok: false, error: msg };
     }
   }
@@ -412,7 +448,7 @@ export class IntegrationsService {
       if (!r.ok) {
         const t = await r.text().catch(() => "");
         const msg = `SendGrid test failed (${r.status}): ${t || "Unauthorized or invalid key"}`;
-        await this.setError(tenantId, "sendgrid", msg);
+        await this.recordFailure(tenantId, "sendgrid", msg);
         return { ok: false, error: msg };
       }
 
@@ -441,7 +477,7 @@ export class IntegrationsService {
         if (!send.ok) {
           const st = await send.text().catch(() => "");
           const msg = `SendGrid send failed (${send.status}): ${st || "Could not send test email"}`;
-          await this.setError(tenantId, "sendgrid", msg);
+          await this.recordFailure(tenantId, "sendgrid", msg);
           return { ok: false, error: msg };
         }
       }
@@ -457,7 +493,7 @@ export class IntegrationsService {
       return { ok: true };
     } catch (e: any) {
       const msg = e?.message ? String(e.message) : "SendGrid test failed";
-      await this.setError(tenantId, "sendgrid", msg);
+      await this.recordFailure(tenantId, "sendgrid", msg);
       return { ok: false, error: msg };
     }
   }
@@ -585,7 +621,7 @@ export class IntegrationsService {
       if (!r.ok) {
         const t = await r.text().catch(() => "");
         const msg = t || `Facebook token exchange failed (${r.status})`;
-        await this.setError(tenantId, "facebook_lead_ads", msg);
+        await this.recordFailure(tenantId, "facebook_lead_ads", msg);
         return { ok: false, error: msg };
       }
 
@@ -594,7 +630,7 @@ export class IntegrationsService {
 
       if (!accessToken) {
         const msg = "Facebook token exchange returned no access_token";
-        await this.setError(tenantId, "facebook_lead_ads", msg);
+        await this.recordFailure(tenantId, "facebook_lead_ads", msg);
         return { ok: false, error: msg };
       }
 
@@ -620,7 +656,8 @@ export class IntegrationsService {
         : "Facebook token exchange failed";
       // Try to derive tenantId from state
       const tenantId = state?.includes(".") ? state.split(".")[0] : null;
-      if (tenantId) await this.setError(tenantId, "facebook_lead_ads", msg);
+      if (tenantId)
+        await this.recordFailure(tenantId, "facebook_lead_ads", msg);
       return { ok: false, error: msg };
     }
   }
@@ -645,7 +682,7 @@ export class IntegrationsService {
       const message =
         payload?.error?.message ||
         `Facebook Page lookup failed (${response.status})`;
-      await this.setError(tenantId, "facebook_lead_ads", message);
+      await this.recordFailure(tenantId, "facebook_lead_ads", message);
       throw new BadRequestException(message);
     }
 
@@ -690,7 +727,7 @@ export class IntegrationsService {
       const message =
         subscription?.error?.message ||
         `Facebook Page subscription failed (${subscribed.status})`;
-      await this.setError(tenantId, "facebook_lead_ads", message);
+      await this.recordFailure(tenantId, "facebook_lead_ads", message);
       throw new BadRequestException(message);
     }
 

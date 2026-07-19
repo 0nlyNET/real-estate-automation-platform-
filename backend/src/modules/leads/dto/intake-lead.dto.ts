@@ -1,4 +1,6 @@
-import { IsEmail, IsIn, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsEmail, IsIn, IsNumber, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
+import { LeadConsentDto } from '../../compliance/consent.dto';
 
 const LEAD_TYPES = ['buyer', 'seller', 'renter', 'investor'] as const;
 const TEMPERATURES = ['cold', 'warm', 'hot'] as const;
@@ -48,4 +50,9 @@ export class IntakeLeadDto {
   @Min(0)
   @Max(100)
   score?: number;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => LeadConsentDto)
+  consent?: LeadConsentDto;
 }

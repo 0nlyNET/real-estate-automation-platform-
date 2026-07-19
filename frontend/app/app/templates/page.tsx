@@ -12,7 +12,7 @@ import { CheckCircle2, MessageSquareText, Sparkles } from "lucide-react"
 
 type LeadType = "buyer" | "seller" | "investor" | "renter"
 type Temperature = "hot" | "warm" | "cold"
-type Step = { channel: "sms" | "email"; offsetMinutes: number; template: string }
+type Step = { channel: "sms" | "email"; offsetMinutes: number; template: string; identityLabel: string }
 type Template = {
   name: string
   description: string
@@ -33,21 +33,24 @@ const templates: Template[] = [
     steps: [
       {
         channel: "sms",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 0,
         template:
-          "Hi {{leadName}}, thanks for reaching out about your home search. I can help narrow down the right options. You can book a quick consultation here: {{bookingLink}} Reply STOP to opt out.",
+          "YOUR TEAM NAME: Hi {{leadName}}, thanks for reaching out about your home search. I can help narrow down the right options. You can book a quick consultation here: {{bookingLink}} Reply STOP to opt out.",
       },
       {
         channel: "email",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 1440,
         template:
-          "Hi {{leadName}}, I wanted to follow up on your home search. If you share your preferred area, price range, and timing, I can prepare a focused list of options. You can also choose a time here: {{bookingLink}}",
+          "YOUR TEAM NAME: Hi {{leadName}}, I wanted to follow up on your home search. If you share your preferred area, price range, and timing, I can prepare a focused list of options. You can also choose a time here: {{bookingLink}} Unsubscribe: {{unsubscribeUrl}}",
       },
       {
         channel: "sms",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 4320,
         template:
-          "Hi {{leadName}}, are you still looking for a home? I am happy to help whenever the timing is right. {{bookingLink}} Reply STOP to opt out.",
+          "YOUR TEAM NAME: Hi {{leadName}}, are you still looking for a home? I am happy to help whenever the timing is right. {{bookingLink}} Reply STOP to opt out.",
       },
     ],
   },
@@ -60,21 +63,24 @@ const templates: Template[] = [
     steps: [
       {
         channel: "sms",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 0,
         template:
-          "Hi {{leadName}}, thanks for asking about selling your property. I can prepare a local pricing review and explain the next steps. Book a time here: {{bookingLink}} Reply STOP to opt out.",
+          "YOUR TEAM NAME: Hi {{leadName}}, thanks for asking about selling your property. I can prepare a local pricing review and explain the next steps. Book a time here: {{bookingLink}} Reply STOP to opt out.",
       },
       {
         channel: "email",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 1440,
         template:
-          "Hi {{leadName}}, a useful home-value estimate depends on condition, upgrades, timing, and recent nearby sales. I would be glad to review those with you: {{bookingLink}}",
+          "YOUR TEAM NAME: Hi {{leadName}}, a useful home-value estimate depends on condition, upgrades, timing, and recent nearby sales. I would be glad to review those with you: {{bookingLink}} Unsubscribe: {{unsubscribeUrl}}",
       },
       {
         channel: "sms",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 4320,
         template:
-          "Hi {{leadName}}, would a quick pricing and selling-plan conversation be helpful this week? {{bookingLink}} Reply STOP to opt out.",
+          "YOUR TEAM NAME: Hi {{leadName}}, would a quick pricing and selling-plan conversation be helpful this week? {{bookingLink}} Reply STOP to opt out.",
       },
     ],
   },
@@ -87,21 +93,24 @@ const templates: Template[] = [
     steps: [
       {
         channel: "sms",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 0,
         template:
-          "Hi {{leadName}}, thanks for reaching out about a rental. What move-in date, neighborhood, and monthly budget are you targeting? You can also book here: {{bookingLink}} Reply STOP to opt out.",
+          "YOUR TEAM NAME: Hi {{leadName}}, thanks for reaching out about a rental. What move-in date, neighborhood, and monthly budget are you targeting? You can also book here: {{bookingLink}} Reply STOP to opt out.",
       },
       {
         channel: "email",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 1440,
         template:
-          "Hi {{leadName}}, I can help focus the rental search once I know your move-in date, budget, preferred areas, and bedroom count. Choose a quick call time here: {{bookingLink}}",
+          "YOUR TEAM NAME: Hi {{leadName}}, I can help focus the rental search once I know your move-in date, budget, preferred areas, and bedroom count. Choose a quick call time here: {{bookingLink}} Unsubscribe: {{unsubscribeUrl}}",
       },
       {
         channel: "sms",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 2880,
         template:
-          "Hi {{leadName}}, are you still planning a move? Send your target date and budget and I can help with next steps. Reply STOP to opt out.",
+          "YOUR TEAM NAME: Hi {{leadName}}, are you still planning a move? Send your target date and budget and I can help with next steps. Reply STOP to opt out.",
       },
     ],
   },
@@ -114,21 +123,24 @@ const templates: Template[] = [
     steps: [
       {
         channel: "sms",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 0,
         template:
-          "Hi {{leadName}}, thanks for reaching out about investment property. What markets, property types, price range, and return targets are in your buy box? {{bookingLink}} Reply STOP to opt out.",
+          "YOUR TEAM NAME: Hi {{leadName}}, thanks for reaching out about investment property. What markets, property types, price range, and return targets are in your buy box? {{bookingLink}} Reply STOP to opt out.",
       },
       {
         channel: "email",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 1440,
         template:
-          "Hi {{leadName}}, send over your preferred market, asset type, budget, financing approach, and target return. I can use that to focus the search. Strategy call: {{bookingLink}}",
+          "YOUR TEAM NAME: Hi {{leadName}}, send over your preferred market, asset type, budget, financing approach, and target return. I can use that to focus the search. Strategy call: {{bookingLink}} Unsubscribe: {{unsubscribeUrl}}",
       },
       {
         channel: "sms",
+        identityLabel: "YOUR TEAM NAME",
         offsetMinutes: 4320,
         template:
-          "Hi {{leadName}}, I am ready to help when you want to review investment criteria or available opportunities. {{bookingLink}} Reply STOP to opt out.",
+          "YOUR TEAM NAME: Hi {{leadName}}, I am ready to help when you want to review investment criteria or available opportunities. {{bookingLink}} Reply STOP to opt out.",
       },
     ],
   },
@@ -181,7 +193,6 @@ export default function TemplatesPage() {
           body: step,
         })
       }
-      await apiFetch(`/sequences/${sequence.id}/toggle`, { method: "PATCH" })
       setSequences((current) => [
         ...current,
         { id: sequence.id, name: template.name },
@@ -212,9 +223,9 @@ export default function TemplatesPage() {
         <Sparkles />
         <AlertTitle>Built for common lead journeys</AlertTitle>
         <AlertDescription>
-          Templates use the supported {"{{leadName}}"} and {"{{bookingLink}}"}
-          fields and include SMS opt-out language. Review every message for your
-          brokerage, market, and legal requirements before using it.
+          Templates use supported merge fields, sender identity placeholders,
+          SMS opt-out language, and email unsubscribe links. Installed templates
+          stay inactive until you replace “YOUR TEAM NAME,” review, and approve each step.
         </AlertDescription>
       </Alert>
       <div className="grid gap-4 lg:grid-cols-2">

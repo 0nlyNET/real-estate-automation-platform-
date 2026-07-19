@@ -1,28 +1,39 @@
-import { TenantSettings } from '../settings/tenant-settings.entity';
-import { ForbiddenException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
-
+import { DataSource, In, Repository } from 'typeorm';
+import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Sequence } from './sequence.entity';
 import { SequenceEnrollment } from './sequence-enrollment.entity';
 import { SequenceStep } from './sequence-step.entity';
-
 import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
-
 import { Message } from '../messaging/message.entity';
 import { Tenant } from '../tenants/tenant.entity';
-
 import { formatHHMM, isWithinQuietHours, nextAllowedSendTime } from '../../common/time';
 import { ComplianceService } from '../compliance/compliance.service';
 import { hasAtLeastRole, UserRole } from '../../common/rbac';
+import { EntitlementService } from '../entitlements/entitlement.service';
+import { OperationsService } from '../operations/operations.service';
+import { operationalEvent } from '../../common/operational-log';
+
+const CLAIM_LIMIT = 25;
+const LEASE_SECONDS = 120;
 
 @Injectable()
 export class SequencesService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SequencesService.name);
+  private readonly workerId = `sequence-${process.env.HOSTNAME || process.pid}`;
   private interval: NodeJS.Timeout | null = null;
 
   constructor(
+    private readonly dataSource: DataSource,
     @InjectRepository(Sequence)
     private readonly sequenceRepository: Repository<Sequence>,
     @InjectRepository(SequenceEnrollment)
@@ -40,14 +51,19 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(Lead)
     private readonly leadRepository: Repository<Lead>,
     private readonly complianceService: ComplianceService,
+    private readonly entitlements: EntitlementService,
+    private readonly operations: OperationsService,
   ) {}
 
   onModuleInit(): void {
-    // DB-backed scheduler for MVP. No Redis required.
-    // Runs every 10s and creates outbound Message rows when steps become due.
     this.interval = setInterval(() => {
-      this.processDueEnrollments().catch((e) =>
-        this.logger.error(`processDueEnrollments failed: ${e?.message ?? e}`),
+      this.processDueEnrollments().catch((error) =>
+        this.logger.error(
+          operationalEvent('sequence_worker_failed', {
+            workerId: this.workerId,
+            error: error?.message ?? error,
+          }),
+        ),
       );
     }, 10_000);
   }
@@ -72,494 +88,631 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async startForLead(lead: Lead) {
+    const tenantId = lead.tenantId || lead.tenant?.id;
+    if (!lead.id || !tenantId) return;
     try {
-      const leadId = (lead as any).id;
-      const tenantId = (lead as any).tenantId || (lead as any).tenant?.id;
-
-      if (!leadId) {
-        this.logger.warn(`startForLead called without leadId`);
-        return;
-      }
-      if (!tenantId) {
-        this.logger.warn(`startForLead called without tenantId (leadId=${leadId})`);
-        return;
-      }
-
-      // Prevent duplicate active enrollments
+      await this.entitlements.assertAllowed(tenantId, 'enroll_lead');
       const existing = await this.enrollmentRepository.findOne({
-        where: { lead: { id: leadId }, status: 'active' } as any,
+        where: { leadId: lead.id, status: 'active' },
       });
-      if (existing) {
-        this.logger.log(`Enrollment already active for lead ${leadId}, skipping`);
-        return;
-      }
+      if (existing) return;
 
       const sequence = await this.sequenceRepository.findOne({
         where: {
           tenantId,
           active: true,
-          leadType: (lead as any).leadType,
-          temperature: (lead as any).temperature,
+          leadType: lead.leadType,
+          temperature: lead.temperature,
         } as any,
         relations: ['steps'],
         order: { steps: { offsetMinutes: 'ASC' } } as any,
       });
+      if (!sequence) return;
 
-      if (!sequence) {
-        this.logger.warn(
-          `No sequence found for tenant ${tenantId} (leadType=${(lead as any).leadType} temp=${(lead as any).temperature})`,
-        );
+      const activeSteps = this.sortedSteps(sequence);
+      if (!activeSteps.length || activeSteps.some((step) => step.approvalStatus !== 'approved')) {
+        await this.flagInvalidSequence(tenantId, sequence.id, 'Sequence has no approved active steps');
         return;
       }
+      for (const channel of new Set(activeSteps.map((step) => step.channel))) {
+        const decision = await this.complianceService.communicationEligibility(
+          tenantId,
+          lead,
+          channel,
+        );
+        if (!decision.allowed) {
+          await this.logLeadEvent(lead, 'automation_blocked', {
+            channel,
+            code: decision.code,
+            reason: decision.reason,
+          });
+          return;
+        }
+      }
 
-      const nextRunAt = this.computeNextRunAt({
-        enrolledAt: new Date(),
-        sequence,
-        stepIndex: 0,
+      const nextRunAt = this.computeNextRunAt(new Date(), sequence, 0);
+      await this.enrollmentRepository.save(
+        this.enrollmentRepository.create({
+          sequence: { id: sequence.id } as Sequence,
+          sequenceId: sequence.id,
+          lead: { id: lead.id } as Lead,
+          leadId: lead.id,
+          tenantId,
+          status: 'active',
+          currentStepIndex: 0,
+          nextRunAt,
+        }),
+      );
+    } catch (error: any) {
+      this.logger.warn(`Lead ${lead.id} was not enrolled: ${error?.message ?? error}`);
+      await this.logLeadEvent(lead, 'automation_blocked', {
+        reason: error?.response?.reasons || error?.message || 'Not entitled',
       });
-
-      // IMPORTANT: SequenceEnrollment entity uses relations, not sequenceId/leadId
-      const enrollment = this.enrollmentRepository.create({
-        sequence: { id: (sequence as any).id } as any,
-        lead: { id: leadId } as any,
-        status: 'active',
-        currentStepIndex: 0,
-        nextRunAt: nextRunAt ?? undefined,
-      } as any);
-
-      const saved = await this.enrollmentRepository.save(enrollment);
-
-      this.logger.log(
-        `Sequence enrollment created (enrollmentId=${(saved as any).id}) sequenceId=${(sequence as any).id} leadId=${leadId} nextRunAt=${nextRunAt?.toISOString() ?? 'n/a'}`,
-      );
-    } catch (err: any) {
-      this.logger.error(
-        `startForLead failed (leadId=${(lead as any)?.id ?? 'unknown'}): ${err?.message ?? err}`,
-        err?.stack,
-      );
-      // Never throw: intake must not 500 because sequences failed.
     }
   }
 
-  // --- API helpers for the Automations UI (minimal, DB-backed) ---
   async listSequences(tenantId: string) {
     const rows = await this.sequenceRepository.find({
-      where: { tenantId } as any,
+      where: { tenantId },
       relations: ['steps'],
-      order: { createdAt: 'DESC' } as any,
+      order: { createdAt: 'DESC' },
     });
-
-    return rows.map((s: any) => ({
-      id: s.id,
-      name: s.name || 'Untitled automation',
-      description: s.description || null,
-      active: Boolean(s.active),
-      leadType: s.leadType || null,
-      temperature: s.temperature || null,
-      stepsCount: Array.isArray(s.steps) ? s.steps.length : 0,
-      createdAt: s.createdAt || null,
+    return rows.map((sequence) => ({
+      id: sequence.id,
+      name: sequence.name || 'Untitled automation',
+      description: sequence.description || null,
+      active: sequence.active,
+      leadType: sequence.leadType || null,
+      temperature: sequence.temperature || null,
+      stepsCount: sequence.steps?.length || 0,
+      approvedStepsCount:
+        sequence.steps?.filter((step) => step.approvalStatus === 'approved').length || 0,
+      createdAt: sequence.createdAt,
     }));
   }
 
   async toggleSequence(tenantId: string, id: string) {
-    const seq = await this.sequenceRepository.findOne({ where: { id, tenantId } as any });
-    if (!seq) return { ok: false, message: 'Not found' };
-    (seq as any).active = !(seq as any).active;
-    await this.sequenceRepository.save(seq);
-    return { ok: true, active: (seq as any).active };
+    const sequence = await this.sequenceRepository.findOne({
+      where: { id, tenantId },
+      relations: ['steps'],
+    });
+    if (!sequence) return { ok: false, message: 'Not found' };
+    if (!sequence.active) await this.assertSequenceCanActivate(tenantId, sequence);
+    sequence.active = !sequence.active;
+    await this.sequenceRepository.save(sequence);
+    return { ok: true, active: sequence.active };
   }
 
-  /**
-   * FIXED: save a single Sequence entity so return has saved.id (not Sequence[])
-   */
   async createSequence(tenantId: string, payload: any) {
-    const entity = this.sequenceRepository.create({
+    const sequence = this.sequenceRepository.create({
       tenantId,
       name: String(payload?.name || '').trim() || 'New automation',
       description: payload?.description ? String(payload.description).trim() : null,
       leadType: payload?.leadType ? String(payload.leadType).trim() : null,
       temperature: payload?.temperature ? String(payload.temperature).trim() : null,
-      active: payload?.active === false ? false : true,
-      steps: Array.isArray(payload?.steps) ? payload.steps : [],
-    } as any);
-
-    const saved = await this.sequenceRepository.save(entity);
-    return { ok: true, id: (saved as any).id };
+      active: false,
+    } as Partial<Sequence>) as Sequence;
+    const saved = await this.sequenceRepository.save(sequence);
+    return {
+      ok: true,
+      id: saved.id,
+      active: false,
+      notice: 'Automation remains inactive until every template is approved.',
+    };
   }
 
   async getSequence(tenantId: string, id: string) {
-    const seq = await this.sequenceRepository.findOne({
-      where: { id, tenantId } as any,
+    const sequence = await this.sequenceRepository.findOne({
+      where: { id, tenantId },
       relations: ['steps'],
       order: { steps: { offsetMinutes: 'ASC' } } as any,
     });
-    if (!seq) return null;
-    const s: any = seq as any;
+    if (!sequence) return null;
     return {
-      id: s.id,
-      name: s.name || 'Untitled automation',
-      description: s.description || null,
-      active: Boolean(s.active),
-      leadType: s.leadType || null,
-      temperature: s.temperature || null,
-      steps: (Array.isArray(s.steps) ? s.steps : []).map((st: any) => ({
-        id: st.id,
-        channel: st.channel,
-        template: st.template,
-        offsetMinutes: st.offsetMinutes,
+      id: sequence.id,
+      name: sequence.name || 'Untitled automation',
+      description: sequence.description || null,
+      active: sequence.active,
+      leadType: sequence.leadType || null,
+      temperature: sequence.temperature || null,
+      steps: this.sortedSteps(sequence, false).map((step) => ({
+        id: step.id,
+        channel: step.channel,
+        template: step.template,
+        offsetMinutes: step.offsetMinutes,
+        approvalStatus: step.approvalStatus,
+        approvedByUserId: step.approvedByUserId || null,
+        approvedAt: step.approvedAt || null,
+        templateVersion: step.templateVersion,
+        identityLabel: step.identityLabel || null,
+        active: step.active,
       })),
     };
   }
 
   async updateSequence(tenantId: string, id: string, payload: any) {
-    const seq = await this.sequenceRepository.findOne({ where: { id, tenantId } as any });
-    if (!seq) return { ok: false, message: 'Not found' };
-    const s: any = seq as any;
-
-    if (payload?.name !== undefined) s.name = String(payload.name).trim() || s.name;
-    if (payload?.description !== undefined) s.description = payload.description ? String(payload.description).trim() : null;
-    if (payload?.leadType !== undefined) s.leadType = payload.leadType ? String(payload.leadType).trim() : null;
-    if (payload?.temperature !== undefined) s.temperature = payload.temperature ? String(payload.temperature).trim() : null;
-    if (payload?.active !== undefined) s.active = !!payload.active;
-
-    await this.sequenceRepository.save(seq);
-    return { ok: true };
+    const sequence = await this.sequenceRepository.findOne({
+      where: { id, tenantId },
+      relations: ['steps'],
+    });
+    if (!sequence) return { ok: false, message: 'Not found' };
+    if (payload?.name !== undefined)
+      sequence.name = String(payload.name).trim() || sequence.name;
+    if (payload?.description !== undefined)
+      sequence.description = payload.description ? String(payload.description).trim() : null;
+    if (payload?.leadType !== undefined)
+      sequence.leadType = payload.leadType ? String(payload.leadType).trim() : null as any;
+    if (payload?.temperature !== undefined)
+      sequence.temperature = payload.temperature ? String(payload.temperature).trim() : null as any;
+    if (payload?.active === true && !sequence.active)
+      await this.assertSequenceCanActivate(tenantId, sequence);
+    if (payload?.active !== undefined) sequence.active = Boolean(payload.active);
+    await this.sequenceRepository.save(sequence);
+    return { ok: true, active: sequence.active };
   }
 
   async addStep(tenantId: string, sequenceId: string, payload: any) {
-    const seq = await this.sequenceRepository.findOne({ where: { id: sequenceId, tenantId } as any });
-    if (!seq) return { ok: false, message: 'Sequence not found' };
-
-    const step = this.stepRepository.create({
-      sequence: { id: sequenceId } as any,
-      channel: String(payload?.channel || 'sms'),
-      template: String(payload?.template || '').trim() || 'Hi {{firstName}}, just checking in.',
-      offsetMinutes: Number.isFinite(Number(payload?.offsetMinutes)) ? Number(payload.offsetMinutes) : 0,
-    } as any);
-
-    const saved = await this.stepRepository.save(step);
-    return { ok: true, id: (saved as any).id };
+    const sequence = await this.sequenceRepository.findOne({ where: { id: sequenceId, tenantId } });
+    if (!sequence) return { ok: false, message: 'Sequence not found' };
+    sequence.active = false;
+    await this.sequenceRepository.save(sequence);
+    const step = await this.stepRepository.save(
+      this.stepRepository.create({
+        sequence: { id: sequenceId } as Sequence,
+        channel: String(payload?.channel || 'sms') as 'sms' | 'email',
+        template: String(payload?.template || '').trim(),
+        offsetMinutes: Number(payload?.offsetMinutes) || 0,
+        identityLabel: String(payload?.identityLabel || '').trim() || null,
+        approvalStatus: 'draft',
+        templateVersion: 1,
+        active: true,
+      }),
+    );
+    return { ok: true, id: step.id, approvalStatus: step.approvalStatus };
   }
 
   async updateStep(tenantId: string, sequenceId: string, stepId: string, payload: any) {
-    const step = await this.stepRepository.findOne({
-      where: { id: stepId, sequence: { id: sequenceId, tenantId } as any } as any,
-      relations: ['sequence'],
-    });
+    const step = await this.findTenantStep(tenantId, sequenceId, stepId);
     if (!step) return { ok: false, message: 'Step not found' };
-    const st: any = step as any;
-    if (payload?.channel !== undefined) st.channel = String(payload.channel || 'sms');
-    if (payload?.template !== undefined) st.template = String(payload.template || '').trim();
-    if (payload?.offsetMinutes !== undefined && Number.isFinite(Number(payload.offsetMinutes))) {
-      st.offsetMinutes = Number(payload.offsetMinutes);
+    const contentChanged =
+      (payload?.channel !== undefined && payload.channel !== step.channel) ||
+      (payload?.template !== undefined && String(payload.template).trim() !== step.template) ||
+      (payload?.identityLabel !== undefined &&
+        String(payload.identityLabel || '').trim() !== (step.identityLabel || ''));
+    if (payload?.channel !== undefined) step.channel = payload.channel;
+    if (payload?.template !== undefined) step.template = String(payload.template).trim();
+    if (payload?.identityLabel !== undefined)
+      step.identityLabel = String(payload.identityLabel || '').trim() || null;
+    if (payload?.offsetMinutes !== undefined) step.offsetMinutes = Number(payload.offsetMinutes);
+    if (payload?.active !== undefined) step.active = Boolean(payload.active);
+    if (contentChanged) {
+      step.approvalStatus = 'draft';
+      step.approvedAt = null;
+      step.approvedByUserId = null;
+      step.templateVersion += 1;
+      step.sequence.active = false;
+      await this.sequenceRepository.save(step.sequence);
     }
     await this.stepRepository.save(step);
-    return { ok: true };
+    return { ok: true, approvalStatus: step.approvalStatus, templateVersion: step.templateVersion };
+  }
+
+  async approveStep(
+    tenantId: string,
+    sequenceId: string,
+    stepId: string,
+    userId: string,
+    identityLabel?: string,
+  ) {
+    const step = await this.findTenantStep(tenantId, sequenceId, stepId);
+    if (!step) return { ok: false, message: 'Step not found' };
+    if (identityLabel !== undefined)
+      step.identityLabel = String(identityLabel || '').trim() || null;
+    this.validateTemplate(step);
+    step.approvalStatus = 'approved';
+    step.approvedByUserId = userId;
+    step.approvedAt = new Date();
+    await this.stepRepository.save(step);
+    return { ok: true, approvalStatus: 'approved', approvedAt: step.approvedAt };
   }
 
   async deleteStep(tenantId: string, sequenceId: string, stepId: string) {
-    const step = await this.stepRepository.findOne({
-      where: { id: stepId, sequence: { id: sequenceId, tenantId } as any } as any,
-      relations: ['sequence'],
-    });
+    const step = await this.findTenantStep(tenantId, sequenceId, stepId);
     if (!step) return { ok: false, message: 'Step not found' };
+    step.sequence.active = false;
+    await this.sequenceRepository.save(step.sequence);
     await this.stepRepository.remove(step);
     return { ok: true };
   }
 
-  async listEnrollmentsForLead(tenantId: string, leadId: string, ctx?: { userId?: string; role?: UserRole }) {
-    await this.requireLeadAccess(tenantId, leadId, ctx);
-    const enrollments = await this.enrollmentRepository.find({
-      where: { lead: { id: leadId } } as any,
+  private findTenantStep(tenantId: string, sequenceId: string, stepId: string) {
+    return this.stepRepository.findOne({
+      where: { id: stepId, sequence: { id: sequenceId, tenantId } as Sequence },
       relations: ['sequence'],
-      order: { createdAt: 'DESC' } as any,
     });
-    return enrollments.map((e: any) => ({
-      id: e.id,
-      status: e.status,
-      currentStepIndex: e.currentStepIndex,
-      nextRunAt: e.nextRunAt || null,
-      stoppedReason: e.stoppedReason || null,
-      sequence: e.sequence ? { id: e.sequence.id, name: e.sequence.name } : null,
+  }
+
+  private validateTemplate(step: SequenceStep) {
+    const identity = String(step.identityLabel || '').trim();
+    const body = String(step.template || '').trim();
+    if (!identity) throw new BadRequestException('Template identity label is required');
+    if (!body.toLowerCase().includes(identity.toLowerCase())) {
+      throw new BadRequestException('Template body must identify the sender using the identity label');
+    }
+    if (step.channel === 'sms' && !/\b(reply\s+)?stop\b/i.test(body)) {
+      throw new BadRequestException('SMS template must include clear STOP opt-out language');
+    }
+    if (step.channel === 'email' && !/\{\{\s*unsubscribeUrl\s*\}\}/i.test(body)) {
+      throw new BadRequestException('Email template must include {{unsubscribeUrl}}');
+    }
+  }
+
+  private async assertSequenceCanActivate(tenantId: string, sequence: Sequence) {
+    await this.entitlements.assertAllowed(tenantId, 'start_automation');
+    const steps = sequence.steps || (await this.stepRepository.find({
+      where: { sequence: { id: sequence.id } as Sequence },
+    }));
+    const active = steps.filter((step) => step.active !== false);
+    if (!active.length) throw new BadRequestException('Automation needs at least one active step');
+    for (const step of active) {
+      if (step.approvalStatus !== 'approved') {
+        throw new BadRequestException('Every active template must be approved before activation');
+      }
+      this.validateTemplate(step);
+    }
+  }
+
+  async listEnrollmentsForLead(
+    tenantId: string,
+    leadId: string,
+    ctx?: { userId?: string; role?: UserRole },
+  ) {
+    await this.requireLeadAccess(tenantId, leadId, ctx);
+    const rows = await this.enrollmentRepository.find({
+      where: { tenantId, leadId },
+      relations: ['sequence'],
+      order: { createdAt: 'DESC' },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      status: row.status,
+      currentStepIndex: row.currentStepIndex,
+      nextRunAt: row.nextRunAt || null,
+      stoppedReason: row.stoppedReason || null,
+      sequence: row.sequence ? { id: row.sequence.id, name: row.sequence.name } : null,
     }));
   }
 
   async pauseEnrollment(tenantId: string, leadId: string, enrollmentId: string, ctx?: { userId?: string; role?: UserRole }) {
     await this.requireLeadAccess(tenantId, leadId, ctx);
-    const e = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, lead: { id: leadId } } as any });
-    if (!e) return { ok: false, message: 'Enrollment not found' };
-    (e as any).status = 'paused';
-    (e as any).nextRunAt = undefined;
-    await this.enrollmentRepository.save(e);
+    const enrollment = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, tenantId, leadId } });
+    if (!enrollment) return { ok: false, message: 'Enrollment not found' };
+    enrollment.status = 'paused';
+    enrollment.nextRunAt = undefined;
+    enrollment.lockedAt = null;
+    enrollment.lockedBy = null;
+    await this.enrollmentRepository.save(enrollment);
     return { ok: true };
   }
 
   async resumeEnrollment(tenantId: string, leadId: string, enrollmentId: string, ctx?: { userId?: string; role?: UserRole }) {
     await this.requireLeadAccess(tenantId, leadId, ctx);
-    const e = await this.enrollmentRepository.findOne({
-      where: { id: enrollmentId, lead: { id: leadId } } as any,
-      relations: ['sequence'],
-    });
-    if (!e) return { ok: false, message: 'Enrollment not found' };
-    (e as any).status = 'active';
-    // Resume ASAP (runner will pick it up)
-    (e as any).nextRunAt = new Date(Date.now() + 5_000);
-    await this.enrollmentRepository.save(e);
+    await this.entitlements.assertAllowed(tenantId, 'run_sequence_step');
+    const enrollment = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, tenantId, leadId } });
+    if (!enrollment) return { ok: false, message: 'Enrollment not found' };
+    enrollment.status = 'active';
+    enrollment.nextRunAt = new Date(Date.now() + 5_000);
+    await this.enrollmentRepository.save(enrollment);
     return { ok: true };
   }
 
-  async stopEnrollment(tenantId: string, leadId: string, enrollmentId: string, reason: string = 'manual', ctx?: { userId?: string; role?: UserRole }) {
+  async stopEnrollment(tenantId: string, leadId: string, enrollmentId: string, reason = 'manual', ctx?: { userId?: string; role?: UserRole }) {
     await this.requireLeadAccess(tenantId, leadId, ctx);
-    const e = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, lead: { id: leadId } } as any });
-    if (!e) return { ok: false, message: 'Enrollment not found' };
-    (e as any).status = 'stopped';
-    (e as any).stoppedReason = reason;
-    (e as any).nextRunAt = undefined;
-    await this.enrollmentRepository.save(e);
+    const enrollment = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, tenantId, leadId } });
+    if (!enrollment) return { ok: false, message: 'Enrollment not found' };
+    enrollment.status = 'stopped';
+    enrollment.stoppedReason = reason as SequenceEnrollment['stoppedReason'];
+    enrollment.nextRunAt = undefined;
+    enrollment.lockedAt = null;
+    enrollment.lockedBy = null;
+    await this.enrollmentRepository.save(enrollment);
     return { ok: true };
   }
 
   async stopForLead(leadId: string, reason: 'reply' | 'manual' | 'other' | 'opt_out' = 'other') {
-    try {
-      const enrollments = await this.enrollmentRepository.find({
-        where: {
-          lead: { id: leadId },
-          status: In(['active', 'paused']),
-        } as any,
-      });
-
-      for (const enrollment of enrollments) {
-        enrollment.status = 'stopped';
-        enrollment.stoppedReason = reason;
-        enrollment.nextRunAt = undefined;
-        await this.enrollmentRepository.save(enrollment);
-      }
-    } catch (err: any) {
-      this.logger.error(
-        `stopForLead failed (leadId=${leadId}): ${err?.message ?? err}`,
-        err?.stack,
-      );
-      throw err;
-    }
+    await this.enrollmentRepository.update(
+      { leadId, status: In(['active', 'paused']) },
+      {
+        status: 'stopped',
+        stoppedReason: reason,
+        nextRunAt: null as any,
+        lockedAt: null,
+        lockedBy: null,
+      },
+    );
   }
 
-  // --------------------------
-  // Runner
-  // --------------------------
-
-  private async processDueEnrollments() {
-    const now = new Date();
-
-    // DB columns are snake_case: next_run_at, current_step_index
-    const due = await this.enrollmentRepository
-      .createQueryBuilder('e')
-      .where('e.status = :st', { st: 'active' })
-      .andWhere('e.next_run_at IS NOT NULL')
-      .andWhere('e.next_run_at <= :now', { now })
-      .orderBy('e.next_run_at', 'ASC')
-      .take(25)
-      .getMany();
-
-    for (const e of due) {
+  async processDueEnrollments(limit = CLAIM_LIMIT) {
+    const ids = await this.claimDueEnrollments(Math.min(Math.max(limit, 1), 100));
+    for (const id of ids) {
       try {
-        await this.runOneEnrollment(e);
-      } catch (err: any) {
+        await this.runOneEnrollment(id);
+      } catch (error: any) {
         this.logger.error(
-          `runOneEnrollment failed (enrollmentId=${(e as any)?.id ?? 'unknown'}): ${err?.message ?? err}`,
-          err?.stack,
+          operationalEvent('sequence_enrollment_failed', {
+            enrollmentId: id,
+            workerId: this.workerId,
+            error: error?.message ?? error,
+          }),
         );
+        await this.releaseEnrollment(id, new Date(Date.now() + 5 * 60_000));
       }
     }
+    return { claimed: ids.length };
   }
 
-  private async runOneEnrollment(enrollment: SequenceEnrollment) {
-    // Load relations so we can access ids reliably
-    const hydrated = await this.enrollmentRepository.findOne({
-      where: { id: (enrollment as any).id } as any,
+  private claimDueEnrollments(limit: number): Promise<string[]> {
+    return this.dataSource.transaction(async (manager) => {
+      const rows: Array<{ id: string }> = await manager.query(
+        `WITH candidates AS (
+           SELECT id
+           FROM sequence_enrollments
+           WHERE status = 'active'
+             AND next_run_at IS NOT NULL
+             AND next_run_at <= now()
+             AND (locked_at IS NULL OR locked_at < now() - ($1 * interval '1 second'))
+           ORDER BY next_run_at ASC
+           FOR UPDATE SKIP LOCKED
+           LIMIT $2
+         )
+         UPDATE sequence_enrollments AS enrollment
+         SET locked_at = now(), locked_by = $3
+         FROM candidates
+         WHERE enrollment.id = candidates.id
+         RETURNING enrollment.id`,
+        [LEASE_SECONDS, limit, this.workerId],
+      );
+      return rows.map((row) => row.id);
+    });
+  }
+
+  private async runOneEnrollment(id: string) {
+    const enrollment = await this.enrollmentRepository.findOne({
+      where: { id, lockedBy: this.workerId, status: 'active' },
       relations: ['sequence', 'lead'],
     });
-
-    if (!hydrated) return;
-
-    const sequenceId = (hydrated as any).sequence?.id;
-    const leadId = (hydrated as any).lead?.id;
-
-    if (!sequenceId || !leadId) {
-      hydrated.status = 'stopped';
-      (hydrated as any).stoppedReason = 'other';
-      (hydrated as any).nextRunAt = undefined;
-      await this.enrollmentRepository.save(hydrated);
-      return;
-    }
-
+    if (!enrollment) return;
     const sequence = await this.sequenceRepository.findOne({
-      where: { id: sequenceId } as any,
+      where: { id: enrollment.sequenceId, tenantId: enrollment.tenantId },
       relations: ['steps'],
       order: { steps: { offsetMinutes: 'ASC' } } as any,
     });
-
-    if (!sequence || !sequence.active) {
-      hydrated.status = 'stopped';
-      (hydrated as any).stoppedReason = 'other';
-      (hydrated as any).nextRunAt = undefined;
-      await this.enrollmentRepository.save(hydrated);
-      return;
-    }
-
     const lead = await this.leadRepository.findOne({
-      where: { id: leadId } as any,
+      where: { id: enrollment.leadId, tenantId: enrollment.tenantId },
       relations: ['tenant'],
     });
-
-    if (!lead) return;
-
-    const leadTenantId = (lead as any).tenantId || (lead as any).tenant?.id;
-    if (sequence.tenantId !== leadTenantId) {
-      hydrated.status = 'stopped';
-      (hydrated as any).stoppedReason = 'other';
-      (hydrated as any).nextRunAt = undefined;
-      await this.enrollmentRepository.save(hydrated);
+    if (!sequence || !lead || !sequence.active) {
+      await this.stopEnrollmentInternal(enrollment, 'other');
       return;
     }
 
-    const steps = (sequence.steps ?? [])
-      .slice()
-      .sort((a: any, b: any) => (a.offsetMinutes ?? 0) - (b.offsetMinutes ?? 0));
-
-    const stepIndex = (hydrated as any).currentStepIndex ?? 0;
-
+    const entitlement = await this.entitlements.evaluate(enrollment.tenantId, 'run_sequence_step');
+    if (!entitlement.allowed) {
+      await this.logLeadEvent(lead, 'sequence_held', { reasons: entitlement.reasons });
+      await this.releaseEnrollment(id, new Date(Date.now() + 5 * 60_000));
+      return;
+    }
+    const steps = this.sortedSteps(sequence);
+    const stepIndex = enrollment.currentStepIndex || 0;
     if (stepIndex >= steps.length) {
-      hydrated.status = 'completed';
-      (hydrated as any).nextRunAt = undefined;
-      await this.enrollmentRepository.save(hydrated);
+      enrollment.status = 'completed';
+      enrollment.nextRunAt = undefined;
+      enrollment.lockedAt = null;
+      enrollment.lockedBy = null;
+      await this.enrollmentRepository.save(enrollment);
       return;
     }
-
     const step = steps[stepIndex];
-
-    const tenantId = (lead as any).tenantId || (lead as any).tenant?.id;
-    const tenant =
-      (lead as any).tenant ||
-      (tenantId
-        ? await this.tenantRepository.findOne({ where: { id: tenantId } as any })
-        : null);
-
-    const tenantSettings = tenantId
-      ? await this.tenantSettingsRepository.findOne({ where: { tenantId } as any })
-      : undefined;
-    const bookingLink = tenantSettings?.bookingLink || (tenant as any)?.bookingLink || '';
-
-    const body = renderTemplate((step as any).template, {
-      leadName: (lead as any).fullName ?? '',
-      bookingLink,
-    });
-
-    // Quiet hours
-    const now = new Date();
-    const complianceQuietHours = tenantId ? await this.complianceService.findQuietHours(tenantId) : null;
-    const quietHoursEnabled = complianceQuietHours?.enabled ?? true;
-    const tz = complianceQuietHours?.timezone || (tenantSettings as any)?.timeZone || (tenant as any)?.timezone;
-    const qStart = complianceQuietHours ? formatHHMM(complianceQuietHours.startMinute) : (tenantSettings as any)?.quietHoursStart;
-    const qEnd = complianceQuietHours ? formatHHMM(complianceQuietHours.endMinute) : (tenantSettings as any)?.quietHoursEnd;
-
-    const scheduledAt =
-      quietHoursEnabled &&
-      tz &&
-      qStart &&
-      qEnd &&
-      isWithinQuietHours({ now, timeZone: tz, quietStart: qStart, quietEnd: qEnd })
-        ? nextAllowedSendTime({ now, timeZone: tz, quietStart: qStart, quietEnd: qEnd })
-        : undefined;
-
-    const globalDisabled = process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true';
-    const tenantDisabled = tenantSettings?.automationsEnabled === false;
-
-    if (globalDisabled || tenantDisabled) {
-      this.logger.warn(
-        `Automations disabled, stopping enrollment (enrollmentId=${(hydrated as any).id} tenantId=${tenantId} globalDisabled=${globalDisabled} tenantDisabled=${tenantDisabled})`,
+    if (step.approvalStatus !== 'approved') {
+      await this.createSkippedMessage(lead, step, enrollment, 'UNAPPROVED_TEMPLATE', 'Template is not approved');
+      enrollment.status = 'paused';
+      enrollment.nextRunAt = undefined;
+      enrollment.lockedAt = null;
+      enrollment.lockedBy = null;
+      await this.enrollmentRepository.save(enrollment);
+      await this.flagInvalidSequence(enrollment.tenantId, sequence.id, 'An active sequence reached an unapproved template');
+      return;
+    }
+    try {
+      this.validateTemplate(step);
+    } catch (error: any) {
+      await this.createSkippedMessage(lead, step, enrollment, 'INVALID_TEMPLATE', error.message);
+      enrollment.status = 'paused';
+      enrollment.nextRunAt = undefined;
+      enrollment.lockedAt = null;
+      enrollment.lockedBy = null;
+      await this.enrollmentRepository.save(enrollment);
+      return;
+    }
+    const consent = await this.complianceService.communicationEligibility(
+      enrollment.tenantId,
+      lead,
+      step.channel,
+    );
+    if (!consent.allowed) {
+      await this.createSkippedMessage(
+        lead,
+        step,
+        enrollment,
+        consent.code || 'MISSING_CONSENT',
+        consent.reason || 'Consent check failed',
       );
-      hydrated.status = 'stopped';
-      (hydrated as any).stoppedReason = 'manual';
-      (hydrated as any).nextRunAt = undefined;
-      await this.enrollmentRepository.save(hydrated);
+      await this.advanceEnrollment(enrollment, sequence, stepIndex);
       return;
     }
 
-    // Create outbound message row (delivery handled by MessagingService)
-    const msg = this.messageRepository.create({
-      lead,
-      channel: (step as any).channel,
-      direction: 'outbound',
-      body,
-      status: scheduledAt ? 'scheduled' : 'pending',
-      scheduledAt,
-    } as any);
-
-    await this.messageRepository.save(msg as any);
-
+    const settings = await this.tenantSettingsRepository.findOne({
+      where: { tenantId: enrollment.tenantId },
+    });
+    const tenant = lead.tenant || (await this.tenantRepository.findOne({ where: { id: enrollment.tenantId } }));
+    const body = renderTemplate(step.template, {
+      leadName: lead.fullName || '',
+      firstName: (lead.fullName || '').split(/\s+/)[0] || '',
+      bookingLink: settings?.bookingLink || tenant?.bookingLink || '',
+    });
+    const scheduledAt = await this.scheduledForQuietHours(enrollment.tenantId, settings, tenant);
+    const idempotencyKey = `sequence:${enrollment.id}:${stepIndex}:${step.channel}:v${step.templateVersion}`;
+    try {
+      await this.messageRepository.save(
+        this.messageRepository.create({
+          lead,
+          leadId: lead.id,
+          channel: step.channel,
+          direction: 'outbound',
+          body,
+          status: 'queued',
+          scheduledAt,
+          nextAttemptAt: scheduledAt || new Date(),
+          idempotencyKey,
+        }),
+      );
+    } catch (error: any) {
+      if (String(error?.code) !== '23505') throw error;
+    }
     await this.logLeadEvent(lead, 'sequence_step_queued', {
-      enrollmentId: (hydrated as any).id,
-      sequenceId: (sequence as any).id,
+      enrollmentId: enrollment.id,
+      sequenceId: sequence.id,
       stepIndex,
-      channel: (step as any).channel,
-      messageId: (msg as any).id,
+      channel: step.channel,
+      idempotencyKey,
       scheduledAt: scheduledAt?.toISOString(),
     });
-
-    // Advance enrollment
-    (hydrated as any).currentStepIndex = stepIndex + 1;
-
-    const enrolledAt =
-      (hydrated as any).createdAt ||
-      (hydrated as any).created_at ||
-      new Date();
-
-    const nextRunAt = this.computeNextRunAt({
-      enrolledAt,
-      sequence,
-      stepIndex: (hydrated as any).currentStepIndex,
-    });
-
-    if ((hydrated as any).currentStepIndex >= steps.length) {
-      hydrated.status = 'completed';
-      (hydrated as any).nextRunAt = undefined;
-    } else {
-      (hydrated as any).nextRunAt = nextRunAt ?? undefined;
-    }
-
-    await this.enrollmentRepository.save(hydrated);
+    await this.advanceEnrollment(enrollment, sequence, stepIndex);
   }
 
-  private computeNextRunAt(opts: { enrolledAt: Date; sequence: Sequence; stepIndex: number }): Date | undefined {
-    const steps = (opts.sequence.steps ?? [])
+  private async createSkippedMessage(
+    lead: Lead,
+    step: SequenceStep,
+    enrollment: SequenceEnrollment,
+    code: string,
+    reason: string,
+  ) {
+    const key = `sequence:${enrollment.id}:${enrollment.currentStepIndex}:${step.channel}:v${step.templateVersion}`;
+    try {
+      await this.messageRepository.save(
+        this.messageRepository.create({
+          lead,
+          leadId: lead.id,
+          channel: step.channel,
+          direction: 'outbound',
+          body: renderTemplate(step.template, {
+            leadName: lead.fullName || '',
+            firstName: (lead.fullName || '').split(/\s+/)[0] || '',
+            bookingLink: '',
+          }),
+          status: 'skipped',
+          errorCode: code,
+          sanitizedErrorMessage: reason,
+          lastError: reason,
+          idempotencyKey: key,
+        }),
+      );
+    } catch (error: any) {
+      if (String(error?.code) !== '23505') throw error;
+    }
+    await this.logLeadEvent(lead, 'sequence_step_skipped', { code, reason, channel: step.channel });
+  }
+
+  private async advanceEnrollment(enrollment: SequenceEnrollment, sequence: Sequence, stepIndex: number) {
+    enrollment.currentStepIndex = stepIndex + 1;
+    const steps = this.sortedSteps(sequence);
+    if (enrollment.currentStepIndex >= steps.length) {
+      enrollment.status = 'completed';
+      enrollment.nextRunAt = undefined;
+    } else {
+      enrollment.nextRunAt = this.computeNextRunAt(
+        enrollment.createdAt || new Date(),
+        sequence,
+        enrollment.currentStepIndex,
+      );
+    }
+    enrollment.lockedAt = null;
+    enrollment.lockedBy = null;
+    await this.enrollmentRepository.save(enrollment);
+  }
+
+  private async scheduledForQuietHours(
+    tenantId: string,
+    settings: TenantSettings | null,
+    tenant: Tenant | null,
+  ) {
+    const quietHours = await this.complianceService.findQuietHours(tenantId);
+    const enabled = quietHours?.enabled ?? true;
+    const timeZone = quietHours?.timezone || settings?.timeZone || tenant?.timezone;
+    const start = quietHours ? formatHHMM(quietHours.startMinute) : settings?.quietHoursStart;
+    const end = quietHours ? formatHHMM(quietHours.endMinute) : settings?.quietHoursEnd;
+    const now = new Date();
+    return enabled && timeZone && start && end &&
+      isWithinQuietHours({ now, timeZone, quietStart: start, quietEnd: end })
+      ? nextAllowedSendTime({ now, timeZone, quietStart: start, quietEnd: end })
+      : undefined;
+  }
+
+  private releaseEnrollment(id: string, nextRunAt: Date) {
+    return this.enrollmentRepository.update(
+      { id, lockedBy: this.workerId },
+      { lockedAt: null, lockedBy: null, nextRunAt },
+    );
+  }
+
+  private async stopEnrollmentInternal(enrollment: SequenceEnrollment, reason: SequenceEnrollment['stoppedReason']) {
+    enrollment.status = 'stopped';
+    enrollment.stoppedReason = reason;
+    enrollment.nextRunAt = undefined;
+    enrollment.lockedAt = null;
+    enrollment.lockedBy = null;
+    await this.enrollmentRepository.save(enrollment);
+  }
+
+  private sortedSteps(sequence: Sequence, activeOnly = true) {
+    return (sequence.steps || [])
+      .filter((step) => !activeOnly || step.active !== false)
       .slice()
-      .sort((a: any, b: any) => (a.offsetMinutes ?? 0) - (b.offsetMinutes ?? 0));
+      .sort((a, b) => a.offsetMinutes - b.offsetMinutes);
+  }
 
-    const step = steps[opts.stepIndex];
-    if (!step) return undefined;
+  private computeNextRunAt(enrolledAt: Date, sequence: Sequence, stepIndex: number) {
+    const step = this.sortedSteps(sequence)[stepIndex];
+    return step ? new Date(enrolledAt.getTime() + step.offsetMinutes * 60_000) : undefined;
+  }
 
-    const minutes = (step as any).offsetMinutes ?? 0;
-    return new Date(opts.enrolledAt.getTime() + minutes * 60_000);
+  private async flagInvalidSequence(tenantId: string, sequenceId: string, description: string) {
+    await this.operations.createTask({
+      tenantId,
+      category: 'automation_exception',
+      title: 'Automation requires operator review',
+      description,
+      priority: 'high',
+      relatedEntityType: 'sequence',
+      relatedEntityId: sequenceId,
+      dedupeOpen: true,
+    });
   }
 
   private async logLeadEvent(lead: Lead, eventType: string, metadata?: Record<string, any>) {
     try {
-      const ev = this.leadEventRepository.create({
-        leadId: (lead as any).id,
-        eventType,
-        metadata,
-      } as any);
-      await this.leadEventRepository.save(ev);
-    } catch (err: any) {
-      this.logger.error(
-        `logLeadEvent failed (leadId=${(lead as any)?.id ?? 'unknown'} type=${eventType}): ${err?.message ?? err}`,
+      await this.leadEventRepository.save(
+        this.leadEventRepository.create({ leadId: lead.id, lead, eventType, metadata } as any),
       );
+    } catch (error: any) {
+      this.logger.error(`Could not record ${eventType} for lead ${lead.id}: ${error?.message ?? error}`);
     }
   }
 }
 
 function renderTemplate(template: string, vars: Record<string, string>) {
-  return (template || '')
-    .replace(/\{\{\s*leadName\s*\}\}/gi, vars.leadName ?? '')
-    .replace(/\{\{\s*bookingLink\s*\}\}/gi, vars.bookingLink ?? '');
+  return String(template || '')
+    .replace(/\{\{\s*leadName\s*\}\}/gi, vars.leadName || '')
+    .replace(/\{\{\s*firstName\s*\}\}/gi, vars.firstName || '')
+    .replace(/\{\{\s*bookingLink\s*\}\}/gi, vars.bookingLink || '');
 }

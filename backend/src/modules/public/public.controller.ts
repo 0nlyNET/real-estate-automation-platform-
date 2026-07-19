@@ -10,6 +10,9 @@ export class PublicController {
   @Post('inquiry')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async inquiry(@Body() dto: PublicInquiryDto) {
+    if (dto.websiteConfirmation?.trim()) {
+      return { ok: true, received: true };
+    }
     const email = (dto.email || '').toString().trim().toLowerCase();
     const name = dto.name ? String(dto.name).trim() : undefined;
     const company = dto.company ? String(dto.company).trim() : undefined;
@@ -17,6 +20,17 @@ export class PublicController {
     const message = (dto.message || '').toString().trim();
     const source = dto.source ? String(dto.source).trim() : undefined;
 
-    return await this.pub.submitInquiry({ email, name, company, topic, message, source });
+    return await this.pub.submitInquiry({
+      email,
+      name,
+      company,
+      phone: dto.phone,
+      website: dto.website,
+      estimatedMonthlyLeadVolume: dto.estimatedMonthlyLeadVolume,
+      requestedService: dto.requestedService || topic,
+      topic,
+      message,
+      source,
+    });
   }
 }

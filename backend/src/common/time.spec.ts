@@ -1,4 +1,9 @@
-import { formatHHMM, isWithinQuietHours, parseHHMM } from './time';
+import {
+  formatHHMM,
+  isWithinQuietHours,
+  nextAllowedSendTime,
+  parseHHMM,
+} from './time';
 
 describe('quiet-hours helpers', () => {
   it('validates and formats HH:MM values', () => {
@@ -20,5 +25,16 @@ describe('quiet-hours helpers', () => {
       quietStart: '22:00',
       quietEnd: '06:00',
     })).toBe(false);
+  });
+
+  it('reschedules work to the end of quiet hours', () => {
+    expect(
+      nextAllowedSendTime({
+        now: new Date('2026-07-18T03:00:00.000Z'),
+        timeZone: 'UTC',
+        quietStart: '22:00',
+        quietEnd: '06:00',
+      }).toISOString(),
+    ).toBe('2026-07-18T06:00:00.000Z');
   });
 });

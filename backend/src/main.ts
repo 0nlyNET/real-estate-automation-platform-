@@ -1,11 +1,37 @@
 import "dotenv/config";
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import * as express from 'express';
+import { randomUUID } from 'crypto';
 import { AppModule } from './app.module';
+import { assertProductionEnvironment } from './common/environment-readiness';
+import { operationalEvent } from './common/operational-log';
 
 async function bootstrap() {
+  assertProductionEnvironment();
   const app = await NestFactory.create(AppModule, { rawBody: true });
+  const httpLogger = new Logger('HttpRequest');
+
+  app.use((request: express.Request, response: express.Response, next: express.NextFunction) => {
+    const supplied = String(request.header('x-request-id') || '');
+    const requestId = /^[A-Za-z0-9_-]{8,100}$/.test(supplied)
+      ? supplied
+      : randomUUID();
+    const startedAt = Date.now();
+    response.setHeader('x-request-id', requestId);
+    response.on('finish', () => {
+      httpLogger.log(
+        operationalEvent('http_request', {
+          requestId,
+          method: request.method,
+          path: request.path,
+          statusCode: response.statusCode,
+          durationMs: Date.now() - startedAt,
+        }),
+      );
+    });
+    next();
+  });
 
   // Needed for Twilio inbound webhooks (application/x-www-form-urlencoded)
   app.use(express.urlencoded({ extended: false }));

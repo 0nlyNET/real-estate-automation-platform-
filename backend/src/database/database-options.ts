@@ -5,12 +5,14 @@ import { LegacyAuthCompatibility1784332800001 } from "./migrations/202607180001-
 import { TenantSettingsIntakeKeys1784332800002 } from "./migrations/202607180002-tenant-settings-intake-keys";
 import { AuditAndProviderRouting1784332800003 } from "./migrations/202607180003-audit-and-provider-routing";
 import { ProductionSchemaReconciliation1784332800004 } from "./migrations/202607180004-production-schema-reconciliation";
+import { ClientReadinessFoundations1784419200001 } from './migrations/202607190001-client-readiness-foundations';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
   TenantSettingsIntakeKeys1784332800002,
   AuditAndProviderRouting1784332800003,
   ProductionSchemaReconciliation1784332800004,
+  ClientReadinessFoundations1784419200001,
 ];
 
 function migrationOptions() {

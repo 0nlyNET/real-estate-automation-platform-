@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,6 +18,11 @@ import { decryptIntegrationPayload } from '../integrations/integrations.service'
 import { ComplianceService } from '../compliance/compliance.service';
 import { SequencesService } from '../sequences/sequences.service';
 import { LeadsService } from '../leads/leads.service';
+import { OperationsService } from '../operations/operations.service';
+import {
+  operationalEvent,
+  sanitizeOperationalText,
+} from '../../common/operational-log';
 
 export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
@@ -24,6 +30,15 @@ export type TwilioInboundBody = Record<string, unknown> & {
   Body?: string;
   MessageSid?: string;
   SmsSid?: string;
+};
+
+export type TwilioStatusBody = Record<string, unknown> & {
+  MessageSid?: string;
+  SmsSid?: string;
+  MessageStatus?: string;
+  SmsStatus?: string;
+  ErrorCode?: string;
+  ErrorMessage?: string;
 };
 
 export function validTwilioSignature(
@@ -68,7 +83,107 @@ export class WebhooksService {
     private readonly compliance: ComplianceService,
     private readonly sequences: SequencesService,
     private readonly leads: LeadsService,
+    @Optional()
+    @InjectRepository(Message)
+    private readonly messagesRepo?: Repository<Message>,
+    @Optional()
+    private readonly operations?: OperationsService,
   ) {}
+
+  async handleTwilioStatus(
+    body: TwilioStatusBody,
+    headers: Record<string, string | string[] | undefined>,
+  ) {
+    const providerMessageId = String(body.MessageSid || body.SmsSid || '').trim();
+    const providerStatus = String(body.MessageStatus || body.SmsStatus || '')
+      .trim()
+      .toLowerCase();
+    if (!providerMessageId || !providerStatus) {
+      throw new BadRequestException('Missing required Twilio status fields');
+    }
+    if (!this.messagesRepo) throw new Error('Message repository is unavailable');
+    const message = await this.messagesRepo.findOne({
+      where: { providerMessageId },
+      relations: ['lead'],
+    });
+    if (!message?.lead?.tenantId) return { status: 'ignored' } as const;
+    const credential = await this.credentialsRepo.findOne({
+      where: {
+        provider: 'twilio',
+        tenant: { id: message.lead.tenantId } as any,
+      },
+      relations: ['tenant'],
+    });
+    const integration = credential
+      ? decryptIntegrationPayload(credential.encryptedValue)
+      : null;
+    const authToken = String(integration?.authToken || '').trim();
+    const callbackUrl = String(process.env.TWILIO_STATUS_CALLBACK_URL || '').trim();
+    const signatureHeader = headers['x-twilio-signature'];
+    const signature = Array.isArray(signatureHeader)
+      ? signatureHeader[0] || ''
+      : String(signatureHeader || '');
+    if (
+      !integration?.connected ||
+      !authToken ||
+      !callbackUrl ||
+      !validTwilioSignature(callbackUrl, body, authToken, signature)
+    ) {
+      this.logger.warn(
+        operationalEvent('invalid_webhook_signature', {
+          provider: 'twilio',
+          webhook: 'status',
+          providerMessageId,
+        }),
+      );
+      throw new UnauthorizedException('Invalid webhook signature');
+    }
+
+    const currentRank = messageStatusRank(message.status);
+    const next = twilioMessageState(providerStatus);
+    if (next && next.rank >= currentRank) {
+      const now = new Date();
+      message.providerStatus = providerStatus;
+      message.status = next.status;
+      if (next.status === 'sent') message.sentAt = message.sentAt || now;
+      if (next.status === 'delivered') {
+        message.sentAt = message.sentAt || now;
+        message.deliveredAt = message.deliveredAt || now;
+      }
+      if (next.status === 'failed') {
+        message.failedAt = message.failedAt || now;
+        message.errorCode = String(body.ErrorCode || 'TWILIO_DELIVERY_FAILED');
+        message.sanitizedErrorMessage = sanitizeOperationalText(
+          body.ErrorMessage || `Twilio reported ${providerStatus}`,
+        );
+      }
+      if (next.status === 'canceled') message.canceledAt = message.canceledAt || now;
+      await this.messagesRepo.save(message);
+      if (next.status === 'failed' && this.operations) {
+        this.logger.warn(
+          operationalEvent('provider_delivery_failed', {
+            provider: 'twilio',
+            tenantId: message.lead.tenantId,
+            messageId: message.id,
+            providerMessageId,
+            providerStatus,
+            errorCode: message.errorCode,
+          }),
+        );
+        await this.operations.createTask({
+          tenantId: message.lead.tenantId,
+          category: 'messaging_failure',
+          title: 'Twilio delivery failed',
+          description: message.sanitizedErrorMessage || providerStatus,
+          priority: 'high',
+          relatedEntityType: 'message',
+          relatedEntityId: message.id,
+          dedupeOpen: true,
+        });
+      }
+    }
+    return { status: 'ok', messageStatus: message.status } as const;
+  }
 
   verifyFacebookWebhook(
     mode: string | undefined,
@@ -85,6 +200,12 @@ export class WebhooksService {
       !challenge ||
       !safeEqual(expected, verifyToken)
     ) {
+      this.logger.warn(
+        operationalEvent('invalid_webhook_verification', {
+          provider: 'facebook',
+          webhook: 'lead_ads',
+        }),
+      );
       throw new UnauthorizedException('Facebook webhook verification failed');
     }
     return challenge;
@@ -122,6 +243,12 @@ export class WebhooksService {
   ) {
     const secret = String(process.env.FACEBOOK_APP_SECRET || '').trim();
     if (!secret || !rawBody || !supplied.startsWith('sha256=')) {
+      this.logger.warn(
+        operationalEvent('invalid_webhook_signature', {
+          provider: 'facebook',
+          webhook: 'lead_ads',
+        }),
+      );
       throw new UnauthorizedException('Invalid Facebook webhook signature');
     }
     const expected = `sha256=${crypto
@@ -129,6 +256,12 @@ export class WebhooksService {
       .update(rawBody)
       .digest('hex')}`;
     if (!safeEqual(expected, supplied)) {
+      this.logger.warn(
+        operationalEvent('invalid_webhook_signature', {
+          provider: 'facebook',
+          webhook: 'lead_ads',
+        }),
+      );
       throw new UnauthorizedException('Invalid Facebook webhook signature');
     }
   }
@@ -202,7 +335,10 @@ export class WebhooksService {
     } as any);
 
     this.logger.log(
-      `Facebook lead ${leadgenId} saved for tenant=${credential.tenant.id}`,
+      operationalEvent('facebook_lead_saved', {
+        tenantId: credential.tenant.id,
+        providerLeadId: leadgenId,
+      }),
     );
     void webhookValue;
   }
@@ -261,7 +397,9 @@ export class WebhooksService {
     const credential = await this.findTwilioCredential(toRoutingKey);
     if (!credential?.tenant?.id) {
       this.logger.warn(
-        'Twilio inbound did not match a connected tenant number',
+        operationalEvent('twilio_inbound_unrouted', {
+          providerMessageId,
+        }),
       );
       return { status: 'ignored' } as const;
     }
@@ -279,6 +417,14 @@ export class WebhooksService {
       !webhookUrl ||
       !validTwilioSignature(webhookUrl, body, authToken, signature)
     ) {
+      this.logger.warn(
+        operationalEvent('invalid_webhook_signature', {
+          provider: 'twilio',
+          webhook: 'inbound',
+          tenantId: credential.tenant.id,
+          providerMessageId,
+        }),
+      );
       throw new UnauthorizedException('Invalid webhook signature');
     }
 
@@ -311,7 +457,13 @@ export class WebhooksService {
     );
 
     this.logger.log(
-      `Twilio inbound saved for tenant=${tenantId} lead=${persisted.leadId}`,
+      operationalEvent('twilio_inbound_saved', {
+        tenantId,
+        leadId: persisted.leadId,
+        providerMessageId,
+        stopKeyword,
+        duplicate: persisted.duplicate,
+      }),
     );
     return {
       status: persisted.duplicate ? 'duplicate' : 'ok',
@@ -376,6 +528,7 @@ export class WebhooksService {
         body: input.text,
         providerMessageId: input.providerMessageId,
         status: 'received',
+        providerStatus: 'received',
         sentAt: receivedAt,
         attemptCount: 0,
       }),
@@ -422,6 +575,25 @@ function safeEqual(expected: string, supplied: string) {
   const left = Buffer.from(expected);
   const right = Buffer.from(supplied);
   return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function twilioMessageState(status: string): { status: Message['status']; rank: number } | null {
+  if (['accepted', 'queued', 'sending'].includes(status)) {
+    return { status: 'provider_accepted', rank: 2 };
+  }
+  if (status === 'sent') return { status: 'sent', rank: 3 };
+  if (status === 'delivered') return { status: 'delivered', rank: 5 };
+  if (['failed', 'undelivered'].includes(status)) return { status: 'failed', rank: 4 };
+  if (status === 'canceled') return { status: 'canceled', rank: 4 };
+  return null;
+}
+
+function messageStatusRank(status: Message['status']) {
+  if (status === 'delivered') return 5;
+  if (status === 'failed' || status === 'canceled') return 4;
+  if (status === 'sent') return 3;
+  if (status === 'provider_accepted') return 2;
+  return 1;
 }
 
 function facebookFieldMap(fieldData: unknown) {

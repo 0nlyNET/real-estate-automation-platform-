@@ -10,8 +10,10 @@ export function mapStripeStatusToTenantStatus(stripeStatus: string | null | unde
   if (s === 'unpaid') return 'unpaid';
   if (s === 'incomplete') return 'incomplete';
   if (s === 'incomplete_expired') return 'incomplete_expired';
+  if (s === 'paused') return 'paused';
 
-  return 'active';
+  // Unknown or missing provider states must never grant service.
+  return 'incomplete';
 }
 
 export function toDateOrNull(unixSeconds: any): Date | null {

@@ -126,4 +126,21 @@ describe('JwtStrategy', () => {
     const strategy = new JwtStrategy({ findById: jest.fn() } as any);
     await expect(strategy.validate({})).rejects.toBeInstanceOf(UnauthorizedException);
   });
+
+  it('rejects a token issued before a password reset or logout', async () => {
+    const strategy = new JwtStrategy({
+      findById: jest.fn().mockResolvedValue({
+        id: 'user-1',
+        email: 'agent@example.com',
+        tenantId: 'tenant-1',
+        isActive: true,
+        isEmailVerified: true,
+        mustChangePassword: false,
+        sessionVersion: 4,
+      }),
+    } as any);
+    await expect(
+      strategy.validate({ sub: 'user-1', sessionVersion: 3 }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
 });

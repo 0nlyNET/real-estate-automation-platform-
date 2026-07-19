@@ -1,4 +1,4 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
@@ -11,11 +11,11 @@ export class StatsController {
   // Dashboard-safe overview (any plan)
   @UseGuards(JwtAuthGuard)
   @Get('overview')
-  async overview(@Req() req: any) {
+  async overview(@Req() req: any, @Query('from') from?: string, @Query('to') to?: string) {
     return await this.stats.overview(req.user?.tenantId, {
       userId: req.user?.sub,
       role: req.user?.role,
-    });
+    }, { from, to });
   }
 
   // Teams/Brokerages: agent leaderboard & performance

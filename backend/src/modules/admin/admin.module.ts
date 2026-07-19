@@ -13,14 +13,18 @@ import { Credential } from '../settings/credential.entity';
 import { CommonModule } from '../../common/common.module';
 import { AuditModule } from '../audit/audit.module';
 import { MailModule } from '../../mail/mail.module';
+import { OnboardingModule } from '../onboarding/onboarding.module';
+import { TenantSettings } from '../settings/tenant-settings.entity';
+import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
 
 @Module({
   imports: [
     AuthModule,
-    TypeOrmModule.forFeature([Tenant, User, Lead, Message, Credential]),
+    TypeOrmModule.forFeature([Tenant, User, Lead, Message, Credential, TenantSettings, OnboardingRecord]),
     CommonModule,
     AuditModule,
     MailModule,
+    OnboardingModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],

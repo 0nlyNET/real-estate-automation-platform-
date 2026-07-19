@@ -113,7 +113,7 @@ export function DashboardAutomationHealth() {
               <div className="rounded-lg border border-dashed border-border/70 bg-background/40 p-4">
                 <div className="text-sm font-medium">No sequences yet</div>
                 <div className="mt-1 text-sm text-muted-foreground">
-                  Create a simple follow-up sequence to start converting leads automatically.
+                  Create a follow-up sequence, then submit it for approval before activation.
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button asChild size="sm" className="h-8">

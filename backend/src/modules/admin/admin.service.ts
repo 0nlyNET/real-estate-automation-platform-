@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
@@ -10,6 +10,9 @@ import { Lead } from '../leads/lead.entity';
 import { Message } from '../messaging/message.entity';
 import { Credential } from '../settings/credential.entity';
 import { MailService } from '../../mail/mail.service';
+import { TenantSettings } from '../settings/tenant-settings.entity';
+import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
+import { OperationsService } from '../operations/operations.service';
 
 @Injectable()
 export class AdminService {
@@ -25,6 +28,7 @@ export class AdminService {
     private readonly credentialsRepo: Repository<Credential>,
     private readonly dataSource: DataSource,
     private readonly mail: MailService,
+    @Optional() private readonly operations?: OperationsService,
   ) {}
 
   async createClient(params: { businessName: string; ownerEmail: string }) {
@@ -50,9 +54,10 @@ export class AdminService {
         tenants.create({
           name: businessName,
           plan: 'trial',
-          status: 'trialing',
+          status: 'incomplete',
+          lifecycleStatus: 'ONBOARDING',
           billingInterval: 'month',
-          trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+          trialEndsAt: null,
           currentPeriodEnd: null,
           cancelAtPeriodEnd: false,
           cancelAt: null,
@@ -71,6 +76,31 @@ export class AdminService {
           emailVerifyToken: verificationTokenHash,
           emailVerifyTokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
           isActive: true,
+          mustChangePassword: true,
+        }),
+      );
+
+      const tenantSettings = manager.getRepository(TenantSettings);
+      await tenantSettings.save(
+        tenantSettings.create({ tenantId: tenant.id, automationsEnabled: false }),
+      );
+      const onboarding = manager.getRepository(OnboardingRecord);
+      await onboarding.save(
+        onboarding.create({
+          tenantId: tenant.id,
+          businessIdentity: { legalBusinessName: businessName },
+          contacts: { accountOwner: ownerEmail },
+          serviceScope: {},
+          leadHandling: {},
+          brandCommunication: {},
+          consentConfiguration: {},
+          integrationConfiguration: {},
+          providerTests: {},
+          verifiedItems: {},
+          smsEnabled: false,
+          emailEnabled: false,
+          bookingEnabled: false,
+          activationStatus: 'incomplete',
         }),
       );
 
@@ -91,7 +121,28 @@ export class AdminService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      await this.operations?.createTask({
+        tenantId: created.tenant.id,
+        category: 'notification_failure',
+        title: 'Client verification email failed',
+        description: 'Resend the verification email after system email configuration is restored.',
+        priority: 'high',
+        relatedEntityType: 'user',
+        relatedEntityId: created.owner.id,
+        dedupeOpen: true,
+      });
     }
+
+    await this.operations?.createTask({
+      tenantId: created.tenant.id,
+      category: 'onboarding_task',
+      title: 'Complete paid-pilot onboarding',
+      description: 'Assign an owner, collect client intake, connect required providers, run UAT, and record launch approvals.',
+      priority: 'high',
+      relatedEntityType: 'tenant',
+      relatedEntityId: created.tenant.id,
+      dedupeOpen: true,
+    });
 
     return {
       tenant: {

@@ -97,7 +97,7 @@ export function DashboardKpis() {
   return (
     <div className="grid gap-4 md:grid-cols-3">
       <KpiCard
-        title="Avg first response"
+        title="Average lead reply time"
         value={
           loading ? (
             <Skeleton className="h-9 w-24" />
@@ -107,7 +107,7 @@ export function DashboardKpis() {
             `${Math.round(stats.avgFirstResponseSec / 60)}m`
           )
         }
-        hint="How fast leads reply after your first outreach."
+        hint="Average lead reply time after first provider-accepted outreach."
         icon={<Inbox className="h-4 w-4" />}
         footer={
           <Button asChild size="sm" variant="outline" className="h-8">
@@ -117,7 +117,7 @@ export function DashboardKpis() {
       />
 
       <KpiCard
-        title="Contacted < 5 min"
+        title="Provider accepted < 5 min"
         value={
           loading ? (
             <Skeleton className="h-9 w-20" />
@@ -127,7 +127,7 @@ export function DashboardKpis() {
             `${stats.pctContactedWithin5Min}%`
           )
         }
-        hint="Percent of leads that got a first message within 5 minutes."
+        hint="Initial outreach accepted by a provider within five minutes; not delivery or reading."
         icon={<MessageSquare className="h-4 w-4" />}
         footer={
           <Button asChild size="sm" variant="outline" className="h-8">

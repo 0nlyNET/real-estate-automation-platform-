@@ -29,3 +29,16 @@ export class ResetPasswordDto {
   @MinLength(12)
   password!: string;
 }
+
+export class ChangeTemporaryPasswordDto {
+  @IsEmail()
+  email!: string;
+
+  @IsString()
+  @MinLength(8)
+  temporaryPassword!: string;
+
+  @IsString()
+  @MinLength(12)
+  newPassword!: string;
+}

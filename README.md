@@ -5,12 +5,12 @@ RealtyTechAI is a multi-tenant lead-response and follow-up platform for real est
 ## What is implemented
 
 - Tenant-scoped leads, users, teams, assignments, messaging, and reporting
-- JWT authentication, verified accounts, password reset, role checks, and platform-admin allow-listing
+- HttpOnly-cookie JWT authentication, session revocation, verified accounts, password reset, forced temporary-password replacement, role checks, and platform-admin allow-listing
 - SMS/email provider credentials encrypted at rest
 - Twilio inbound signature verification, opt-outs, quiet hours, and follow-up sequence controls
-- Stripe-hosted checkout, billing portal, and subscription webhooks
+- Stripe-hosted checkout, duplicate-subscription prevention, billing portal, signed/idempotent webhooks, and centralized entitlement checks
 - Teams-plan routing with fixed-user and round-robin actions
-- Public inquiry and protected lead-intake endpoints with validation and rate limits
+- Persisted public applications, structured onboarding/readiness, a platform operations queue, and protected lead intake with consent evidence
 
 Provider accounts and production infrastructure are not included. Results, uptime, certifications, and legal compliance depend on the deployment and operating process.
 
@@ -41,7 +41,7 @@ Requirements: Docker with Compose.
    docker compose up --build
    ```
 
-3. Open `http://localhost:3000`. The API health endpoint is `http://localhost:4000/health`.
+3. Open `http://localhost:3000`. API liveness is `http://localhost:4000/health/live`; full readiness is `http://localhost:4000/health/readiness`.
 
 To create the first verified owner, add `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` to the root `.env`, then run `docker compose exec backend npm run seed`. Add the same email to `PLATFORM_ADMIN_EMAILS` only if that account should manage every tenant.
 
@@ -69,7 +69,7 @@ npm ci
 npm run dev
 ```
 
-For a fresh local database, temporarily set `TYPEORM_SYNC=true`. Use reviewed migrations for production schema changes.
+For a disposable, empty local database, `TYPEORM_SYNC=true` is supported. Use reviewed migrations with `TYPEORM_SYNC=false` for every production schema change.
 
 After building the backend, `npm run seed` creates the initial verified owner from the explicit `SEED_ADMIN_*` environment values.
 
@@ -80,13 +80,21 @@ See `backend/.env.example` and `frontend/.env.example`. At minimum, configure:
 - a strong `JWT_SECRET` and comma-separated `PLATFORM_ADMIN_EMAILS`
 - PostgreSQL through `DATABASE_URL`
 - a 32-byte `INTEGRATIONS_ENCRYPTION_KEY`
-- `FRONTEND_URL`, `NEXT_PUBLIC_API_URL`, and the exact public `TWILIO_WEBHOOK_URL`
+- backend `FRONTEND_URL` and `PUBLIC_APP_URL`, both set to the canonical frontend HTTPS origin
+- frontend server-only `BACKEND_API_URL` for the same-origin `/api/backend/*` proxy, plus `NEXT_PUBLIC_SITE_URL` for canonical metadata; do not expose the backend origin through `NEXT_PUBLIC_*`
+- exact public `TWILIO_WEBHOOK_URL=<api-origin>/webhooks/twilio/inbound` and `TWILIO_STATUS_CALLBACK_URL=<api-origin>/webhooks/twilio/status`
 - Meta app credentials, an active `FACEBOOK_GRAPH_API_VERSION`, and the exact
   `FACEBOOK_WEBHOOK_URL` only when Facebook Lead Ads is enabled
 - SendGrid, Twilio, Stripe, and Facebook values only for integrations you enable
 - `SALES_INBOX_EMAIL` for public contact/application delivery
 
-Terminate HTTPS at the hosting platform, restrict database access, run migrations as a release step, and configure backups, logs, alerts, and secret rotation before handling customer data.
+Production startup validates critical security/database configuration, and `/health/readiness` checks the database, schema, pending migrations, system email, billing configuration, worker mode, encryption, and legacy plaintext credential count without exposing secrets. Terminate HTTPS at the hosting platform, restrict database access, run migrations as a release step, and configure backups, logs, alerts, and secret rotation before handling customer data.
+
+Before accepting a pilot payment, complete:
+
+- `docs/production-launch-owner-checklist.md`
+- `docs/database-migration-runbook.md`
+- all 21 journeys in `docs/first-client-uat.md`
 
 ### Facebook Lead Ads production setup
 
@@ -106,8 +114,17 @@ Terminate HTTPS at the hosting platform, restrict database access, run migration
 ## Validation
 
 ```bash
-cd backend && npm test && npm run build
-cd frontend && npm run build
+cd backend
+npm run lint
+npm test -- --runInBand
+npm run build
+npm audit --omit=dev --audit-level=high
+
+cd ../frontend
+npm run lint
+npm test
+npm run build
+npm audit --omit=dev --audit-level=high
 ```
 
 GitHub stores and validates the source but does not host this full-stack application through GitHub Pages. Deploy `frontend/` and `backend/` to suitable application hosts and attach a managed PostgreSQL database.

@@ -1,7 +1,6 @@
 import Link from "next/link"
 import { MarketingHeader } from "@/components/ui/marketing-header"
 import { Footer } from "@/components/ui/footer"
-import { CookieBanner } from "@/components/ui/cookie-banner"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { CheckCircle2, ArrowRight } from "lucide-react"
@@ -71,7 +70,6 @@ export default function ThanksPage() {
       </section>
 
       <Footer />
-      <CookieBanner />
     </div>
   )
 }

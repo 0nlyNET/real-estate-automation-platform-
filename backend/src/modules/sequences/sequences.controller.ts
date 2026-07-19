@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SequencesService } from './sequences.service';
-import { CreateSequenceDto, SequenceStepDto, StopEnrollmentDto, UpdateSequenceDto } from './sequences.dto';
+import { ApproveSequenceStepDto, CreateSequenceDto, SequenceStepDto, StopEnrollmentDto, UpdateSequenceDto } from './sequences.dto';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 
 @Controller()
@@ -59,6 +59,24 @@ export class SequencesController {
     @Body() payload: SequenceStepDto,
   ) {
     return this.sequencesService.updateStep(req.user?.tenantId, id, stepId, payload);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Post('sequences/:id/steps/:stepId/approve')
+  @RequireRole('admin')
+  approveStep(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Param('stepId') stepId: string,
+    @Body() payload: ApproveSequenceStepDto,
+  ) {
+    return this.sequencesService.approveStep(
+      req.user?.tenantId,
+      id,
+      stepId,
+      req.user?.sub,
+      payload.identityLabel,
+    );
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -31,6 +31,7 @@ describe("SettingsService intake keys", () => {
       tenantSettingsRepo as any,
       { findOne: jest.fn() } as any,
       { findOne: jest.fn(), create: jest.fn(), save: jest.fn() } as any,
+      { assertAllowed: jest.fn() } as any,
     );
   });
 

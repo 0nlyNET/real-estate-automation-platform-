@@ -19,7 +19,7 @@ import { requireJwtSecret } from '../../common/env';
     TypeOrmModule.forFeature([PasswordResetToken]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
-      useFactory: () => ({ secret: requireJwtSecret(), signOptions: { expiresIn: '7d' } }),
+      useFactory: () => ({ secret: requireJwtSecret(), signOptions: { expiresIn: '12h' } }),
     }),
   ],
   controllers: [AuthController],

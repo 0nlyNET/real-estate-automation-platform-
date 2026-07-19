@@ -10,7 +10,7 @@ import { Logo } from "@/components/logo"
 
 const navItems = [
   { label: "Services", href: "/features" },
-  { label: "Results", href: "/use-cases" },
+  { label: "Workflows", href: "/use-cases" },
   { label: "Contact", href: "/contact" },
 ]
 
@@ -47,10 +47,10 @@ export function MarketingHeader() {
             <Link href="/login">Log in</Link>
           </Button>
           <Button variant="outline" asChild>
-            <Link href="/contact?topic=demo">Get a demo</Link>
+            <Link href="/apply">Get a demo</Link>
           </Button>
           <Button asChild className="bg-primary text-primary-foreground hover:bg-primary/90">
-            <Link href="/apply">Book setup</Link>
+            <Link href="/apply">Apply for pilot</Link>
           </Button>
         </div>
 
@@ -85,10 +85,10 @@ export function MarketingHeader() {
                 <Link href="/login">Log in</Link>
               </Button>
               <Button variant="outline" asChild>
-                <Link href="/contact?topic=demo">Get a demo</Link>
+                <Link href="/apply">Get a demo</Link>
               </Button>
               <Button asChild className="bg-primary text-primary-foreground">
-                <Link href="/apply">Book setup</Link>
+                <Link href="/apply">Apply for pilot</Link>
               </Button>
             </div>
           </nav>

@@ -6,6 +6,7 @@ import { DataSource } from "typeorm";
 import { databaseEntities } from "./entities";
 import { inspectDatabaseSchema } from "./schema-readiness";
 import { ProductionSchemaReconciliation1784332800004 } from "./migrations/202607180004-production-schema-reconciliation";
+import { ClientReadinessFoundations1784419200001 } from "./migrations/202607190001-client-readiness-foundations";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -110,14 +111,20 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 20,
+      expectedTables: 26,
       actualTables: 12,
       missingTables: [
         "agent_presence",
         "compliance_events",
         "compliance_optouts",
+        "lead_consent_records",
+        "lead_stage_events",
+        "onboarding_records",
+        "operations_tasks",
+        "prospect_applications",
         "routing_assignment_logs",
         "routing_rules",
+        "stripe_webhook_events",
         "support_tickets",
         "teams",
         "tenant_quiet_hours",
@@ -127,12 +134,13 @@ describe("deployed legacy schema reproduction", () => {
     const queryRunner = dataSource.createQueryRunner();
     await queryRunner.connect();
     await new ProductionSchemaReconciliation1784332800004().up(queryRunner);
+    await new ClientReadinessFoundations1784419200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 20,
-      actualTables: 20,
+      expectedTables: 26,
+      actualTables: 26,
       missingTables: [],
       missingColumns: [],
     });
@@ -158,6 +166,13 @@ describe("deployed legacy schema reproduction", () => {
       }),
     ).resolves.toMatchObject({ provider: "sendgrid" });
     await expect(
+      dataSource.getRepository(Credential).save({
+        tenant: { id: tenantId },
+        provider: "twilio",
+        encryptedValue: "duplicate-provider-row",
+      }),
+    ).rejects.toBeDefined();
+    await expect(
       dataSource.getRepository(SequenceStep).save({
         sequence: { id: sequenceId },
         offsetMinutes: 30,
@@ -177,12 +192,13 @@ describe("deployed legacy schema reproduction", () => {
     const queryRunner = dataSource.createQueryRunner();
     await queryRunner.connect();
     await new ProductionSchemaReconciliation1784332800004().up(queryRunner);
+    await new ClientReadinessFoundations1784419200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 20,
-      actualTables: 20,
+      expectedTables: 26,
+      actualTables: 26,
       missingTables: [],
       missingColumns: [],
     });

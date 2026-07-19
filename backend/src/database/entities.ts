@@ -18,6 +18,12 @@ import { Tenant } from "../modules/tenants/tenant.entity";
 import { TenantQuietHours } from "../modules/compliance/tenant-quiet-hours.entity";
 import { TenantSettings } from "../modules/settings/tenant-settings.entity";
 import { User } from "../modules/users/user.entity";
+import { ProspectApplication } from '../modules/public/prospect-application.entity';
+import { StripeWebhookEvent } from '../modules/billing/stripe-webhook-event.entity';
+import { OnboardingRecord } from '../modules/onboarding/onboarding-record.entity';
+import { OperationsTask } from '../modules/operations/operations-task.entity';
+import { LeadConsentRecord } from '../modules/compliance/lead-consent-record.entity';
+import { LeadStageEvent } from '../modules/leads/lead-stage-event.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -40,4 +46,10 @@ export const databaseEntities = [
   PasswordResetToken,
   SupportTicket,
   AuditLog,
+  ProspectApplication,
+  StripeWebhookEvent,
+  OnboardingRecord,
+  OperationsTask,
+  LeadConsentRecord,
+  LeadStageEvent,
 ] as const;

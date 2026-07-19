@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { MarketingHeader } from "@/components/ui/marketing-header"
 import { Footer } from "@/components/ui/footer"
 
@@ -5,119 +6,100 @@ export default function TermsPage() {
   return (
     <div className="min-h-screen bg-background">
       <MarketingHeader />
-
-      <section className="py-24">
+      <main className="py-24">
         <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
           <h1 className="text-4xl font-bold tracking-tight text-foreground">Terms of Service</h1>
-          <p className="mt-4 text-muted-foreground">Last updated: January 1, 2026</p>
+          <p className="mt-4 text-muted-foreground">Effective July 19, 2026</p>
 
           <div className="mt-12 space-y-8 text-muted-foreground">
             <section>
-              <h2 className="text-xl font-semibold text-foreground">1. Acceptance of Terms</h2>
+              <h2 className="text-xl font-semibold text-foreground">Service relationship</h2>
               <p className="mt-4">
-                By accessing or using RealtyTechAI ("Service"), you agree to be bound by these Terms of Service. If you
-                do not agree to these terms, do not use the Service.
+                RealtyTechAI is a managed lead-intake, routing, approved follow-up, shared-inbox, and reporting service
+                for real-estate teams. The agreed order, onboarding record, approved message content, enabled providers,
+                and service scope form part of the client&apos;s service configuration. Features that have not passed the
+                documented launch checks remain inactive.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">2. Description of Service</h2>
-              <p className="mt-4">
-                RealtyTechAI provides a lead management and automation platform for real estate professionals. Features
-                include lead capture, automated messaging, inbox management, and reporting tools.
-              </p>
-            </section>
-
-            <section>
-              <h2 className="text-xl font-semibold text-foreground">3. User Accounts</h2>
-              <p className="mt-4">You are responsible for:</p>
+              <h2 className="text-xl font-semibold text-foreground">Accounts and client responsibilities</h2>
               <ul className="mt-4 list-disc space-y-2 pl-6">
-                <li>Maintaining the confidentiality of your account credentials</li>
-                <li>All activities that occur under your account</li>
-                <li>Notifying us immediately of any unauthorized use</li>
-                <li>Ensuring your account information is accurate and up-to-date</li>
+                <li>Keep credentials confidential and promptly report suspected unauthorized access.</li>
+                <li>Provide accurate lead-source, consent, sender-identity, booking, and team-routing information.</li>
+                <li>Review and approve message templates before activation.</li>
+                <li>Use the service lawfully and do not upload purchased lists, send spam, or bypass opt-outs.</li>
+                <li>Maintain any licenses, permissions, and notices required for the client&apos;s business and contacts.</li>
               </ul>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">4. Acceptable Use</h2>
-              <p className="mt-4">You agree not to:</p>
-              <ul className="mt-4 list-disc space-y-2 pl-6">
-                <li>Violate any applicable laws or regulations</li>
-                <li>Send unsolicited messages or spam</li>
-                <li>Impersonate any person or entity</li>
-                <li>Interfere with or disrupt the Service</li>
-                <li>Attempt to gain unauthorized access to any systems</li>
-                <li>Use the Service for any illegal or harmful purpose</li>
-              </ul>
-            </section>
-
-            <section>
-              <h2 className="text-xl font-semibold text-foreground">5. Messaging Compliance</h2>
+              <h2 className="text-xl font-semibold text-foreground">Messaging and consent</h2>
               <p className="mt-4">
-                You are solely responsible for ensuring your use of messaging features complies with applicable laws
-                including TCPA, CAN-SPAM, and state-specific regulations. You must obtain proper consent before sending
-                automated messages.
+                The client must supply appropriate channel-specific consent evidence before automated contact. The
+                service blocks automated messages when required evidence is missing and honors supported SMS STOP and
+                email unsubscribe requests. These controls assist operations but do not replace the client&apos;s legal
+                obligations or professional advice.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">6. Payment Terms</h2>
+              <h2 className="text-xl font-semibold text-foreground">Fees, billing, and refunds</h2>
               <p className="mt-4">
-                Paid subscriptions are billed in advance on a monthly or annual basis. All fees are non-refundable
-                except as required by law. We may change pricing with 30 days notice.
+                Package, billing interval, start date, and fees are confirmed in the applicable order or checkout before
+                payment. Subscription charges renew for the stated interval until canceled. Billing-error and refund
+                requests are reviewed under the <Link className="text-primary hover:underline" href="/refund">refund policy</Link>
+                and any applicable law; these terms do not make a conflicting blanket promise.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">7. Intellectual Property</h2>
+              <h2 className="text-xl font-semibold text-foreground">Cancellation, suspension, and deletion</h2>
               <p className="mt-4">
-                The Service and its original content, features, and functionality are owned by RealtyTechAI LLC and are
-                protected by intellectual property laws. You retain ownership of your data.
+                A subscription cancellation stops future renewal according to the billing terms. Service suspension or
+                termination disables access and automated activity but may not immediately delete records needed for
+                security, billing, support, or legal purposes. A data-deletion request is a separate verified workflow
+                and may be subject to retention obligations.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">8. Limitation of Liability</h2>
+              <h2 className="text-xl font-semibold text-foreground">Availability and third parties</h2>
               <p className="mt-4">
-                RealtyTechAI LLC shall not be liable for any indirect, incidental, special, consequential, or punitive
-                damages resulting from your use of the Service. Our total liability shall not exceed the amount you paid
-                us in the past 12 months.
+                The service depends on hosting, communications, payment, and lead-source providers. We do not guarantee
+                uninterrupted operation, message delivery, lead volume, appointments, revenue, or transaction outcomes.
+                Provider terms and outages may affect an enabled workflow.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">9. Termination</h2>
+              <h2 className="text-xl font-semibold text-foreground">Ownership and acceptable use</h2>
               <p className="mt-4">
-                We may terminate or suspend your account at any time for violation of these terms. You may cancel your
-                account at any time. Upon termination, your right to use the Service ceases immediately.
+                Clients retain their rights in submitted business and lead data. The RealtyTechAI service, interface,
+                and original software remain the operator&apos;s materials. Users may not misuse the service, probe or
+                disrupt security, impersonate others, violate law, or attempt unauthorized access.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">10. Changes to Terms</h2>
+              <h2 className="text-xl font-semibold text-foreground">Disclaimers and responsibility</h2>
               <p className="mt-4">
-                We reserve the right to modify these terms at any time. We will notify you of material changes via email
-                or through the Service. Continued use after changes constitutes acceptance.
+                The service is provided subject to the written service agreement and applicable law. Real-estate,
+                communications, privacy, and advertising obligations vary by jurisdiction. Each party remains
+                responsible for its own acts, content, approvals, and legal obligations.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">11. Governing Law</h2>
+              <h2 className="text-xl font-semibold text-foreground">Contact and changes</h2>
               <p className="mt-4">
-                These terms shall be governed by the laws of the State of Texas, without regard to conflict of law
-                provisions.
+                Questions can be submitted through authenticated support or the <Link className="text-primary hover:underline" href="/contact">public contact page</Link>.
+                Material changes will be identified by a revised effective date and communicated through an appropriate channel.
               </p>
-            </section>
-
-            <section>
-              <h2 className="text-xl font-semibold text-foreground">12. Contact</h2>
-              <p className="mt-4">For questions about these Terms, contact us at legal@realtytechai.com</p>
             </section>
           </div>
         </div>
-      </section>
-
+      </main>
       <Footer />
     </div>
   )

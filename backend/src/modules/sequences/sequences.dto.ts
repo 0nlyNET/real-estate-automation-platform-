@@ -14,6 +14,12 @@ export class SequenceStepDto {
   @IsIn(['sms', 'email']) channel!: 'sms' | 'email';
   @IsString() @MinLength(1) @MaxLength(5000) template!: string;
   @IsInt() @Min(0) @Max(525600) offsetMinutes!: number;
+  @IsOptional() @IsString() @MaxLength(255) identityLabel?: string;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
+export class ApproveSequenceStepDto {
+  @IsString() @MinLength(1) @MaxLength(255) identityLabel!: string;
 }
 
 export class StopEnrollmentDto {

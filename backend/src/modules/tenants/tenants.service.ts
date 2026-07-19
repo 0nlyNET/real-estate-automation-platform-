@@ -13,13 +13,13 @@ export class TenantsService {
   }
 
   async createTrialTenant(name?: string): Promise<Tenant> {
-    const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
     const tenant = this.repo.create({
       name: name?.trim() || 'My Workspace',
       plan: 'trial',
-      status: 'trialing',
+      status: 'incomplete',
+      lifecycleStatus: 'ONBOARDING',
       billingInterval: 'month',
-      trialEndsAt,
+      trialEndsAt: null,
       currentPeriodEnd: null,
       cancelAtPeriodEnd: false,
       cancelAt: null,
@@ -51,6 +51,17 @@ export class TenantsService {
         | 'stripeSubscriptionStatus'
         | 'stripePriceId'
         | 'billingInterval'
+        | 'lifecycleStatus'
+        | 'stripeCheckoutSessionId'
+        | 'stripeCheckoutStartedAt'
+        | 'stripeProductId'
+        | 'currentPeriodStart'
+        | 'trialStart'
+        | 'cancellationDate'
+        | 'canceledAt'
+        | 'latestInvoiceId'
+        | 'lastPaymentFailureAt'
+        | 'billingStateUpdatedAt'
       >
     >,
   ): Promise<Tenant> {
@@ -62,6 +73,17 @@ export class TenantsService {
 
   async setStripeCustomer(tenantId: string, stripeCustomerId: string): Promise<void> {
     await this.repo.update({ id: tenantId }, { stripeCustomerId });
+  }
+
+  async findByStripeReference(
+    subscriptionId?: string | null,
+    customerId?: string | null,
+  ) {
+    const where: Array<Record<string, string>> = [];
+    if (subscriptionId) where.push({ stripeSubscriptionId: subscriptionId });
+    if (customerId) where.push({ stripeCustomerId: customerId });
+    if (!where.length) return null;
+    return this.repo.findOne({ where: where as any });
   }
 
   async setPlan(

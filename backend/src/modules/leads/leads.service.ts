@@ -17,6 +17,8 @@ import { User } from '../users/user.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Team } from '../teams/team.entity';
 import { RoutingService } from '../routing/routing.service';
+import { ComplianceService } from '../compliance/compliance.service';
+import { LeadStageEvent } from './lead-stage-event.entity';
 
 @Injectable()
 export class LeadsService {
@@ -28,6 +30,9 @@ export class LeadsService {
 
     @InjectRepository(LeadEvent)
     private readonly leadEventsRepository: Repository<LeadEvent>,
+
+    @InjectRepository(LeadStageEvent)
+    private readonly leadStageEventsRepository: Repository<LeadStageEvent>,
 
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
@@ -42,6 +47,7 @@ export class LeadsService {
     private readonly messagingService: MessagingService,
     private readonly sequencesService: SequencesService,
     private readonly routingService: RoutingService,
+    private readonly complianceService: ComplianceService,
   ) {}
 
   private async applyRoutingRules(lead: Lead, plan: string) {
@@ -195,6 +201,7 @@ export class LeadsService {
     if (existing) {
       this.logger.log(`Deduped lead ${existing.id}`);
       await this.logLeadEvent(existing, 'deduped', payload as any);
+      await this.complianceService.recordLeadConsent(tenant.id, existing.id, payload.consent);
       return existing;
     }
 
@@ -238,6 +245,8 @@ export class LeadsService {
     saved = await this.applyRoutingRules(saved, String(tenant.plan));
 
     await this.logLeadEvent(saved, 'created', payload as any);
+    await this.recordStageChange(saved, null, saved.stage, undefined, 'intake');
+    await this.complianceService.recordLeadConsent(tenant.id, saved.id, payload.consent);
 
     // Automation hooks
     await this.messagingService.queueInstantResponses(saved);
@@ -266,6 +275,12 @@ export class LeadsService {
     const existing = await this.findDuplicateLead({ tenantId: tenant.id, email, phone });
     if (existing) {
       await this.logLeadEvent(existing, 'deduped', payload as any);
+      await this.complianceService.recordLeadConsent(
+        tenant.id,
+        existing.id,
+        payload.consent,
+        ctx?.userId,
+      );
       return existing;
     }
 
@@ -334,6 +349,13 @@ export class LeadsService {
     let saved = await this.leadsRepository.save(lead as Lead);
     if (!assigneeUserId) saved = await this.applyRoutingRules(saved, String(tenant.plan));
     await this.logLeadEvent(saved, 'created', payload as any);
+    await this.recordStageChange(saved, null, saved.stage, ctx?.userId, 'manual_create');
+    await this.complianceService.recordLeadConsent(
+      tenant.id,
+      saved.id,
+      payload.consent,
+      ctx?.userId,
+    );
 
     const trigger = (payload as any).triggerAutomation !== false;
     if (trigger) {
@@ -358,6 +380,8 @@ export class LeadsService {
     if (!canSeeAll && lead.assignedToUserId !== ctx?.userId) {
       throw new ForbiddenException('Lead is not assigned to this user');
     }
+
+    const previousStage = lead.stage;
 
     if (payload.fullName !== undefined) {
       const v = this.normalizeName(payload.fullName ?? undefined);
@@ -408,7 +432,35 @@ export class LeadsService {
 
     const saved = await this.leadsRepository.save(lead);
     await this.logLeadEvent(saved, 'updated', payload as any);
+    if (saved.stage !== previousStage) {
+      await this.recordStageChange(
+        saved,
+        previousStage,
+        saved.stage,
+        ctx?.userId,
+        'lead_update',
+      );
+    }
     return saved;
+  }
+
+  private recordStageChange(
+    lead: Lead,
+    previousStage: string | null,
+    newStage: string,
+    changedByUserId?: string,
+    changeSource = 'application',
+  ) {
+    return this.leadStageEventsRepository.save(
+      this.leadStageEventsRepository.create({
+        tenantId: lead.tenantId,
+        leadId: lead.id,
+        previousStage,
+        newStage,
+        changedByUserId: changedByUserId || null,
+        changeSource,
+      }),
+    );
   }
 
   // -------------------------

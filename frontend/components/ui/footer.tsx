@@ -9,7 +9,7 @@ export function Footer() {
           <div className="space-y-4">
             <Logo size="md" />
             <p className="text-sm text-muted-foreground">
-              Done-for-you speed-to-lead systems for real estate teams and brokerages.
+              Managed lead intake, routing, approved follow-up, and supervised launch for real estate teams.
             </p>
           </div>
 
@@ -23,7 +23,7 @@ export function Footer() {
               </li>
               <li>
                 <Link href="/use-cases" className="text-sm text-muted-foreground transition-colors hover:text-primary">
-                  Results
+                  Workflows
                 </Link>
               </li>
               <li>
@@ -32,8 +32,8 @@ export function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/contact" className="text-sm text-muted-foreground transition-colors hover:text-primary">
-                  Book a call
+                <Link href="/apply" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Apply for pilot
                 </Link>
               </li>
             </ul>
@@ -45,11 +45,6 @@ export function Footer() {
               <li>
                 <Link href="/about" className="text-sm text-muted-foreground transition-colors hover:text-primary">
                   About
-                </Link>
-              </li>
-              <li>
-                <Link href="/blog" className="text-sm text-muted-foreground transition-colors hover:text-primary">
-                  Blog
                 </Link>
               </li>
               <li>
@@ -83,12 +78,17 @@ export function Footer() {
                   Security
                 </Link>
               </li>
+              <li>
+                <Link href="/refund" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Refund Policy
+                </Link>
+              </li>
             </ul>
           </div>
         </div>
 
         <div className="mt-12 border-t border-border pt-8">
-          <p className="text-center text-sm text-muted-foreground">© RealtyTechAI LLC</p>
+          <p className="text-center text-sm text-muted-foreground">© RealtyTechAI</p>
         </div>
       </div>
     </footer>

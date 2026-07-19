@@ -1,4 +1,13 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Tenant } from "../tenants/tenant.entity";
 import { Team } from "../teams/team.entity";
 import { UserRole } from "../../common/rbac";
@@ -44,4 +53,25 @@ export class User {
 
   @Column({ type: "boolean", default: true })
   isActive: boolean;
+
+  @Column({ name: 'session_version', type: 'int', default: 0 })
+  sessionVersion: number;
+
+  @Column({ name: 'must_change_password', type: 'boolean', default: false })
+  mustChangePassword: boolean;
+
+  @Column({ name: 'password_changed_at', type: 'timestamptz', nullable: true })
+  passwordChangedAt: Date | null;
+
+  @Column({ name: 'welcome_email_sent_at', type: 'timestamptz', nullable: true })
+  welcomeEmailSentAt: Date | null;
+
+  @Column({ name: 'last_login_at', type: 'timestamptz', nullable: true })
+  lastLoginAt: Date | null;
+
+  @CreateDateColumn({ name: 'createdAt' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ name: 'updatedAt' })
+  updatedAt: Date;
 }

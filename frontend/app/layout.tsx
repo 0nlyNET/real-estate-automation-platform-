@@ -1,14 +1,21 @@
 import type React from "react"
 import type { Metadata, Viewport } from "next"
-import { Analytics } from "@vercel/analytics/next"
 import { Toaster } from "@/components/ui/toaster"
 import { ThemeProvider } from "@/components/theme-provider"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "RealtyTechAI - Speed-to-Lead Automation for Real Estate",
-  description: "Respond to leads in seconds, automate follow-ups, and close more deals with RealtyTechAI.",
-  generator: "v0.app",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"),
+  title: "RealtyTechAI | Managed real-estate lead response",
+  description: "Managed lead intake, routing, approved SMS and email follow-up, shared message history, and supervised pilot onboarding.",
+  alternates: { canonical: "/" },
+  openGraph: {
+    title: "RealtyTechAI | Managed real-estate lead response",
+    description: "Managed intake, routing, approved follow-up, and supervised launch.",
+    type: "website",
+    url: "/",
+    siteName: "RealtyTechAI",
+  },
   icons: {
     icon: [
       {
@@ -43,7 +50,6 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           {children}
           <Toaster />
-          <Analytics />
         </ThemeProvider>
       </body>
     </html>

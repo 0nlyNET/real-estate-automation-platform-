@@ -12,6 +12,9 @@ function createService(optRepo: Record<string, jest.Mock>) {
       evtRepo as any,
       {} as any,
       {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
     ),
   };
 }

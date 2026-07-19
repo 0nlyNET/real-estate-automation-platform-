@@ -1,15 +1,4 @@
-import {
-  endImpersonation,
-  getEffectiveToken,
-  getImpersonationToken,
-} from "@/lib/impersonation"
-
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
-
-function getToken(): string | null {
-  return getEffectiveToken()
-}
+export const API_URL = "/api/backend"
 
 async function readResponseBody(res: Response): Promise<unknown> {
   const contentType = (res.headers.get("content-type") || "").toLowerCase()
@@ -93,12 +82,6 @@ export async function apiFetch<T = any>(
   const headers = new Headers(init.headers || {})
   headers.set("Accept", "application/json")
 
-  // Attach JWT unless caller explicitly set Authorization already.
-  if (!headers.has("Authorization")) {
-    const token = getToken()
-    if (token) headers.set("Authorization", `Bearer ${token}`)
-  }
-
   const requestedBody = init.body
   let body: BodyInit | null | undefined
 
@@ -115,16 +98,14 @@ export async function apiFetch<T = any>(
     ...init,
     headers,
     body,
+    credentials: "include",
   })
 
   const payload = await readResponseBody(res)
 
   if (!res.ok) {
-    if (res.status === 401 && getImpersonationToken()) {
-      const restored = endImpersonation()
-      window.location.assign(
-        restored ? "/admin/dashboard?supportSession=expired" : "/login",
-      )
+    if (res.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("rta:session-expired"))
     }
     const msg = extractErrorMessage(payload)
     throw new Error(msg)

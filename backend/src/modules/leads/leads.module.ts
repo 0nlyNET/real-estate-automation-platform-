@@ -17,10 +17,12 @@ import { Team } from "../teams/team.entity";
 import { CommonModule } from "../../common/common.module";
 import { RoutingModule } from "../routing/routing.module";
 import { SettingsModule } from "../settings/settings.module";
+import { ComplianceModule } from "../compliance/compliance.module";
+import { LeadStageEvent } from "./lead-stage-event.entity";
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Lead, LeadEvent, User, Team, TenantSettings]),
+    TypeOrmModule.forFeature([Lead, LeadEvent, LeadStageEvent, User, Team, TenantSettings]),
     TenantsModule,
     MessagingModule,
     SequencesModule,
@@ -29,6 +31,7 @@ import { SettingsModule } from "../settings/settings.module";
     CommonModule,
     RoutingModule,
     SettingsModule,
+    ComplianceModule,
   ],
   controllers: [LeadsController],
   providers: [LeadsService],

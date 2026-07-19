@@ -9,17 +9,17 @@ const values = [
   {
     icon: Zap,
     title: "Speed matters",
-    description: "In real estate, the first to respond wins. We build everything with speed in mind.",
+    description: "We design for prompt, observable outreach without claiming an outcome or bypassing consent controls.",
   },
   {
     icon: Target,
-    title: "Customer obsessed",
-    description: "We exist to help agents succeed. Every feature starts with customer feedback.",
+    title: "Human supervised",
+    description: "Onboarding, template approval, provider tests, and launch decisions keep people in control.",
   },
   {
     icon: Heart,
     title: "Transparency first",
-    description: "No hidden fees, no gotchas. We believe in honest pricing and open communication.",
+    description: "We document scope, provider dependencies, pricing, limitations, and launch evidence before activation.",
   },
 ]
 
@@ -105,17 +105,17 @@ export default function AboutPage() {
         <div className="mx-auto max-w-7xl px-4 text-center sm:px-6 lg:px-8">
           <h2 className="text-3xl font-bold text-foreground">See whether RealtyTechAI fits your workflow</h2>
           <p className="mx-auto mt-4 max-w-2xl text-muted-foreground">
-            Create an account or contact us to discuss your lead sources, team structure, and messaging providers.
+            Apply to discuss your lead sources, team structure, messaging providers, and supervised pilot scope.
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <Button size="lg" asChild className="bg-primary text-primary-foreground hover:bg-primary/90">
-              <Link href="/signup">
-                Start free trial
+              <Link href="/apply">
+                Apply for pilot
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
             <Button size="lg" variant="outline" asChild>
-              <Link href="/contact">Contact us</Link>
+              <Link href="/apply">Contact us</Link>
             </Button>
           </div>
         </div>

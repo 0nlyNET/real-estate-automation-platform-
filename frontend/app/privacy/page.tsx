@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { MarketingHeader } from "@/components/ui/marketing-header"
 import { Footer } from "@/components/ui/footer"
 
@@ -5,115 +6,94 @@ export default function PrivacyPage() {
   return (
     <div className="min-h-screen bg-background">
       <MarketingHeader />
-
-      <section className="py-24">
+      <main className="py-24">
         <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
           <h1 className="text-4xl font-bold tracking-tight text-foreground">Privacy Policy</h1>
-          <p className="mt-4 text-muted-foreground">Last updated: January 1, 2026</p>
+          <p className="mt-4 text-muted-foreground">Effective July 19, 2026</p>
 
           <div className="mt-12 space-y-8 text-muted-foreground">
             <section>
-              <h2 className="text-xl font-semibold text-foreground">1. Introduction</h2>
+              <h2 className="text-xl font-semibold text-foreground">Scope</h2>
               <p className="mt-4">
-                RealtyTechAI LLC ("we", "our", or "us") is committed to protecting your privacy. This Privacy Policy
-                explains how we collect, use, disclose, and safeguard your information when you use our platform.
+                This policy describes how the operator of the RealtyTechAI managed lead-response service collects,
+                uses, and shares information through the public website, client portal, and supported workflows.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">2. Information We Collect</h2>
-              <p className="mt-4">We collect information you provide directly to us, including:</p>
+              <h2 className="text-xl font-semibold text-foreground">Information we process</h2>
               <ul className="mt-4 list-disc space-y-2 pl-6">
-                <li>Account information (name, email, password)</li>
-                <li>Profile information (company name, phone number)</li>
-                <li>Lead data you import or collect through our platform</li>
-                <li>Communication content (messages, templates)</li>
-                <li>Usage data and analytics</li>
-                <li>Payment information (processed securely by Stripe)</li>
+                <li>Account and business information supplied by clients and their team members.</li>
+                <li>Lead contact details, source, consent evidence, assignments, stages, and communication history.</li>
+                <li>Support, application, onboarding, cancellation, and data-deletion requests.</li>
+                <li>Technical and security records needed to authenticate users, operate integrations, and investigate failures.</li>
+                <li>Subscription and invoice references from the payment processor; card details are handled by the processor.</li>
               </ul>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">3. How We Use Your Information</h2>
-              <p className="mt-4">We use the information we collect to:</p>
-              <ul className="mt-4 list-disc space-y-2 pl-6">
-                <li>Provide, maintain, and improve our services</li>
-                <li>Process transactions and send related information</li>
-                <li>Send technical notices, updates, and support messages</li>
-                <li>Respond to your comments and questions</li>
-                <li>Analyze usage patterns to improve user experience</li>
-                <li>Detect, prevent, and address technical issues</li>
-              </ul>
-            </section>
-
-            <section>
-              <h2 className="text-xl font-semibold text-foreground">4. Information Sharing</h2>
+              <h2 className="text-xl font-semibold text-foreground">How information is used</h2>
               <p className="mt-4">
-                We do not sell, trade, or rent your personal information to third parties. We may share information
-                with:
-              </p>
-              <ul className="mt-4 list-disc space-y-2 pl-6">
-                <li>Service providers who assist in our operations</li>
-                <li>Professional advisors (lawyers, accountants)</li>
-                <li>Law enforcement when required by law</li>
-                <li>Business partners with your consent</li>
-              </ul>
-            </section>
-
-            <section>
-              <h2 className="text-xl font-semibold text-foreground">5. Data Security</h2>
-              <p className="mt-4">
-                We implement industry-standard security measures including 256-bit encryption, secure data centers, and
-                regular security audits. However, no method of transmission over the Internet is 100% secure.
+                We use information to provide and supervise the service, route and respond to leads according to the
+                client&apos;s approved configuration, maintain accounts, process billing, provide support, prevent abuse,
+                troubleshoot integrations, and meet legal obligations.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">6. Data Retention</h2>
+              <h2 className="text-xl font-semibold text-foreground">Service providers and disclosures</h2>
               <p className="mt-4">
-                We retain your information for as long as your account is active or as needed to provide services. You
-                may request deletion of your data at any time.
+                Information may be processed by hosting, database, email, SMS, lead-source, and payment providers that
+                support an enabled workflow. We may also disclose information when required by law, to protect users or
+                the service, or as part of a business transaction. We do not represent client lead data as our own.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">7. Your Rights</h2>
-              <p className="mt-4">You have the right to:</p>
-              <ul className="mt-4 list-disc space-y-2 pl-6">
-                <li>Access your personal information</li>
-                <li>Correct inaccurate data</li>
-                <li>Request deletion of your data</li>
-                <li>Object to processing of your data</li>
-                <li>Export your data in a portable format</li>
-              </ul>
-            </section>
-
-            <section>
-              <h2 className="text-xl font-semibold text-foreground">8. Cookies</h2>
+              <h2 className="text-xl font-semibold text-foreground">Security and retention</h2>
               <p className="mt-4">
-                We use cookies and similar technologies to enhance your experience. You can control cookies through your
-                browser settings.
+                We use access controls, encrypted provider credentials, HTTPS in production, and operational monitoring
+                to reduce risk. No system can guarantee absolute security. Records are retained for service, security,
+                billing, and legal needs and are deleted or de-identified when no longer required.
               </p>
             </section>
 
             <section>
-              <h2 className="text-xl font-semibold text-foreground">9. Contact Us</h2>
+              <h2 className="text-xl font-semibold text-foreground">Choices and requests</h2>
               <p className="mt-4">
-                If you have questions about this Privacy Policy, please contact us at privacy@realtytechai.com or by
-                mail at:
+                Depending on your location and relationship to a client, you may ask to access, correct, export, or
+                delete personal information, or object to certain processing. Marketing or automated email can be
+                stopped through the unsubscribe link in the message; SMS recipients can reply STOP. Account cancellation
+                does not by itself constitute a verified data-deletion request.
               </p>
+            </section>
+
+            <section>
+              <h2 className="text-xl font-semibold text-foreground">Cookies</h2>
               <p className="mt-4">
-                RealtyTechAI LLC
-                <br />
-                123 Tech Lane, Suite 400
-                <br />
-                Austin, TX 78701
+                The client portal uses an essential HttpOnly session cookie for authentication. Interface preferences
+                may be stored in the browser. Public-site analytics are not currently enabled.
+              </p>
+            </section>
+
+            <section>
+              <h2 className="text-xl font-semibold text-foreground">Contact</h2>
+              <p className="mt-4">
+                Submit privacy questions or data requests through the authenticated support page. If you do not have an
+                account, use the <Link className="text-primary hover:underline" href="/contact">public contact page</Link>.
+              </p>
+            </section>
+
+            <section>
+              <h2 className="text-xl font-semibold text-foreground">Changes</h2>
+              <p className="mt-4">
+                We may update this policy as the service or legal requirements change. A revised effective date will be
+                shown here, and material changes will be communicated through an appropriate channel.
               </p>
             </section>
           </div>
         </div>
-      </section>
-
+      </main>
       <Footer />
     </div>
   )

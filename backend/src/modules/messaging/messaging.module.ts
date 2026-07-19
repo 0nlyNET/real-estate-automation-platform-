@@ -8,7 +8,6 @@ import { InboxSendService } from './inbox-send.service';
 import { Message } from './message.entity';
 import { Lead } from '../leads/lead.entity';
 import { Tenant } from '../tenants/tenant.entity';
-import { TenantSettings } from '../settings/tenant-settings.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { Credential } from '../settings/credential.entity';
 
@@ -17,7 +16,7 @@ import { ComplianceModule } from '../compliance/compliance.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Message, Lead, Tenant, TenantSettings, LeadEvent, Credential]),
+    TypeOrmModule.forFeature([Message, Lead, Tenant, LeadEvent, Credential]),
     SequencesModule,
     ComplianceModule,
   ],

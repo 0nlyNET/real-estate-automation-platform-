@@ -16,6 +16,8 @@ import {
   CreditCard,
   Shield,
   Route,
+  ClipboardCheck,
+  LifeBuoy,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -26,6 +28,7 @@ import { canUseTeams, canUseBrokerage } from "@/lib/access"
 
 const mainNavItems = [
   { label: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
+  { label: "Setup & readiness", href: "/app/onboarding", icon: ClipboardCheck },
   { label: "Leads", href: "/app/leads", icon: Users },
   { label: "Inbox", href: "/app/inbox", icon: Inbox },
 ]
@@ -45,6 +48,7 @@ const settingsItems = [
   { label: "Compliance", href: "/app/compliance", icon: Shield, gate: "enterprise" as const },
   { label: "Settings", href: "/app/settings", icon: Settings },
   { label: "Billing", href: "/app/billing", icon: CreditCard },
+  { label: "Support", href: "/support", icon: LifeBuoy },
 ]
 
 interface SidebarProps {

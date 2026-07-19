@@ -16,7 +16,7 @@ export default function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false)
   const [resetLink, setResetLink] = useState("")
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
+  const apiUrl = "/api/backend"
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()

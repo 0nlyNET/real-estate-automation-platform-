@@ -6,6 +6,7 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
+    "test": "node scripts/verify-client-readiness.mjs",
     "start": "next start"
   },
   "dependencies": {
