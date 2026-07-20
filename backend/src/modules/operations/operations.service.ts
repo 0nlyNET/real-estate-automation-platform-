@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, LessThan, Repository } from 'typeorm';
 import { OperationsTask } from './operations-task.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+import { PlatformOperatorsService } from '../../common/platform-operators.service';
 
 export type CreateOperationsTask = {
   tenantId?: string | null;
@@ -23,6 +25,8 @@ export class OperationsService {
   constructor(
     @InjectRepository(OperationsTask)
     private readonly repo: Repository<OperationsTask>,
+    @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly platformOperators?: PlatformOperatorsService,
   ) {}
 
   async createTask(input: CreateOperationsTask) {
@@ -38,7 +42,10 @@ export class OperationsService {
       if (existing) return existing;
     }
 
-    return this.repo.save(
+    if (input.assignedOperatorId) {
+      await this.platformOperators?.requireAssignable(input.assignedOperatorId);
+    }
+    const saved = await this.repo.save(
       this.repo.create({
         tenantId: input.tenantId ?? null,
         applicationId: input.applicationId ?? null,
@@ -54,6 +61,21 @@ export class OperationsService {
         evidenceNote: input.evidenceNote ?? null,
       }),
     );
+    if (saved.priority === 'high' || saved.priority === 'critical' || saved.assignedOperatorId) {
+      await this.notifications?.createForPlatform({
+        eventType: saved.assignedOperatorId ? 'task.assigned' : 'task.created',
+        category: 'tasks',
+        severity: saved.priority === 'critical' ? 'critical' : 'warning',
+        title: saved.assignedOperatorId ? 'Task assigned to you' : saved.title,
+        message: saved.description,
+        deduplicationKey: `operations-task:${saved.id}:${saved.assignedOperatorId || 'queue'}`,
+        assignedOperatorId: saved.assignedOperatorId,
+        actionUrl: '/admin/dashboard?view=tasks',
+        entityType: 'operations_task',
+        entityId: saved.id,
+      });
+    }
+    return saved;
   }
 
   async list(filters: {
@@ -114,12 +136,29 @@ export class OperationsService {
     if (!task) throw new NotFoundException('Operations task not found');
     if (patch.status !== undefined) task.status = patch.status;
     if (patch.priority !== undefined) task.priority = patch.priority;
-    if (patch.assignedOperatorId !== undefined)
+    if (patch.assignedOperatorId !== undefined) {
+      await this.platformOperators?.requireAssignable(patch.assignedOperatorId);
       task.assignedOperatorId = patch.assignedOperatorId;
+    }
     if (patch.dueAt !== undefined) task.dueAt = patch.dueAt;
     if (patch.evidenceNote !== undefined) task.evidenceNote = patch.evidenceNote;
     task.completedAt = task.status === 'resolved' ? new Date() : null;
-    return this.repo.save(task);
+    const saved = await this.repo.save(task);
+    if (patch.assignedOperatorId) {
+      await this.notifications?.createForPlatform({
+        eventType: 'task.assigned',
+        category: 'tasks',
+        severity: saved.priority === 'critical' ? 'critical' : 'warning',
+        title: 'Task assigned to you',
+        message: saved.title,
+        deduplicationKey: `operations-task-assigned:${saved.id}:${patch.assignedOperatorId}`,
+        assignedOperatorId: patch.assignedOperatorId,
+        actionUrl: '/admin/dashboard?view=tasks',
+        entityType: 'operations_task',
+        entityId: saved.id,
+      });
+    }
+    return saved;
   }
 
   async unresolvedHighPriorityCount() {

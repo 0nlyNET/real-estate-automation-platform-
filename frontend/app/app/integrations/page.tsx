@@ -406,8 +406,8 @@ export default function IntegrationsPage() {
   if (loading) {
     return (
       <PageShell
-        title="Integrations"
-        subtitle="Connect lead sources and communication providers."
+        title="Connections"
+        subtitle="Connect the accounts RealtyTechAI will use for your service."
       >
         <div className="grid gap-4 lg:grid-cols-2">
           {[0, 1, 2, 3].map((item) => (
@@ -420,8 +420,8 @@ export default function IntegrationsPage() {
 
   return (
     <PageShell
-      title="Integrations"
-      subtitle="Connect each system once, test it, then start routing real leads."
+      title="Connections"
+      subtitle="Connect each account once. We show what is ready and test everything before launch."
     >
       {!canManage ? (
         <Alert>

@@ -1,4 +1,3 @@
 export const publicPlanCatalog = [
-  { id: "pro", name: "Managed Pro Pilot", pricing: "Contact for pilot pricing", description: "Lead intake, shared history, approved messaging sequences, integrations, and supervised launch." },
-  { id: "teams", name: "Managed Teams Pilot", pricing: "Contact for pilot pricing", description: "Adds team users, assignment and routing controls, and agent-scoped reporting." },
+  { id: "service", name: "RealtyTechAI managed service", pricing: "One setup scope and one monthly service price, confirmed before onboarding", description: "Done-for-you lead intake, team routing, approved follow-up, connected accounts, reporting, supervised launch, and ongoing support in one client workspace." },
 ] as const

@@ -43,5 +43,20 @@ describe('production configuration contract', () => {
     expect(report.encryption.status).toBe('up');
     expect(report.billing).toMatchObject({ enabled: true, status: 'down' });
     expect(report.billing.missing).toContain('STRIPE_WEBHOOK_SECRET');
+    expect(report.systemEmail.status).toBe('not_configured');
+  });
+
+  it('allows system email to be intentionally deferred but rejects partial setup', () => {
+    process.env.NODE_ENV = 'production';
+    for (const name of [
+      'SENDGRID_API_KEY',
+      'SENDGRID_FROM_EMAIL',
+      'SENDGRID_FROM_NAME',
+      'SALES_INBOX_EMAIL',
+    ]) delete process.env[name];
+    expect(environmentReadiness().systemEmail.status).toBe('not_configured');
+
+    process.env.SENDGRID_FROM_EMAIL = 'hello@example.com';
+    expect(environmentReadiness().systemEmail.status).toBe('down');
   });
 });

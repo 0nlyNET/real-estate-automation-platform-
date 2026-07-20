@@ -8,12 +8,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
+import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
 import { OperationsService } from './operations.service';
 import { UpdateOperationsTaskDto } from './operations.dto';
 
 @Controller('admin/operations')
-@UseGuards(JwtAuthGuard, PlatformAdminGuard)
+@UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 export class OperationsController {
   constructor(private readonly operations: OperationsService) {}
 

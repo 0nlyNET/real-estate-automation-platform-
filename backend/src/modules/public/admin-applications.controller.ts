@@ -9,12 +9,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
+import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
 import { PublicService } from './public.service';
 import { UpdateApplicationDto } from './public.dto';
 
 @Controller('admin/applications')
-@UseGuards(JwtAuthGuard, PlatformAdminGuard)
+@UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 export class AdminApplicationsController {
   constructor(private readonly applications: PublicService) {}
 

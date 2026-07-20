@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  IsUUID,
 } from 'class-validator';
 
 export class UpdateOnboardingDto {
@@ -43,6 +44,9 @@ export class UpdateOnboardingDto {
 }
 
 export class OperatorOnboardingEvidenceDto {
+  @IsOptional() @IsUUID()
+  assignedOnboardingOwnerId?: string | null;
+
   @IsOptional() @IsObject()
   providerTests?: Record<string, unknown>;
 

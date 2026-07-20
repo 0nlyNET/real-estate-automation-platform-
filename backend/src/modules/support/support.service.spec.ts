@@ -13,10 +13,12 @@ describe('SupportService notifications', () => {
     process.env.SALES_INBOX_EMAIL = 'ops@realtytechai.app';
     const repo = repository();
     const mail = { sendEmail: jest.fn().mockResolvedValue(undefined) };
+    const notifications = { createForPlatform: jest.fn().mockResolvedValue([]) };
     const service = new SupportService(
       repo as any,
       mail as any,
       { createTask: jest.fn().mockResolvedValue({ id: 'task-1' }) } as any,
+      notifications as any,
     );
 
     await expect(service.createTicket(ticketInput())).resolves.toEqual({
@@ -28,6 +30,12 @@ describe('SupportService notifications', () => {
       expect.objectContaining({
         to: 'ops@realtytechai.app',
         subject: '[RealtyTechAI support] Workspace deletion request',
+      }),
+    );
+    expect(notifications.createForPlatform).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'support.ticket_created',
+        entityId: 'ticket-1',
       }),
     );
   });

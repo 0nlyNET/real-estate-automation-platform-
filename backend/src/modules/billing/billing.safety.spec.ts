@@ -179,4 +179,69 @@ describe('Stripe billing safety controls', () => {
       expect.objectContaining({ category: 'unknown_stripe_price', priority: 'critical' }),
     );
   });
+
+  it('creates one live invoice summary and one notification when Stripe retries a paid invoice', async () => {
+    let ledger: any = null;
+    const events = {
+      create: jest.fn((value) => ({ ...value })),
+      save: jest.fn(async (value) => {
+        if (!value.id && ledger) {
+          throw Object.assign(new Error('duplicate'), { code: '23505' });
+        }
+        ledger = value.id
+          ? { ...ledger, ...value }
+          : { id: 'ledger-1', ...value };
+        return ledger;
+      }),
+      findOne: jest.fn(async () => ledger),
+    };
+    const billingEvents = {
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({ id: 'billing-1', ...value })),
+    };
+    const notifications = { createForPlatform: jest.fn().mockResolvedValue([]) };
+    const tenants = {
+      findById: jest.fn(),
+      findByStripeReference: jest.fn().mockResolvedValue({ id: 'tenant-1' }),
+      updateBilling: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new BillingService(
+      tenants as any,
+      events as any,
+      {} as any,
+      { update: jest.fn() } as any,
+      undefined,
+      { createTask: jest.fn() } as any,
+      billingEvents as any,
+      notifications as any,
+    );
+    const subscription = {
+      id: 'sub_1', status: 'active', customer: 'cus_1', metadata: { tenantId: 'tenant-1' },
+      cancel_at_period_end: false, cancel_at: null, canceled_at: null, ended_at: null,
+      trial_start: null, trial_end: null, latest_invoice: 'in_1', currency: 'usd',
+      items: { data: [{ current_period_start: 1_784_419_200, current_period_end: 1_787_011_200,
+        price: { id: 'price_teams_month', product: 'prod_1', unit_amount: 150000, currency: 'usd', recurring: { interval: 'month' } } }] },
+    };
+    const event = {
+      id: 'evt_invoice_paid', type: 'invoice.payment_succeeded', created: 1_784_419_200,
+      livemode: true, api_version: '2025-01-01',
+      data: { object: { id: 'in_1', customer: 'cus_1', subscription: 'sub_1', amount_paid: 150000, amount_due: 150000, currency: 'usd' } },
+    };
+    (service as any).stripe = {
+      webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
+      subscriptions: { retrieve: jest.fn().mockResolvedValue(subscription) },
+    };
+
+    await expect(service.handleWebhook(Buffer.from('{}'), 'valid')).resolves.toEqual({ received: true });
+    await expect(service.handleWebhook(Buffer.from('{}'), 'valid')).resolves.toEqual({ received: true, duplicate: true });
+    expect(billingEvents.save).toHaveBeenCalledTimes(1);
+    expect(billingEvents.create).toHaveBeenCalledWith(expect.objectContaining({
+      providerEventId: 'evt_invoice_paid', tenantId: 'tenant-1', eventType: 'invoice_paid',
+      amountCents: 150000, currency: 'usd', livemode: true,
+    }));
+    expect(notifications.createForPlatform).toHaveBeenCalledTimes(1);
+    expect(notifications.createForPlatform).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'billing.invoice_paid', deduplicationKey: 'stripe:evt_invoice_paid' }),
+    );
+  });
 });

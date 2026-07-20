@@ -2,10 +2,9 @@
 
 import { useEffect, useState } from "react"
 import { PageShell } from "@/app/app/_components/PageShell"
-import { LockedFeature } from "@/app/app/_components/LockedFeature"
 import { apiFetch } from "@/lib/api"
-import { fetchMeWithPlan } from "@/lib/me"
-import { canUseTeams, isAdminRole } from "@/lib/access"
+import { fetchMe } from "@/lib/me"
+import { isAdminRole } from "@/lib/access"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -19,9 +18,7 @@ export default function TeamPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
-  const [hasTeams, setHasTeams] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
-  const [tenantId, setTenantId] = useState<string | null>(null)
 
   const [teams, setTeams] = useState<Team[]>([])
   const [teamName, setTeamName] = useState("")
@@ -39,18 +36,10 @@ export default function TeamPage() {
         setLoading(true)
         setErr(null)
 
-        const { me, planName } = await fetchMeWithPlan()
+        const me = await fetchMe()
         if (!mounted) return
 
-        setTenantId(me?.tenantId || null)
-        setHasTeams(canUseTeams(planName))
         setIsAdmin(isAdminRole(me?.role))
-
-        if (!canUseTeams(planName)) {
-          setTeams([])
-          setUsers([])
-          return
-        }
 
         const ts = await apiFetch("/teams")
         const teamItems = Array.isArray(ts) ? ts : (ts?.items || [])
@@ -115,18 +104,6 @@ export default function TeamPage() {
     } catch (e: any) {
       setErr(e?.message || "Invite failed")
     }
-  }
-
-  if (!hasTeams) {
-    return (
-      <PageShell title="Team" subtitle="Invite users, manage roles, and build a team workspace.">
-        <LockedFeature
-          title="Team management"
-          requiredLabel="Teams"
-          description="Team management requires the Teams plan. Upgrade to invite users, assign roles, and enable routing."
-        />
-      </PageShell>
-    )
   }
 
   return (

@@ -3,11 +3,14 @@ import { AdminService } from './admin.service';
 
 describe('AdminService client onboarding', () => {
   const originalFrontendUrl = process.env.FRONTEND_URL;
+  const originalStaffEmails = process.env.PLATFORM_STAFF_EMAILS;
 
   afterEach(() => {
     jest.restoreAllMocks();
     if (originalFrontendUrl === undefined) delete process.env.FRONTEND_URL;
     else process.env.FRONTEND_URL = originalFrontendUrl;
+    if (originalStaffEmails === undefined) delete process.env.PLATFORM_STAFF_EMAILS;
+    else process.env.PLATFORM_STAFF_EMAILS = originalStaffEmails;
   });
 
   function setup(
@@ -120,5 +123,63 @@ describe('AdminService client onboarding', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(tenantRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('unassigns operational records when database-managed staff access is removed', async () => {
+    process.env.PLATFORM_STAFF_EMAILS = '';
+    const staff = {
+      id: 'staff-1',
+      tenantId: 'platform-tenant',
+      email: 'staff@example.com',
+      isActive: true,
+      isEmailVerified: true,
+      platformRole: 'staff',
+    };
+    const usersRepo = { findOne: jest.fn().mockResolvedValue(staff) };
+    const managedRepositories = new Map<string, any>();
+    const manager = {
+      getRepository: jest.fn((entity: { name: string }) => {
+        if (!managedRepositories.has(entity.name)) {
+          managedRepositories.set(entity.name, {
+            save: jest.fn().mockResolvedValue(undefined),
+            update: jest.fn().mockResolvedValue({ affected: 1 }),
+          });
+        }
+        return managedRepositories.get(entity.name);
+      }),
+    };
+    const dataSource = {
+      transaction: jest.fn(async (callback) => callback(manager)),
+    };
+    const service = new AdminService(
+      {} as never,
+      usersRepo as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      dataSource as never,
+      {} as never,
+    );
+
+    await expect(
+      service.setPlatformStaff('platform-tenant', 'staff-1', false),
+    ).resolves.toMatchObject({ platformRole: null });
+
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    for (const [entityName, assignmentField] of Object.entries({
+      Tenant: 'assignedOperatorId',
+      ProspectApplication: 'assignedOperatorId',
+      OperationsTask: 'assignedOperatorId',
+      SupportTicket: 'assignedOperatorId',
+      OnboardingRecord: 'assignedOnboardingOwnerId',
+    })) {
+      expect(managedRepositories.get(entityName).update).toHaveBeenCalledWith(
+        expect.objectContaining({ [assignmentField]: 'staff-1' }),
+        expect.objectContaining({ [assignmentField]: null }),
+      );
+    }
+    expect(managedRepositories.get('User').save).toHaveBeenCalledWith(
+      expect.objectContaining({ platformRole: null }),
+    );
   });
 });

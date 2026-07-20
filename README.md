@@ -8,9 +8,11 @@ RealtyTechAI is a multi-tenant lead-response and follow-up platform for real est
 - HttpOnly-cookie JWT authentication, session revocation, verified accounts, password reset, forced temporary-password replacement, role checks, and platform-admin allow-listing
 - SMS/email provider credentials encrypted at rest
 - Twilio inbound signature verification, opt-outs, quiet hours, and follow-up sequence controls
-- Stripe-hosted checkout, duplicate-subscription prevention, billing portal, signed/idempotent webhooks, and centralized entitlement checks
-- Teams-plan routing with fixed-user and round-robin actions
+- One flat managed-service checkout, Stripe billing portal, duplicate-subscription prevention, signed/idempotent webhooks, and centralized entitlement checks
+- Fixed-user and round-robin lead routing without client-facing plan gates
 - Persisted public applications, structured onboarding/readiness, a platform operations queue, and protected lead intake with consent evidence
+- A role-aware owner/staff operating dashboard with real billing summaries, assignments, read-only communications, and 90-day diagnostic retention
+- In-app notifications and standards-based web push for trusted lead, client, support, billing, integration, and health events
 
 Provider accounts and production infrastructure are not included. Results, uptime, certifications, and legal compliance depend on the deployment and operating process.
 
@@ -87,11 +89,15 @@ See `backend/.env.example` and `frontend/.env.example`. At minimum, configure:
   `FACEBOOK_WEBHOOK_URL` only when Facebook Lead Ads is enabled
 - SendGrid, Twilio, Stripe, and Facebook values only for integrations you enable
 - `SALES_INBOX_EMAIL` for public contact/application delivery
+- `STRIPE_PRICE_SERVICE_MONTH` plus matching Stripe secret/webhook values when billing is enabled
+- one VAPID key pair (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT`) for admin phone alerts
+- `OPERATIONAL_RETENTION_DAYS=90` unless a reviewed 30–365 day policy is required
 
 Production startup validates critical security/database configuration, and `/health/readiness` checks the database, schema, pending migrations, system email, billing configuration, worker mode, encryption, and legacy plaintext credential count without exposing secrets. Terminate HTTPS at the hosting platform, restrict database access, run migrations as a release step, and configure backups, logs, alerts, and secret rotation before handling customer data.
 
 Before accepting a pilot payment, complete:
 
+- `docs/admin-operations-release.md`
 - `docs/production-launch-owner-checklist.md`
 - `docs/database-migration-runbook.md`
 - all 21 journeys in `docs/first-client-uat.md`

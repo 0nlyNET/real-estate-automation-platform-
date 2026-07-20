@@ -1,10 +1,12 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { MailService } from '../../mail/mail.service';
 import { OperationsService } from '../operations/operations.service';
 import { ProspectApplication } from './prospect-application.entity';
 import { operationalEvent } from '../../common/operational-log';
+import { NotificationsService } from '../notifications/notifications.service';
+import { PlatformOperatorsService } from '../../common/platform-operators.service';
 
 type Inquiry = {
   name?: string;
@@ -28,6 +30,8 @@ export class PublicService {
     private readonly applications: Repository<ProspectApplication>,
     private readonly mail: MailService,
     private readonly operations: OperationsService,
+    @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly platformOperators?: PlatformOperatorsService,
   ) {}
 
   async submitInquiry(inquiry: Inquiry) {
@@ -56,6 +60,17 @@ export class PublicService {
       relatedEntityType: 'prospect_application',
       relatedEntityId: application.id,
       dedupeOpen: true,
+    });
+    await this.notifications?.createForPlatform({
+      eventType: 'lead.application_received',
+      category: 'leads',
+      severity: 'warning',
+      title: 'New prospective-client application',
+      message: `${application.company || application.name} submitted a new application for review.`,
+      deduplicationKey: `application:${application.id}`,
+      actionUrl: '/admin/dashboard?view=leads',
+      entityType: 'prospect_application',
+      entityId: application.id,
     });
 
     const salesInbox = (process.env.SALES_INBOX_EMAIL || '').trim();
@@ -167,12 +182,54 @@ export class PublicService {
   ) {
     const application = await this.applications.findOne({ where: { id } });
     if (!application) throw new NotFoundException('Application not found');
+    const previousStatus = application.status;
     if (patch.status !== undefined) application.status = patch.status;
     if (patch.operatorNotes !== undefined)
       application.operatorNotes = patch.operatorNotes;
     if (patch.assignedOperatorId !== undefined)
+      await this.platformOperators?.requireAssignable(patch.assignedOperatorId);
+    if (patch.assignedOperatorId !== undefined)
       application.assignedOperatorId = patch.assignedOperatorId;
-    return this.applications.save(application);
+    const saved = await this.applications.save(application);
+    if (
+      patch.status !== undefined &&
+      patch.status !== previousStatus &&
+      ['consultation_booked', 'accepted'].includes(saved.status)
+    ) {
+      await this.notifications?.createForPlatform({
+        eventType:
+          saved.status === 'consultation_booked'
+            ? 'lead.consultation_booked'
+            : 'lead.accepted',
+        category: 'leads',
+        severity: 'success',
+        title:
+          saved.status === 'consultation_booked'
+            ? 'Prospective client consultation booked'
+            : 'Prospective client marked won',
+        message: `${saved.company || saved.name} moved to ${saved.status.replace(/_/g, ' ')}.`,
+        deduplicationKey: `application-stage:${saved.id}:${saved.status}`,
+        assignedOperatorId: saved.assignedOperatorId,
+        actionUrl: '/admin/dashboard?view=leads',
+        entityType: 'prospect_application',
+        entityId: saved.id,
+      });
+    }
+    if (patch.assignedOperatorId) {
+      await this.notifications?.createForPlatform({
+        eventType: 'lead.assigned',
+        category: 'leads',
+        severity: 'warning',
+        title: 'Application assigned to you',
+        message: `${saved.company || saved.name} is ready for your follow-up.`,
+        deduplicationKey: `application-assigned:${saved.id}:${patch.assignedOperatorId}`,
+        assignedOperatorId: patch.assignedOperatorId,
+        actionUrl: '/admin/dashboard?view=leads',
+        entityType: 'prospect_application',
+        entityId: saved.id,
+      });
+    }
+    return saved;
   }
 
   async createOnboardingTask(id: string) {

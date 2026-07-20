@@ -8,6 +8,7 @@ import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Credential } from '../settings/credential.entity';
 import { SequenceStep } from '../sequences/sequence-step.entity';
 import { OperationsModule } from '../operations/operations.module';
+import { CommonModule } from '../../common/common.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { OperationsModule } from '../operations/operations.module';
       SequenceStep,
     ]),
     OperationsModule,
+    CommonModule,
   ],
   controllers: [OnboardingController],
   providers: [OnboardingService],

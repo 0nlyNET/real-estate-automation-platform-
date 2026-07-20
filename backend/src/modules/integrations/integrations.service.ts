@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, Optional } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Credential } from "../settings/credential.entity";
@@ -6,6 +6,7 @@ import * as crypto from "crypto";
 import { normalizePhoneE164 } from "../../common/phone";
 import { OperationsService } from "../operations/operations.service";
 import { operationalEvent } from "../../common/operational-log";
+import { NotificationsService } from "../notifications/notifications.service";
 
 export type IntegrationProvider = "twilio" | "sendgrid" | "facebook_lead_ads";
 export type IntegrationStatus =
@@ -122,6 +123,7 @@ export class IntegrationsService {
     @InjectRepository(Credential)
     private readonly credentialsRepo: Repository<Credential>,
     private readonly operations: OperationsService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   private async getRow(
@@ -179,26 +181,20 @@ export class IntegrationsService {
     }
   }
 
-  private async setError(
-    tenantId: string,
-    provider: IntegrationProvider,
-    error: string,
-  ) {
-    const existing = (await this.getPayload(tenantId, provider)) || {};
-    await this.upsertEncrypted(tenantId, provider, {
-      ...existing,
-      connected: false,
-      error,
-      lastSync: nowIso(),
-    });
-  }
-
   private async recordFailure(
     tenantId: string,
     provider: IntegrationProvider,
     error: string,
   ) {
-    await this.setError(tenantId, provider, error);
+    const existing = (await this.getPayload(tenantId, provider)) || {};
+    const incidentKey = existing.incidentKey || crypto.randomUUID();
+    await this.upsertEncrypted(tenantId, provider, {
+      ...existing,
+      connected: false,
+      error,
+      incidentKey,
+      lastSync: nowIso(),
+    });
     try {
       await this.operations.createTask({
         tenantId,
@@ -222,6 +218,40 @@ export class IntegrationsService {
         }),
       );
     }
+    if (!existing.error) {
+      await this.notifications?.createForPlatform({
+        eventType: "integration.connection_failed",
+        category: "integrations",
+        severity: "warning",
+        title: `${provider} connection needs attention`,
+        message: "A client connection test failed. Review the connection and its operations task.",
+        deduplicationKey: `integration-incident:${incidentKey}`,
+        incidentKey: `integration:${tenantId}:${provider}`,
+        actionUrl: "/admin/dashboard?view=activity",
+        entityType: "tenant",
+        entityId: tenantId,
+      });
+    }
+  }
+
+  private async recordRecovery(
+    tenantId: string,
+    provider: IntegrationProvider,
+    previous: any,
+  ) {
+    if (!previous?.error) return;
+    await this.notifications?.createForPlatform({
+      eventType: "integration.connection_recovered",
+      category: "integrations",
+      severity: "success",
+      title: `${provider} connection recovered`,
+      message: "The client connection test is passing again.",
+      deduplicationKey: `integration-recovery:${previous.incidentKey || crypto.randomUUID()}`,
+      incidentKey: `integration:${tenantId}:${provider}`,
+      actionUrl: "/admin/dashboard?view=activity",
+      entityType: "tenant",
+      entityId: tenantId,
+    });
   }
 
   async list(tenantId: string): Promise<IntegrationSummary[]> {
@@ -391,8 +421,10 @@ export class IntegrationsService {
         configured: true,
         connected: true,
         error: null,
+        incidentKey: null,
         lastSync: nowIso(),
       });
+      await this.recordRecovery(tenantId, "twilio", payload);
 
       return { ok: true };
     } catch (e: any) {
@@ -487,8 +519,10 @@ export class IntegrationsService {
         configured: true,
         connected: true,
         error: null,
+        incidentKey: null,
         lastSync: nowIso(),
       });
+      await this.recordRecovery(tenantId, "sendgrid", payload);
 
       return { ok: true };
     } catch (e: any) {
@@ -512,6 +546,7 @@ export class IntegrationsService {
       throw new BadRequestException("Missing Facebook Lead Ads credentials");
     }
 
+    const previous = await this.getPayload(tenantId, "facebook_lead_ads");
     await this.upsertEncrypted(tenantId, "facebook_lead_ads", {
       connected: true,
       pageId,
@@ -519,7 +554,9 @@ export class IntegrationsService {
       verifyToken,
       lastSync: nowIso(),
       error: null,
+      incidentKey: null,
     });
+    await this.recordRecovery(tenantId, "facebook_lead_ads", previous);
 
     return { ok: true, verifyToken };
   }

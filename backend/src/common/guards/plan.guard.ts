@@ -6,7 +6,6 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { planHasTeamsFeatures } from '../plans';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Tenant } from '../../modules/tenants/tenant.entity';
@@ -33,9 +32,9 @@ export class TeamsPlanGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<any>();
     const tenantId = req.user?.tenantId;
     const tenant = tenantId ? await this.tenantRepo.findOne({ where: { id: tenantId } }) : null;
-    const active = tenant && ['active', 'trialing'].includes(String(tenant.status));
-    if (!active || !planHasTeamsFeatures(tenant.plan)) {
-      throw new ForbiddenException('This feature requires the Teams plan');
+    const serviceAvailable = tenant && !['canceled', 'unpaid', 'incomplete_expired'].includes(String(tenant.status));
+    if (!serviceAvailable) {
+      throw new ForbiddenException('This workspace is not available');
     }
     return true;
   }

@@ -3,19 +3,19 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SupportService } from './support.service';
 import { AccountRequestDto, CreateSupportTicketDto, UpdateSupportTicketDto } from './support.dto';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
-import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
+import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
 
 @Controller('support')
 export class SupportController {
   constructor(private readonly support: SupportService) {}
 
-  @UseGuards(JwtAuthGuard, PlatformAdminGuard)
+  @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
   @Get('admin/tickets')
   listTickets(@Query('status') status?: any) {
     return this.support.listTickets(status);
   }
 
-  @UseGuards(JwtAuthGuard, PlatformAdminGuard)
+  @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
   @Patch('admin/tickets/:id')
   updateTicket(@Param('id') id: string, @Body() body: UpdateSupportTicketDto) {
     return this.support.updateTicket(id, body);

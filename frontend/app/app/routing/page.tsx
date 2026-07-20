@@ -2,10 +2,9 @@
 
 import { useEffect, useState } from "react"
 import { PageShell } from "@/app/app/_components/PageShell"
-import { LockedFeature } from "@/app/app/_components/LockedFeature"
 import { apiFetch } from "@/lib/api"
-import { fetchMeWithPlan } from "@/lib/me"
-import { canUseTeams, isAdminRole } from "@/lib/access"
+import { fetchMe } from "@/lib/me"
+import { isAdminRole } from "@/lib/access"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -30,7 +29,6 @@ export default function RoutingPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
-  const [hasTeams, setHasTeams] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
   const [rules, setRules] = useState<Rule[]>([])
   const [teams, setTeams] = useState<Team[]>([])
@@ -51,13 +49,10 @@ export default function RoutingPage() {
         setLoading(true)
         setErr(null)
 
-        const { me, planName } = await fetchMeWithPlan()
+        const me = await fetchMe()
         if (!mounted) return
 
-        setHasTeams(canUseTeams(planName))
         setIsAdmin(isAdminRole(me?.role))
-
-        if (!canUseTeams(planName)) return
 
         const [rs, teamRows, userRows] = await Promise.all([
           apiFetch("/routing/rules"),
@@ -148,18 +143,6 @@ export default function RoutingPage() {
     } catch (e: any) {
       setErr(e?.message || "Delete failed")
     }
-  }
-
-  if (!hasTeams) {
-    return (
-      <PageShell title="Routing" subtitle="Round robin, fixed assignment, fallback, and audit logs.">
-        <LockedFeature
-          title="Routing rules"
-          requiredLabel="Teams"
-          description="Routing rules require the Teams plan. Upgrade to route leads and enforce team inbox visibility."
-        />
-      </PageShell>
-    )
   }
 
   return (

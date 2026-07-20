@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import { isPlatformAdminEmail, requireJwtSecret } from '../../common/env';
+import { isPlatformAdminEmail, requireJwtSecret, resolvePlatformRole } from '../../common/env';
 import { UsersService } from '../users/users.service';
 import type { Request } from 'express';
 import { readCookie, SESSION_COOKIE } from './session-cookie';
@@ -59,12 +59,17 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     // Use current database state so deactivation, role, tenant, and admin changes
     // take effect immediately instead of remaining stale for the JWT lifetime.
+    const platformRole = impersonatedBy
+      ? null
+      : resolvePlatformRole(user.email, user.platformRole);
     return {
       sub: user.id,
       email: user.email,
       role: user.role,
       tenantId: user.tenantId,
       platformAdmin: impersonatedBy ? false : isPlatformAdminEmail(user.email),
+      platformRole,
+      platformOperator: platformRole !== null,
       ...(impersonatedBy ? { impersonatedBy } : {}),
       sessionExpiresAt: payload.exp
         ? new Date(payload.exp * 1000).toISOString()

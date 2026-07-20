@@ -31,6 +31,7 @@ import { AuditInterceptor } from "./modules/audit/audit.interceptor";
 import { OperationsModule } from './modules/operations/operations.module';
 import { EntitlementsModule } from './modules/entitlements/entitlements.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { OnboardingModule } from './modules/onboarding/onboarding.module';
     OperationsModule,
     EntitlementsModule,
     OnboardingModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [

@@ -16,10 +16,6 @@ const SYSTEM_EMAIL_VALUES = [
 
 const STRIPE_VALUES = [
   'STRIPE_WEBHOOK_SECRET',
-  'STRIPE_PRICE_PRO_MONTH',
-  'STRIPE_PRICE_PRO_YEAR',
-  'STRIPE_PRICE_TEAMS_MONTH',
-  'STRIPE_PRICE_TEAMS_YEAR',
 ] as const;
 
 function present(name: string) {
@@ -83,10 +79,18 @@ export function environmentReadiness() {
   ];
 
   const emailMissing = SYSTEM_EMAIL_VALUES.filter((name) => !present(name));
+  const emailConfigured = SYSTEM_EMAIL_VALUES.length - emailMissing.length;
   const stripeEnabled = present('STRIPE_SECRET_KEY');
-  const stripeMissing = stripeEnabled
+  const stripeMissing: string[] = stripeEnabled
     ? STRIPE_VALUES.filter((name) => !present(name))
     : [];
+  if (
+    stripeEnabled &&
+    !present('STRIPE_PRICE_SERVICE_MONTH') &&
+    !present('STRIPE_PRICE_TEAMS_MONTH')
+  ) {
+    stripeMissing.push('STRIPE_PRICE_SERVICE_MONTH');
+  }
 
   return {
     environment: production ? 'production' : process.env.NODE_ENV || 'development',
@@ -99,7 +103,12 @@ export function environmentReadiness() {
       issues: secretIssues,
     },
     systemEmail: {
-      status: emailMissing.length ? (production ? 'down' : 'not_configured') : 'up',
+      status:
+        emailConfigured === 0
+          ? 'not_configured'
+          : emailMissing.length
+            ? 'down'
+            : 'up',
       missing: emailMissing,
     },
     billing: {
@@ -110,6 +119,20 @@ export function environmentReadiness() {
           ? 'down'
           : 'up',
       missing: stripeMissing,
+    },
+    devicePush: {
+      status:
+        present('VAPID_PUBLIC_KEY') && present('VAPID_PRIVATE_KEY') && present('VAPID_SUBJECT')
+          ? 'up'
+          : 'not_configured',
+      missing: ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'].filter(
+        (name) => !present(name),
+      ),
+    },
+    retention: {
+      status: 'up',
+      days: Number(process.env.OPERATIONAL_RETENTION_DAYS || 90),
+      schedule: 'in_process_daily',
     },
     providerCallbacks: {
       twilioInbound: present('TWILIO_WEBHOOK_URL') ? 'configured' : 'tenant_unavailable',

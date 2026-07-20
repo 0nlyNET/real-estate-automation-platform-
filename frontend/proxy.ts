@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 type VerifiedSession = {
   userId: string
   isPlatformAdmin: boolean
+  platformRole: "super_admin" | "staff" | null
 }
 
 async function readVerifiedSession(req: NextRequest): Promise<VerifiedSession | null> {
@@ -30,6 +31,10 @@ async function readVerifiedSession(req: NextRequest): Promise<VerifiedSession | 
     return {
       userId: session.userId,
       isPlatformAdmin: session.isPlatformAdmin === true,
+      platformRole:
+        session.platformRole === "super_admin" || session.platformRole === "staff"
+          ? session.platformRole
+          : null,
     }
   } catch {
     return null
@@ -40,7 +45,7 @@ export async function proxy(req: NextRequest) {
   const session = await readVerifiedSession(req)
   if (!session) return NextResponse.redirect(new URL("/login", req.url))
 
-  if (req.nextUrl.pathname.startsWith("/admin") && !session.isPlatformAdmin) {
+  if (req.nextUrl.pathname.startsWith("/admin") && !session.platformRole) {
     return NextResponse.redirect(new URL("/app/dashboard", req.url))
   }
   return NextResponse.next()

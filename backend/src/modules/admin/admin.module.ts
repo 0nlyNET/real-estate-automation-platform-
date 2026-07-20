@@ -16,11 +16,27 @@ import { MailModule } from '../../mail/mail.module';
 import { OnboardingModule } from '../onboarding/onboarding.module';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
+import { ProspectApplication } from '../public/prospect-application.entity';
+import { OperationsTask } from '../operations/operations-task.entity';
+import { SupportTicket } from '../support/support-ticket.entity';
+import { BillingEvent } from '../billing/billing-event.entity';
 
 @Module({
   imports: [
     AuthModule,
-    TypeOrmModule.forFeature([Tenant, User, Lead, Message, Credential, TenantSettings, OnboardingRecord]),
+    TypeOrmModule.forFeature([
+      Tenant,
+      User,
+      Lead,
+      Message,
+      Credential,
+      TenantSettings,
+      OnboardingRecord,
+      ProspectApplication,
+      OperationsTask,
+      SupportTicket,
+      BillingEvent,
+    ]),
     CommonModule,
     AuditModule,
     MailModule,

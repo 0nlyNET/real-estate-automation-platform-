@@ -19,8 +19,8 @@ export default function FAQPage() {
       </div>
 
       <div className="space-y-2">
-        <h2 className="text-base font-semibold">How do I change plans?</h2>
-        <p className="text-sm text-muted-foreground">Use the Upgrade button on Billing. For downgrades, use the Stripe customer portal.</p>
+        <h2 className="text-base font-semibold">Are there different plans?</h2>
+        <p className="text-sm text-muted-foreground">No. RealtyTechAI currently uses one managed service. Billing shows your payment status and secure Stripe billing portal.</p>
       </div>
 
       <div className="space-y-2">

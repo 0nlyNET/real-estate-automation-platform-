@@ -69,6 +69,9 @@ export class User {
   @Column({ name: 'last_login_at', type: 'timestamptz', nullable: true })
   lastLoginAt: Date | null;
 
+  @Column({ name: 'platform_role', type: 'varchar', length: 30, nullable: true })
+  platformRole: 'staff' | null;
+
   @CreateDateColumn({ name: 'createdAt' })
   createdAt: Date;
 

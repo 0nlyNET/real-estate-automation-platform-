@@ -71,7 +71,7 @@ export default function LoginPage() {
         description: "You have successfully logged in.",
       });
 
-      router.push(data?.user?.isPlatformAdmin ? "/admin/dashboard" : "/app/dashboard");
+      router.push(data?.user?.platformRole ? "/admin/dashboard" : "/app/dashboard");
     } catch (err: any) {
       setError(err?.message || "Login failed");
     } finally {

@@ -24,6 +24,10 @@ import { OnboardingRecord } from '../modules/onboarding/onboarding-record.entity
 import { OperationsTask } from '../modules/operations/operations-task.entity';
 import { LeadConsentRecord } from '../modules/compliance/lead-consent-record.entity';
 import { LeadStageEvent } from '../modules/leads/lead-stage-event.entity';
+import { AdminNotification } from '../modules/notifications/notification.entity';
+import { AdminNotificationPreference } from '../modules/notifications/notification-preference.entity';
+import { AdminPushSubscription } from '../modules/notifications/push-subscription.entity';
+import { BillingEvent } from '../modules/billing/billing-event.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -52,4 +56,8 @@ export const databaseEntities = [
   OperationsTask,
   LeadConsentRecord,
   LeadStageEvent,
+  AdminNotification,
+  AdminNotificationPreference,
+  AdminPushSubscription,
+  BillingEvent,
 ] as const;

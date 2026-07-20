@@ -22,6 +22,8 @@ import {
 } from './stripe-plan-config';
 import { OperationsService } from '../operations/operations.service';
 import { operationalEvent } from '../../common/operational-log';
+import { BillingEvent } from './billing-event.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const OPEN_SUBSCRIPTION_STATES = new Set([
   'active',
@@ -63,6 +65,11 @@ export class BillingService {
     private readonly dataSource?: DataSource,
     @Optional()
     private readonly operations?: OperationsService,
+    @Optional()
+    @InjectRepository(BillingEvent)
+    private readonly billingEvents?: Repository<BillingEvent>,
+    @Optional()
+    private readonly notifications?: NotificationsService,
   ) {
     const key = process.env.STRIPE_SECRET_KEY?.trim();
     this.stripe = key ? new Stripe(key) : null;
@@ -96,7 +103,13 @@ export class BillingService {
     const product = item?.price?.product;
     const productId =
       typeof product === 'string' ? product : product && 'id' in product ? product.id : null;
-    return { priceId, productId };
+    return {
+      priceId,
+      productId,
+      unitAmount: item?.price?.unit_amount ?? null,
+      currency: item?.price?.currency || null,
+      interval: item?.price?.recurring?.interval === 'year' ? 'year' as const : 'month' as const,
+    };
   }
 
   private async withCheckoutLock<T>(tenantId: string, callback: () => Promise<T>) {
@@ -333,6 +346,39 @@ export class BillingService {
           tenantId,
           event.type === 'customer.subscription.deleted',
         );
+        if (event.type === 'customer.subscription.created') {
+          await this.notifications?.createForPlatform({
+            eventType: 'billing.subscription_created',
+            category: 'billing',
+            severity: 'success',
+            audience: 'super_admin',
+            title: 'Client subscription started',
+            message: 'A client subscription was confirmed by Stripe.',
+            deduplicationKey: `stripe:${event.id}`,
+            actionUrl: '/admin/dashboard?view=billing',
+            entityType: 'tenant',
+            entityId: tenantId,
+          });
+        } else if (event.type === 'customer.subscription.deleted') {
+          await this.saveBillingEvent(event, {
+            tenantId,
+            eventType: 'subscription_canceled',
+            amountCents: 0,
+            currency: subscription.currency || 'usd',
+          });
+          await this.notifications?.createForPlatform({
+            eventType: 'billing.subscription_canceled',
+            category: 'billing',
+            severity: 'warning',
+            audience: 'super_admin',
+            title: 'Client subscription canceled',
+            message: 'A client subscription ended. Review the shutdown follow-up task.',
+            deduplicationKey: `stripe:${event.id}`,
+            actionUrl: '/admin/dashboard?view=billing',
+            entityType: 'tenant',
+            entityId: tenantId,
+          });
+        }
       } else if (
         event.type === 'invoice.payment_failed' ||
         event.type === 'invoice.payment_succeeded'
@@ -365,6 +411,25 @@ export class BillingService {
               relatedEntityId: tenantId,
               dedupeOpen: true,
             });
+            await this.saveBillingEvent(event, {
+              tenantId,
+              eventType: 'payment_failed',
+              invoiceId: invoice.id,
+              amountCents: invoice.amount_due || 0,
+              currency: invoice.currency || 'usd',
+            });
+            await this.notifications?.createForPlatform({
+              eventType: 'billing.payment_failed',
+              category: 'billing',
+              severity: 'warning',
+              audience: 'super_admin',
+              title: 'Client payment failed',
+              message: 'A client payment failed. Review the billing record and follow-up task.',
+              deduplicationKey: `stripe:${event.id}`,
+              actionUrl: '/admin/dashboard?view=billing',
+              entityType: 'tenant',
+              entityId: tenantId,
+            });
           } else {
             await this.tenants.updateBilling(tenantId, {
               status: mapStripeStatusToTenantStatus(subscription.status),
@@ -372,8 +437,87 @@ export class BillingService {
               latestInvoiceId: invoice.id,
               billingStateUpdatedAt: new Date(),
             });
+            await this.saveBillingEvent(event, {
+              tenantId,
+              eventType: 'invoice_paid',
+              invoiceId: invoice.id,
+              amountCents: invoice.amount_paid || 0,
+              currency: invoice.currency || 'usd',
+            });
+            await this.notifications?.createForPlatform({
+              eventType: 'billing.invoice_paid',
+              category: 'billing',
+              severity: 'success',
+              audience: 'super_admin',
+              title: 'Invoice paid',
+              message: 'A client invoice was paid successfully.',
+              deduplicationKey: `stripe:${event.id}`,
+              actionUrl: '/admin/dashboard?view=billing',
+              entityType: 'tenant',
+              entityId: tenantId,
+            });
           }
         }
+      } else if (event.type === 'refund.created') {
+        const refund = event.data.object as Stripe.Refund;
+        const chargeId =
+          typeof refund.charge === 'string' ? refund.charge : refund.charge?.id || null;
+        const charge = chargeId ? await this.getStripe().charges.retrieve(chargeId) : null;
+        const chargeCustomer = charge?.customer;
+        customerId =
+          typeof chargeCustomer === 'string'
+            ? chargeCustomer
+            : chargeCustomer?.id || null;
+        const tenant = await this.tenants.findByStripeReference(null, customerId);
+        tenantId = tenant?.id || null;
+        await this.saveBillingEvent(event, {
+          tenantId,
+          eventType: 'refund',
+          chargeId,
+          amountCents: refund.amount || 0,
+          currency: refund.currency || 'usd',
+        });
+        await this.notifications?.createForPlatform({
+          eventType: 'billing.refund_created',
+          category: 'billing',
+          severity: 'warning',
+          audience: 'super_admin',
+          title: 'Client payment refunded',
+          message: 'A Stripe refund was created. Review the client billing record.',
+          deduplicationKey: `stripe:${event.id}`,
+          actionUrl: '/admin/dashboard?view=billing',
+          ...(tenantId ? { entityType: 'tenant', entityId: tenantId } : {}),
+        });
+      } else if (event.type === 'charge.dispute.created') {
+        const dispute = event.data.object as Stripe.Dispute;
+        const chargeId =
+          typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id || null;
+        const charge = chargeId ? await this.getStripe().charges.retrieve(chargeId) : null;
+        customerId = charge
+          ? typeof charge.customer === 'string'
+            ? charge.customer
+            : charge.customer?.id || null
+          : null;
+        const tenant = await this.tenants.findByStripeReference(null, customerId);
+        tenantId = tenant?.id || null;
+        await this.saveBillingEvent(event, {
+          tenantId,
+          eventType: 'dispute',
+          chargeId,
+          amountCents: dispute.amount || 0,
+          currency: dispute.currency || 'usd',
+        });
+        await this.notifications?.createForPlatform({
+          eventType: 'billing.dispute_created',
+          category: 'billing',
+          severity: 'critical',
+          audience: 'super_admin',
+          title: 'Stripe dispute opened',
+          message: 'A client payment dispute was opened. Review it in Stripe promptly.',
+          deduplicationKey: `stripe:${event.id}`,
+          actionUrl: '/admin/dashboard?view=billing',
+          ...(tenantId ? { entityType: 'tenant', entityId: tenantId } : {}),
+        });
       }
 
       if (claim.row && this.events) {
@@ -400,6 +544,16 @@ export class BillingService {
           error: summary,
         }),
       );
+      await this.notifications?.createForPlatform({
+        eventType: 'billing.webhook_failed',
+        category: 'system',
+        severity: 'critical',
+        audience: 'super_admin',
+        title: 'Stripe webhook processing failed',
+        message: `Stripe event ${event.type} could not be processed. Review system health.`,
+        deduplicationKey: `stripe-failed:${event.id}`,
+        actionUrl: '/admin/dashboard?view=billing',
+      });
       throw error;
     }
   }
@@ -431,7 +585,7 @@ export class BillingService {
     deleted: boolean,
     latestInvoiceId?: string,
   ) {
-    const { priceId, productId } = this.subscriptionPrice(subscription);
+    const { priceId, productId, unitAmount, currency, interval } = this.subscriptionPrice(subscription);
     const mapped = planForStripePrice(priceId);
     if (!mapped) {
       this.logger.error(
@@ -479,6 +633,9 @@ export class BillingService {
       stripeSubscriptionStatus: deleted ? 'canceled' : subscription.status,
       stripePriceId: mapped.priceId,
       stripeProductId: productId,
+      stripeUnitAmount: unitAmount,
+      stripeCurrency: currency,
+      stripeRecurringInterval: interval,
       currentPeriodStart: period.start,
       currentPeriodEnd: period.end,
       trialStart: stripeDate(subscription.trial_start),
@@ -510,6 +667,37 @@ export class BillingService {
         relatedEntityId: tenantId,
         dedupeOpen: true,
       });
+    }
+  }
+
+  private async saveBillingEvent(
+    event: Stripe.Event,
+    input: {
+      tenantId?: string | null;
+      eventType: BillingEvent['eventType'];
+      invoiceId?: string | null;
+      chargeId?: string | null;
+      amountCents?: number;
+      currency?: string;
+    },
+  ) {
+    if (!this.billingEvents) return;
+    try {
+      await this.billingEvents.save(
+        this.billingEvents.create({
+          providerEventId: event.id,
+          tenantId: input.tenantId || null,
+          eventType: input.eventType,
+          invoiceId: input.invoiceId || null,
+          chargeId: input.chargeId || null,
+          amountCents: Math.max(0, Math.round(input.amountCents || 0)),
+          currency: String(input.currency || 'usd').toLowerCase().slice(0, 3),
+          livemode: Boolean(event.livemode),
+          occurredAt: stripeDate(event.created) || new Date(),
+        }),
+      );
+    } catch (error: any) {
+      if (String(error?.code || '') !== '23505') throw error;
     }
   }
 }

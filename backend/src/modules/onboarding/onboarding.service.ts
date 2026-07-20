@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -15,6 +16,8 @@ import { billingEligibility } from '../entitlements/entitlement.service';
 import { decryptIntegrationPayload } from '../integrations/integrations.service';
 import { operationalEvent } from '../../common/operational-log';
 import { OperationsService } from '../operations/operations.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { PlatformOperatorsService } from '../../common/platform-operators.service';
 
 type ReadinessItem = {
   key: string;
@@ -49,6 +52,8 @@ export class OnboardingService {
     @InjectRepository(SequenceStep)
     private readonly steps: Repository<SequenceStep>,
     private readonly operations: OperationsService,
+    @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly platformOperators?: PlatformOperatorsService,
   ) {}
 
   async getOrCreate(tenantId: string) {
@@ -98,7 +103,19 @@ export class OnboardingService {
     }
     record.activationStatus = 'incomplete';
     record.blockedReason = null;
-    return this.records.save(record);
+    const saved = await this.records.save(record);
+    await this.notifications?.createForPlatform({
+      eventType: 'onboarding.client_updated',
+      category: 'onboarding',
+      severity: 'info',
+      title: 'Client updated onboarding',
+      message: 'A client saved onboarding information. Review their readiness when convenient.',
+      deduplicationKey: `onboarding-client-update:${saved.id}:${saved.updatedAt.getTime()}`,
+      actionUrl: '/admin/dashboard?view=onboarding',
+      entityType: 'tenant',
+      entityId: tenantId,
+    });
+    return saved;
   }
 
   async recordOperatorEvidence(
@@ -122,6 +139,10 @@ export class OnboardingService {
     }
     if (patch.clientApprovalEvidence !== undefined)
       record.clientApprovalEvidence = patch.clientApprovalEvidence;
+    if (patch.assignedOnboardingOwnerId !== undefined) {
+      await this.platformOperators?.requireAssignable(patch.assignedOnboardingOwnerId);
+      record.assignedOnboardingOwnerId = patch.assignedOnboardingOwnerId;
+    }
     if (patch.operatorApproved === true) {
       record.operatorApprovedById = operatorId;
       record.operatorApprovedAt = new Date();
@@ -130,6 +151,20 @@ export class OnboardingService {
       record.operatorApprovedAt = null;
     }
     const saved = await this.records.save(record);
+    if (patch.assignedOnboardingOwnerId) {
+      await this.notifications?.createForPlatform({
+        eventType: 'onboarding.assigned',
+        category: 'onboarding',
+        severity: 'warning',
+        title: 'Onboarding assigned to you',
+        message: 'A client onboarding workspace is ready for your review.',
+        deduplicationKey: `onboarding-assigned:${saved.id}:${patch.assignedOnboardingOwnerId}`,
+        assignedOperatorId: patch.assignedOnboardingOwnerId,
+        actionUrl: '/admin/dashboard?view=onboarding',
+        entityType: 'tenant',
+        entityId: tenantId,
+      });
+    }
     if (
       patch.clientApprovedAt !== undefined ||
       patch.clientApprovalEvidence !== undefined

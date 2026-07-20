@@ -6,7 +6,9 @@ import {
   Get,
   NotFoundException,
   Param,
+  Patch,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -16,7 +18,8 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthService } from '../auth/auth.service';
 import { AdminService } from './admin.service';
 import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
-import { CreateClientDto, ImpersonateDto } from './admin.dto';
+import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
+import { AssignClientDto, CreateClientDto, ImpersonateDto, SetPlatformStaffDto } from './admin.dto';
 import { AuditService } from '../audit/audit.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { OperatorOnboardingEvidenceDto } from '../onboarding/onboarding.dto';
@@ -27,7 +30,7 @@ import {
   setSessionCookie,
 } from '../auth/session-cookie';
 
-@UseGuards(JwtAuthGuard, PlatformAdminGuard)
+@UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 @Controller('admin')
 export class AdminController {
   constructor(
@@ -38,8 +41,8 @@ export class AdminController {
   ) {}
 
   @Get('overview')
-  async overview() {
-    return this.admin.overview();
+  async overview(@Req() req: any) {
+    return this.admin.overview(req.user?.platformRole === 'super_admin');
   }
 
   @Get('tenants/:tenantId/readiness')
@@ -53,6 +56,9 @@ export class AdminController {
     @Body() body: OperatorOnboardingEvidenceDto,
     @Req() req: any,
   ) {
+    if (body.billingVerifiedAt && req.user?.platformRole !== 'super_admin') {
+      throw new ForbiddenException('Only the owner can verify client billing');
+    }
     return this.onboarding.recordOperatorEvidence(
       tenantId,
       body,
@@ -61,38 +67,51 @@ export class AdminController {
   }
 
   @Post('tenants/:tenantId/activate')
+  @UseGuards(PlatformAdminGuard)
   activate(@Param('tenantId') tenantId: string, @Req() req: any) {
     return this.onboarding.activate(tenantId, req.user.sub);
   }
 
   @Post('tenants/:tenantId/pause')
+  @UseGuards(PlatformAdminGuard)
   pause(@Param('tenantId') tenantId: string) {
     return this.onboarding.pause(tenantId);
   }
 
   @Get('system-health')
+  @UseGuards(PlatformAdminGuard)
   async systemHealth() {
     return this.admin.systemHealth();
   }
 
   @Get('tenants')
-  async listTenants() {
+  async listTenants(@Req() req: any) {
+    const financialAccess = req.user?.platformRole === 'super_admin';
     const items = await this.admin.listTenants();
     return items.map((t: any) => ({
       id: t.id,
       name: t.name,
-      plan: t.plan,
-      status: t.status,
+      ...(financialAccess ? { status: t.status } : {}),
+      lifecycleStatus: t.lifecycleStatus,
+      assignedOperatorId: t.assignedOperatorId || null,
+      ...(financialAccess
+        ? {
+            currentPeriodEnd: t.currentPeriodEnd || null,
+            lastPaymentFailureAt: t.lastPaymentFailureAt || null,
+          }
+        : {}),
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
     }));
   }
 
   @Post('tenants')
+  @UseGuards(PlatformAdminGuard)
   async createTenant(@Body() body: CreateClientDto, @Req() req: any) {
     const result = await this.admin.createClient({
       businessName: body.businessName,
       ownerEmail: body.ownerEmail,
+      assignedOperatorId: body.assignedOperatorId,
     });
 
     await this.audit.record({
@@ -113,6 +132,69 @@ export class AdminController {
     return result;
   }
 
+  @Get('operators')
+  operators() {
+    return this.admin.listOperators();
+  }
+
+  @Get('platform-access')
+  @UseGuards(PlatformAdminGuard)
+  platformAccess(@Req() req: any) {
+    return this.admin.platformAccessUsers(req.user.tenantId);
+  }
+
+  @Patch('platform-access/:userId')
+  @UseGuards(PlatformAdminGuard)
+  setPlatformAccess(
+    @Req() req: any,
+    @Param('userId') userId: string,
+    @Body() body: SetPlatformStaffDto,
+  ) {
+    return this.admin.setPlatformStaff(req.user.tenantId, userId, body.enabled);
+  }
+
+  @Patch('tenants/:tenantId/assignment')
+  @UseGuards(PlatformAdminGuard)
+  assignClient(
+    @Param('tenantId') tenantId: string,
+    @Body() body: AssignClientDto,
+  ) {
+    return this.admin.assignClient(tenantId, body.assignedOperatorId);
+  }
+
+  @Get('billing-overview')
+  @UseGuards(PlatformAdminGuard)
+  billingOverview() {
+    return this.admin.financialOverview();
+  }
+
+  @Get('reporting-overview')
+  reportingOverview(@Req() req: any) {
+    return this.admin.businessReport(req.user?.platformRole === 'super_admin');
+  }
+
+  @Get('communications')
+  communications(
+    @Query('tenantId') tenantId?: string,
+    @Query('channel') channel?: string,
+    @Query('status') status?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.admin.communications({
+      tenantId,
+      channel,
+      status,
+      take: Number(take || 50),
+      skip: Number(skip || 0),
+    });
+  }
+
+  @Get('integrations-overview')
+  integrationsOverview() {
+    return this.admin.integrationOverview();
+  }
+
   @Get('tenants/:tenantId/users')
   async listTenantUsers(@Param('tenantId') tenantId: string) {
     const items = await this.admin.listUsersByTenant(tenantId);
@@ -126,6 +208,7 @@ export class AdminController {
   }
 
   @Post('impersonate')
+  @UseGuards(PlatformAdminGuard)
   async impersonate(
     @Body() body: ImpersonateDto,
     @Req() req: Request & { user?: any },

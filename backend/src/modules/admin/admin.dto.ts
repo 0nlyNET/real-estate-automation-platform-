@@ -1,4 +1,4 @@
-import { IsEmail, IsString, IsUUID, Length } from 'class-validator';
+import { IsBoolean, IsEmail, IsOptional, IsString, IsUUID, Length } from 'class-validator';
 
 export class CreateClientDto {
   @IsString()
@@ -7,6 +7,21 @@ export class CreateClientDto {
 
   @IsEmail()
   ownerEmail!: string;
+
+  @IsOptional()
+  @IsUUID()
+  assignedOperatorId?: string | null;
+}
+
+export class AssignClientDto {
+  @IsOptional()
+  @IsUUID()
+  assignedOperatorId?: string | null;
+}
+
+export class SetPlatformStaffDto {
+  @IsBoolean()
+  enabled!: boolean;
 }
 
 export class ImpersonateDto {

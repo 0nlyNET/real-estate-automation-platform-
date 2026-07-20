@@ -46,4 +46,34 @@ describe('OperationsService queue ordering and filters', () => {
       }),
     );
   });
+
+  it('validates an assignee and creates one trusted assignment notification', async () => {
+    const repo = {
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({
+        id: 'task-1',
+        createdAt: new Date(),
+        ...value,
+      })),
+    };
+    const notifications = { createForPlatform: jest.fn().mockResolvedValue([]) };
+    const operators = { requireAssignable: jest.fn().mockResolvedValue({ id: 'staff-1' }) };
+    const service = new OperationsService(repo as any, notifications as any, operators as any);
+
+    await service.createTask({
+      title: 'Review onboarding',
+      description: 'Confirm the client intake.',
+      category: 'onboarding',
+      assignedOperatorId: 'staff-1',
+    });
+
+    expect(operators.requireAssignable).toHaveBeenCalledWith('staff-1');
+    expect(notifications.createForPlatform).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'task.assigned',
+        assignedOperatorId: 'staff-1',
+        deduplicationKey: 'operations-task:task-1:staff-1',
+      }),
+    );
+  });
 });

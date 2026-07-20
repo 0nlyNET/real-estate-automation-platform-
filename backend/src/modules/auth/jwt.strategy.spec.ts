@@ -39,6 +39,8 @@ describe('JwtStrategy', () => {
       role: 'admin',
       tenantId: 'tenant-2',
       platformAdmin: true,
+      platformRole: 'super_admin',
+      platformOperator: true,
       sessionExpiresAt: null,
     });
   });

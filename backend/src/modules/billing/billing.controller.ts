@@ -1,7 +1,6 @@
-import { Body, Controller, Headers, Post, Req, UseGuards } from '@nestjs/common';
+import { Controller, Headers, Post, Req, UseGuards } from '@nestjs/common';
 import { BillingService } from './billing.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { CheckoutSessionDto } from './billing.dto';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 
 @Controller('billing')
@@ -11,14 +10,14 @@ export class BillingController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @RequireRole('admin')
   @Post('checkout-session')
-  async checkoutSession(@Req() req: any, @Body() body: CheckoutSessionDto) {
+  async checkoutSession(@Req() req: any) {
     const tenantId = req.user?.tenantId;
     const frontend = String(process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
     return this.billing.createCheckoutSession({
       tenantId,
       userEmail: req.user?.email,
-      plan: body.plan,
-      interval: body.interval,
+      plan: 'teams',
+      interval: 'month',
       successUrl: `${frontend}/app/billing?checkout=success`,
       cancelUrl: `${frontend}/app/billing?checkout=cancelled`,
     });

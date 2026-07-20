@@ -8,7 +8,7 @@ import { Repository } from 'typeorm';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/user.entity';
 import { PasswordResetToken } from './password-reset-token.entity';
-import { isPlatformAdminEmail } from '../../common/env';
+import { isPlatformAdminEmail, resolvePlatformRole } from '../../common/env';
 import { MailService } from '../../mail/mail.service';
 import { OperationsService } from '../operations/operations.service';
 
@@ -30,6 +30,7 @@ export class AuthService {
       role: user.role,
       tenantId: user.tenantId,
       platformAdmin: isPlatformAdminEmail(user.email),
+      platformRole: resolvePlatformRole(user.email, user.platformRole),
       sessionVersion: user.sessionVersion,
     };
     return this.jwtService.sign(payload);
@@ -92,6 +93,7 @@ export class AuthService {
         role: user.role,
         tenantId: user.tenantId,
         isPlatformAdmin: isPlatformAdminEmail(user.email),
+        platformRole: resolvePlatformRole(user.email, user.platformRole),
       },
     };
   }

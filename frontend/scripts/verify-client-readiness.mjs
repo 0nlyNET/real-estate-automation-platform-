@@ -41,7 +41,8 @@ for (const href of links) {
 }
 
 const pricing = read("lib/public-plan-catalog.ts")
-assert.match(pricing, /Contact for pilot pricing/)
+assert.match(pricing, /RealtyTechAI managed service/)
+assert.equal((pricing.match(/id:/g) || []).length, 1, "client pricing must expose one service")
 assert.doesNotMatch(pricing, /pricing:\s*["']\s*["']/)
 
 const legal = ["app/privacy/page.tsx", "app/terms/page.tsx", "app/refund/page.tsx"].map(read).join("\n")
@@ -59,7 +60,7 @@ assert.doesNotMatch(authSource, /localStorage|document\.cookie/)
 const proxySource = read("proxy.ts")
 assert.doesNotMatch(proxySource, /decodePayload|token\.split|\batob\b/)
 assert.match(proxySource, /fetch\(`\$\{backend\}\/me`/)
-assert.match(proxySource, /session\.isPlatformAdmin/)
+assert.match(proxySource, /session\.platformRole/)
 assert.match(read("app/api/backend/[...path]/route.ts"), /BACKEND_API_URL/)
 assert.match(read("next.config.mjs"), /Content-Security-Policy/)
 assert.match(read("next.config.mjs"), /frame-ancestors 'none'/)
@@ -74,17 +75,49 @@ assert.match(inbox, /Failed:/)
 assert.match(inbox, /providerStatus/)
 
 const onboarding = read("app/app/onboarding/page.tsx")
-assert.match(onboarding, /readiness\?\.required\.map/)
-assert.match(onboarding, /Clients cannot self-activate/)
+assert.match(onboarding, /Step \{step \+ 1\} of \{steps\.length\}/)
+assert.match(onboarding, /We run a controlled test lead/)
+assert.match(onboarding, /Open connections/)
 
 const sidebar = read("components/app-shell/sidebar.tsx")
-assert.match(sidebar, /label: "Support", href: "\/support"/)
+assert.match(sidebar, /label: "Help", href: "\/support"/)
+assert.doesNotMatch(sidebar, /Teams Plan|Enterprise|Upgrade/)
 
 const admin = read("app/admin/dashboard/page.tsx")
-assert.match(admin, /\/admin\/applications\?take=25/)
-assert.match(admin, /\/admin\/operations\?take=50/)
+assert.match(admin, /\/admin\/applications\?take=100/)
+assert.match(admin, /\/admin\/operations\?take=100/)
 assert.match(admin, /\/support\/admin\/tickets/)
-assert.match(admin, /Overdue only/)
-assert.match(admin, /Open related record/)
+assert.match(admin, /Action center/)
+assert.match(admin, /Billing & health/)
+assert.doesNotMatch(admin, /window\.prompt/)
+
+const notifications = read("components/admin/notification-center.tsx")
+assert.match(notifications, /Notification\.requestPermission\(\)/)
+assert.match(notifications, /serviceWorker\.register\("\/sw\.js"/)
+assert.match(notifications, /\/admin\/notifications\/push\/subscriptions/)
+assert.match(notifications, /Filter notifications by category/)
+assert.match(notifications, /Quiet hours/)
+const worker = read("public/sw.js")
+assert.match(worker, /notificationclick/)
+assert.match(worker, /clients\.openWindow/)
+assert.doesNotMatch(worker, /https?:\/\/[^"']+/)
+
+const layout = read("app/layout.tsx")
+assert.match(layout, /tech-20house-20logo-20with-20circuit-20lines\.png/)
+
+const billing = read("app/app/billing/page.tsx")
+assert.match(billing, /There are no plan choices/)
+assert.doesNotMatch(billing, /Choose Pro|Choose Teams|Upgrade/)
+
+const flatServicePages = [
+  "app/faq/page.tsx",
+  "app/app/inbox/page.tsx",
+  "app/app/routing/page.tsx",
+  "app/app/team/page.tsx",
+  "app/app/compliance/page.tsx",
+  "app/app/reports/page.tsx",
+].map(read).join("\n")
+assert.doesNotMatch(flatServicePages, /Teams plan|Enterprise plan|Upgrade to|See plans/)
+assert.match(admin, /Live Stripe activity/)
 
 console.log(`Client-readiness frontend verification passed (${links.length} static links checked).`)

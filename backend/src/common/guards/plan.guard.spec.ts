@@ -15,9 +15,9 @@ describe('TeamsPlanGuard', () => {
     expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 'tenant-1' } });
   });
 
-  it('denies inactive or insufficient plans', async () => {
+  it('does not create plan tiers but still denies a canceled workspace', async () => {
     const reflector = { getAllAndOverride: jest.fn().mockReturnValue(true) } as any;
-    const repo = { findOne: jest.fn().mockResolvedValue({ id: 'tenant-1', plan: 'pro', status: 'active' }) } as any;
+    const repo = { findOne: jest.fn().mockResolvedValue({ id: 'tenant-1', plan: 'pro', status: 'canceled' }) } as any;
     await expect(new TeamsPlanGuard(reflector, repo).canActivate(context)).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

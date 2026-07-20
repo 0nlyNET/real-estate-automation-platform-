@@ -62,6 +62,10 @@ export class TenantsService {
         | 'latestInvoiceId'
         | 'lastPaymentFailureAt'
         | 'billingStateUpdatedAt'
+        | 'assignedOperatorId'
+        | 'stripeUnitAmount'
+        | 'stripeCurrency'
+        | 'stripeRecurringInterval'
       >
     >,
   ): Promise<Tenant> {

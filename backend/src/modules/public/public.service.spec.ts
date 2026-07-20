@@ -25,7 +25,13 @@ describe('public client applications', () => {
     };
     const mail = { sendEmail: jest.fn().mockRejectedValue(new Error('provider unavailable')) };
     const operations = { createTask: jest.fn().mockResolvedValue({ id: 'task-1' }) };
-    const service = new PublicService(applications as any, mail as any, operations as any);
+    const notifications = { createForPlatform: jest.fn().mockResolvedValue([]) };
+    const service = new PublicService(
+      applications as any,
+      mail as any,
+      operations as any,
+      notifications as any,
+    );
 
     await expect(
       service.submitInquiry({
@@ -45,6 +51,12 @@ describe('public client applications', () => {
     expect(saves[saves.length - 1]).toMatchObject({ notificationStatus: 'failed' });
     expect(operations.createTask).toHaveBeenCalledWith(
       expect.objectContaining({ category: 'application_notification_failure', priority: 'high' }),
+    );
+    expect(notifications.createForPlatform).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'lead.application_received',
+        deduplicationKey: 'application:application-1',
+      }),
     );
   });
 

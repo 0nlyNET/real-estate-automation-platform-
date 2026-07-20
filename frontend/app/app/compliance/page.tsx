@@ -2,10 +2,9 @@
 
 import { useEffect, useState } from "react"
 import { PageShell } from "@/app/app/_components/PageShell"
-import { LockedFeature } from "@/app/app/_components/LockedFeature"
 import { apiFetch } from "@/lib/api"
-import { fetchMeWithPlan } from "@/lib/me"
-import { canUseBrokerage, isAdminRole } from "@/lib/access"
+import { fetchMe } from "@/lib/me"
+import { isAdminRole } from "@/lib/access"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -31,7 +30,6 @@ export default function ComplianceAppPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
-  const [hasEnterprise, setHasEnterprise] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
 
   const [qh, setQh] = useState<QuietHours | null>(null)
@@ -46,10 +44,9 @@ export default function ComplianceAppPage() {
         setLoading(true)
         setErr(null)
 
-        const { me, planName } = await fetchMeWithPlan()
+        const me = await fetchMe()
         if (!mounted) return
 
-        setHasEnterprise(canUseBrokerage(planName))
         setIsAdmin(isAdminRole(me?.role))
 
         const q = await apiFetch("/compliance/quiet-hours")
@@ -92,18 +89,6 @@ export default function ComplianceAppPage() {
     } catch (e: any) {
       setErr(e?.message || "Opt out failed")
     }
-  }
-
-  if (!hasEnterprise) {
-    return (
-      <PageShell title="Compliance" subtitle="Opt-outs, quiet hours, and audit trail.">
-        <LockedFeature
-          title="Compliance center"
-          requiredLabel="Enterprise"
-          description="Compliance center requires the Enterprise plan for audit visibility and export. Basic opt-out enforcement still runs server-side when enabled."
-        />
-      </PageShell>
-    )
   }
 
   return (

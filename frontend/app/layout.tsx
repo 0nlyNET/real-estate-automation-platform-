@@ -17,22 +17,10 @@ export const metadata: Metadata = {
     siteName: "RealtyTechAI",
   },
   icons: {
-    icon: [
-      {
-        url: "/icon-light-32x32.png",
-        media: "(prefers-color-scheme: light)",
-      },
-      {
-        url: "/icon-dark-32x32.png",
-        media: "(prefers-color-scheme: dark)",
-      },
-      {
-        url: "/icon.svg",
-        type: "image/svg+xml",
-      },
-    ],
-    apple: "/apple-icon.png",
+    icon: "/images/tech-20house-20logo-20with-20circuit-20lines.png",
+    apple: "/images/tech-20house-20logo-20with-20circuit-20lines.png",
   },
+  manifest: "/manifest.webmanifest",
 }
 
 export const viewport: Viewport = {

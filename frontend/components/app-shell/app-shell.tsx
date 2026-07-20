@@ -62,7 +62,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <div>
                     <div className="font-medium">Subscription will end</div>
                     <div className="text-muted-foreground">
-                      Your plan cancels on {formatDate(plan?.currentPeriodEnd) || "your period end date"}.
+                      Your service ends on {formatDate(plan?.currentPeriodEnd) || "your period end date"}.
                     </div>
                   </div>
                 )}

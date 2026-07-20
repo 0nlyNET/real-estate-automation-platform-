@@ -3,9 +3,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { PageShell } from "@/app/app/_components/PageShell"
 import { apiFetch } from "@/lib/api"
-import { fetchMeWithPlan } from "@/lib/me"
-import { canUseTeams } from "@/lib/access"
-import { LockedFeature } from "@/app/app/_components/LockedFeature"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -44,23 +41,6 @@ export default function InboxPage() {
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Msg[]>([])
   const [draft, setDraft] = useState("")
-  const [hasTeams, setHasTeams] = useState(false)
-
-  useEffect(() => {
-    let mounted = true
-    fetchMeWithPlan()
-      .then(({ planName }) => {
-        if (!mounted) return
-        setHasTeams(canUseTeams(planName))
-      })
-      .catch(() => {
-        if (!mounted) return
-        setHasTeams(false)
-      })
-    return () => {
-      mounted = false
-    }
-  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -68,13 +48,6 @@ export default function InboxPage() {
       try {
         setLoading(true)
         setErr(null)
-
-        if ((scope === "team" || scope === "shared") && !hasTeams) {
-          setThreads([])
-          setActiveLeadId(null)
-          setMessages([])
-          return
-        }
 
         const rows = await apiFetch(`/messaging/threads?scope=${scope}`)
         if (!mounted) return
@@ -94,7 +67,7 @@ export default function InboxPage() {
     return () => {
       mounted = false
     }
-  }, [scope, hasTeams])
+  }, [scope])
 
   useEffect(() => {
     let mounted = true
@@ -119,23 +92,22 @@ export default function InboxPage() {
   }, [activeLeadId])
 
   const scopeButtons = useMemo(() => {
-    const btn = (label: string, value: Scope, locked?: boolean) => (
+    const btn = (label: string, value: Scope) => (
       <Button
         key={value}
         size="sm"
         variant={scope === value ? "default" : "outline"}
-        disabled={locked}
         onClick={() => setScope(value)}
       >
         {label}
       </Button>
     )
     return [
-      btn("Personal", "mine", false),
-      btn("Team", "team", !hasTeams),
-      btn("Shared", "shared", !hasTeams),
+      btn("Personal", "mine"),
+      btn("Team", "team"),
+      btn("Shared", "shared"),
     ]
-  }, [scope, hasTeams])
+  }, [scope])
 
   async function send() {
     if (!activeLeadId) return
@@ -153,18 +125,6 @@ export default function InboxPage() {
     } catch (e: any) {
       setErr(e?.message || "Send failed")
     }
-  }
-
-  if ((scope === "team" || scope === "shared") && !hasTeams) {
-    return (
-      <PageShell title="Inbox" subtitle="Personal, team, and shared messaging in one place.">
-        <LockedFeature
-          title="Team and Shared inbox"
-          requiredLabel="Teams"
-          description="Team and Shared inbox require the Teams plan. Upgrade to route leads and collaborate."
-        />
-      </PageShell>
-    )
   }
 
   return (

@@ -7,7 +7,7 @@ import { DashboardSetupSection } from "@/components/dashboard/setup-section"
 
 export default function DashboardPage() {
   return (
-    <PageShell title="Dashboard" subtitle="Speed to lead, activity, and performance at a glance.">
+    <PageShell title="Home" subtitle="See what is happening now and what needs your attention next.">
       <DashboardKpis />
       <DashboardSetupSection />
       <Card>
@@ -15,7 +15,7 @@ export default function DashboardPage() {
           <CardTitle>Next actions</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          Connect integrations, set routing rules, and start a follow up sequence.
+          Finish your setup, connect the accounts you want RealtyTechAI to use, and confirm who should receive each lead. Your setup team handles testing and activation.
         </CardContent>
       </Card>
     </PageShell>

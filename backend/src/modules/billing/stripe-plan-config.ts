@@ -3,6 +3,14 @@ import { BadRequestException } from '@nestjs/common';
 export type BillablePlan = 'pro' | 'teams';
 export type BillingInterval = 'month' | 'year';
 
+export function configuredServicePriceId() {
+  return (
+    String(process.env.STRIPE_PRICE_SERVICE_MONTH || '').trim() ||
+    String(process.env.STRIPE_PRICE_TEAMS_MONTH || '').trim() ||
+    null
+  );
+}
+
 const priceEnvironment: Record<`${BillablePlan}:${BillingInterval}`, string> = {
   'pro:month': 'STRIPE_PRICE_PRO_MONTH',
   'pro:year': 'STRIPE_PRICE_PRO_YEAR',
@@ -28,6 +36,10 @@ export function configuredPriceId(
   plan: BillablePlan,
   interval: BillingInterval,
 ) {
+  if (plan === 'teams' && interval === 'month') {
+    const servicePrice = configuredServicePriceId();
+    if (servicePrice) return servicePrice;
+  }
   const match = configuredStripePrices().find(
     (entry) => entry.plan === plan && entry.interval === interval,
   );
@@ -42,6 +54,9 @@ export function configuredPriceId(
 export function planForStripePrice(priceId?: string | null) {
   const normalized = String(priceId || '').trim();
   if (!normalized) return null;
+  if (normalized === configuredServicePriceId()) {
+    return { plan: 'teams' as const, interval: 'month' as const, priceId: normalized };
+  }
   const match = configuredStripePrices().find(
     (entry) => entry.priceId === normalized,
   );
@@ -56,8 +71,6 @@ export function missingStripeConfiguration() {
   const missing = ['STRIPE_WEBHOOK_SECRET'].filter(
     (key) => !String(process.env[key] || '').trim(),
   );
-  for (const price of configuredStripePrices()) {
-    if (!price.priceId) missing.push(price.environmentVariable);
-  }
+  if (!configuredServicePriceId()) missing.push('STRIPE_PRICE_SERVICE_MONTH');
   return missing;
 }

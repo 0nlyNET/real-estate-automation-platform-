@@ -1,23 +1,20 @@
 import type { ReactNode } from "react"
 import Link from "next/link"
+import { NotificationCenter } from "@/components/admin/notification-center"
+import { Logo } from "@/components/logo"
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 md:px-6">
           <div className="flex items-center gap-3">
-            <div className="text-sm font-semibold text-foreground">RealtyTechAI</div>
-            <div className="text-xs text-muted-foreground">Admin</div>
+            <Logo href="/admin/dashboard" size="sm" />
+            <div className="rounded-full bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">Operations</div>
           </div>
 
-          <nav className="flex items-center gap-4 text-sm">
-            <Link className="text-muted-foreground hover:text-foreground" href="/admin/dashboard">
-              Clients
-            </Link>
-            <Link className="text-muted-foreground hover:text-foreground" href="/app/dashboard">
-              View as client
-            </Link>
+          <nav className="flex items-center gap-2 text-sm md:gap-4">
+            <NotificationCenter />
             <Link className="text-muted-foreground hover:text-foreground" href="/logout">
               Logout
             </Link>
@@ -25,7 +22,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-6">{children}</main>
+      <main className="mx-auto max-w-7xl px-4 py-5 md:px-6 md:py-8">{children}</main>
     </div>
   )
 }

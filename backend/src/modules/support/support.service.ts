@@ -1,10 +1,12 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SupportTicket } from './support-ticket.entity';
 import { MailService } from '../../mail/mail.service';
 import { OperationsService } from '../operations/operations.service';
 import { operationalEvent } from '../../common/operational-log';
+import { NotificationsService } from '../notifications/notifications.service';
+import { PlatformOperatorsService } from '../../common/platform-operators.service';
 
 @Injectable()
 export class SupportService {
@@ -15,6 +17,8 @@ export class SupportService {
     private readonly repo: Repository<SupportTicket>,
     private readonly mail: MailService,
     private readonly operations: OperationsService,
+    @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly platformOperators?: PlatformOperatorsService,
   ) {}
 
   async createTicket(params: {
@@ -46,6 +50,22 @@ export class SupportService {
     });
 
     const saved = await this.repo.save(ticket);
+    await this.notifications?.createForPlatform({
+      eventType: 'support.ticket_created',
+      category: 'support',
+      severity:
+        saved.severity === 'urgent'
+          ? 'critical'
+          : saved.severity === 'high'
+            ? 'warning'
+            : 'info',
+      title: saved.severity === 'urgent' ? 'Urgent client support request' : 'New client support request',
+      message: `${saved.subject}. Review the request and assign an owner.`,
+      deduplicationKey: `support:${saved.id}`,
+      actionUrl: '/admin/dashboard?view=support',
+      entityType: 'support_ticket',
+      entityId: saved.id,
+    });
     await this.operations.createTask({
       tenantId: params.tenantId,
       category: 'support_request',
@@ -139,7 +159,10 @@ export class SupportService {
     const ticket = await this.repo.findOne({ where: { id } });
     if (!ticket) throw new NotFoundException('Support ticket not found');
     if (patch.status !== undefined) ticket.status = patch.status;
-    if (patch.assignedOperatorId !== undefined) ticket.assignedOperatorId = patch.assignedOperatorId;
+    if (patch.assignedOperatorId !== undefined) {
+      await this.platformOperators?.requireAssignable(patch.assignedOperatorId);
+      ticket.assignedOperatorId = patch.assignedOperatorId;
+    }
     if (patch.dueAt !== undefined) ticket.dueAt = patch.dueAt ? new Date(patch.dueAt) : null;
     if (patch.resolutionNote !== undefined) ticket.resolutionNote = patch.resolutionNote;
     if (ticket.status === 'acknowledged' && !ticket.acknowledgedAt) ticket.acknowledgedAt = new Date();
@@ -148,7 +171,22 @@ export class SupportService {
       ticket.acknowledgedAt = null;
       ticket.resolvedAt = null;
     }
-    return this.repo.save(ticket);
+    const saved = await this.repo.save(ticket);
+    if (patch.assignedOperatorId) {
+      await this.notifications?.createForPlatform({
+        eventType: 'support.ticket_assigned',
+        category: 'support',
+        severity: 'warning',
+        title: 'Support request assigned to you',
+        message: `${saved.subject} needs your attention.`,
+        deduplicationKey: `support-assigned:${saved.id}:${patch.assignedOperatorId}`,
+        assignedOperatorId: patch.assignedOperatorId,
+        actionUrl: '/admin/dashboard?view=support',
+        entityType: 'support_ticket',
+        entityId: saved.id,
+      });
+    }
+    return saved;
   }
 
   async createAccountRequest(params: {

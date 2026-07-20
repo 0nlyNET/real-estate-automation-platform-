@@ -10,8 +10,8 @@ export default function CheckoutPage() {
         <CardContent className="space-y-4 text-sm text-muted-foreground">
           <p>RealtyTechAI never collects card numbers in this application. Signed-in workspace administrators start checkout from Billing and complete payment on Stripe&apos;s hosted checkout page.</p>
           <div className="flex gap-2">
-            <Button asChild><Link href="/app/billing/upgrade">Choose a plan</Link></Button>
-            <Button asChild variant="outline"><Link href="/pricing">View plans</Link></Button>
+            <Button asChild><Link href="/app/billing">Open billing</Link></Button>
+            <Button asChild variant="outline"><Link href="/pricing">View the service</Link></Button>
           </div>
         </CardContent>
       </Card>

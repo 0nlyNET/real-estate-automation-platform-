@@ -115,6 +115,18 @@ export class Tenant {
   @Column({ name: 'billing_state_updated_at', type: 'timestamptz', nullable: true })
   billingStateUpdatedAt?: Date | null;
 
+  @Column({ name: 'assigned_operator_id', type: 'uuid', nullable: true })
+  assignedOperatorId?: string | null;
+
+  @Column({ name: 'stripe_unit_amount', type: 'int', nullable: true })
+  stripeUnitAmount?: number | null;
+
+  @Column({ name: 'stripe_currency', type: 'varchar', length: 3, nullable: true })
+  stripeCurrency?: string | null;
+
+  @Column({ name: 'stripe_recurring_interval', type: 'varchar', length: 10, nullable: true })
+  stripeRecurringInterval?: 'month' | 'year' | null;
+
   // App settings referenced by messaging logic
   @Column({ type: 'text', nullable: true })
   bookingLink?: string | null;

@@ -34,13 +34,13 @@ export function DashboardSetupSection() {
     <Card className="border-border/60">
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div>
-          <CardTitle className="flex items-center gap-2"><ClipboardCheck className="h-5 w-5" />Launch readiness</CardTitle>
+          <CardTitle className="flex items-center gap-2"><ClipboardCheck className="h-5 w-5" />Your setup</CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">
-            Based on billing, approved templates, consent policy, provider tests, and recorded launch evidence.
+            Complete your information and connections. RealtyTechAI handles the technical tests and final launch review.
           </p>
         </div>
         <Badge variant={readiness?.ready ? "default" : "secondary"}>
-          {readiness?.ready ? "Ready for operator activation" : `${passed} of ${total} passed`}
+          {readiness?.ready ? "Ready for final activation" : `${passed} of ${total} checks complete`}
         </Badge>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -59,10 +59,10 @@ export function DashboardSetupSection() {
             {readiness.blockers.length ? (
               <div className="flex items-start gap-2 rounded-md bg-amber-500/10 p-3 text-sm">
                 <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-600" />
-                <span>{readiness.blockers.length} required item(s) still block activation. Automations remain off.</span>
+                <span>{readiness.blockers.length} setup check(s) remain. Nothing goes live until review is complete.</span>
               </div>
             ) : null}
-            <Button asChild><Link href="/app/onboarding">Review all setup evidence</Link></Button>
+            <div className="flex flex-wrap gap-2"><Button asChild><Link href="/app/onboarding">Continue setup</Link></Button><Button asChild variant="outline"><Link href="/app/integrations">Review connections</Link></Button></div>
           </>
         ) : null}
       </CardContent>

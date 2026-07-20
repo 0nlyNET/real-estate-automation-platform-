@@ -15,6 +15,7 @@ export class MeController {
       role: req.user?.role || null,
       email: req.user?.email || null,
       isPlatformAdmin: req.user?.platformAdmin === true,
+      platformRole: req.user?.platformRole || null,
       impersonated: Boolean(req.user?.impersonatedBy),
       impersonatedBy: req.user?.impersonatedBy || null,
       sessionExpiresAt: req.user?.sessionExpiresAt || null,
