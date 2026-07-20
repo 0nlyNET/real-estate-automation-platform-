@@ -6,12 +6,12 @@ import { useRouter } from "next/navigation"
 export default function AdminIndexPage() {
   const router = useRouter()
   useEffect(() => {
-    router.replace("/admin/dashboard")
+    router.replace("/admin/overview")
   }, [router])
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <div className="text-sm text-muted-foreground">Opening admin dashboard…</div>
+    <div className="flex min-h-screen items-center justify-center p-6">
+      <div className="text-sm text-muted-foreground">Opening business overview…</div>
     </div>
   )
 }
