@@ -39,6 +39,18 @@ export class AdminController {
 
   @Get('overview')
   async overview() {
+    const snapshot = await this.admin.overview();
+    return {
+      totalClients: snapshot.clients.total,
+      active: snapshot.clients.active,
+      trialing: snapshot.clients.onboarding,
+      pastDue: snapshot.clients.pastDue,
+      canceled: snapshot.clients.canceled,
+    };
+  }
+
+  @Get('business-overview')
+  async businessOverview() {
     return this.admin.overview();
   }
 
