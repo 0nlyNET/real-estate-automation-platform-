@@ -1,4 +1,4 @@
-import { BadGatewayException, ConflictException, Injectable, ForbiddenException, Logger } from '@nestjs/common';
+import { BadGatewayException, ConflictException, Injectable, ForbiddenException, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as crypto from 'crypto';
@@ -14,6 +14,7 @@ import {
   operationalEvent,
   sanitizeOperationalText,
 } from '../../common/operational-log';
+import { NotificationsService } from '../notifications/notifications.service';
 
 function isV1Encrypted(v: string) {
   return typeof v === 'string' && v.startsWith('v1:');
@@ -79,6 +80,7 @@ export class InboxSendService {
     private readonly compliance: ComplianceService,
     private readonly entitlements: EntitlementService,
     private readonly operations: OperationsService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   private requireTenant(tenantId?: string | null) {
@@ -234,6 +236,19 @@ export class InboxSendService {
         relatedEntityType: 'message',
         relatedEntityId: saved.id,
         dedupeOpen: true,
+      });
+      await this.notifications?.createForTenant({
+        tenantId,
+        assignedUserId: lead.assignedToUserId,
+        eventType: 'message.failed',
+        category: 'leads',
+        severity: 'warning',
+        title: `A message to ${lead.fullName} did not send`,
+        message: 'Open the conversation and try again or contact the lead another way.',
+        deduplicationKey: `message-failed:${saved.id}`,
+        actionUrl: `/app/inbox?leadId=${lead.id}`,
+        entityType: 'message',
+        entityId: saved.id,
       });
       throw new BadGatewayException({
         code: 'PROVIDER_SEND_FAILED',

@@ -64,8 +64,8 @@ describe('admin notifications', () => {
     };
     const users = {
       find: jest.fn().mockResolvedValue([
-        { id: 'user-owner', email: 'owner@example.com', isActive: true, isEmailVerified: true },
-        { id: 'user-staff', email: 'staff@example.com', isActive: true, isEmailVerified: true },
+        { id: 'user-owner', tenantId: 'tenant-1', role: 'owner', email: 'owner@example.com', isActive: true, isEmailVerified: true },
+        { id: 'user-staff', tenantId: 'tenant-1', role: 'agent', email: 'staff@example.com', isActive: true, isEmailVerified: true },
       ]),
       findOne: jest.fn(),
     };
@@ -135,6 +135,23 @@ describe('admin notifications', () => {
       message: 'Test', deduplicationKey: 'unsafe', actionUrl: 'https://evil.example/path',
     })).resolves.toEqual([]);
     expect(stored).toHaveLength(0);
+  });
+
+  it('creates tenant-scoped client alerts with safe app links for the owner and assigned agent', async () => {
+    const { service, stored } = setup();
+    await service.createForTenant({
+      tenantId: 'tenant-1',
+      assignedUserId: 'user-staff',
+      eventType: 'handoff.created',
+      category: 'tasks',
+      severity: 'warning',
+      title: 'Lead needs you',
+      message: 'Call today',
+      deduplicationKey: 'handoff:1',
+      actionUrl: '/app/dashboard?leadId=lead-1',
+    });
+    expect(stored.filter((row) => row.deduplicationKey === 'handoff:1')).toHaveLength(2);
+    expect(stored.every((row) => row.actionUrl.startsWith('/app'))).toBe(true);
   });
 
   it('revokes an expired push subscription after the push service returns 410', async () => {

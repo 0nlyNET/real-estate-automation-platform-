@@ -8,6 +8,14 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { apiFetch } from "@/lib/api"
 import { ImpersonationBanner } from './impersonation-banner'
+import { CalendarDays, Inbox, LayoutDashboard, Users } from "lucide-react"
+
+const mobileNavItems = [
+  { label: "Today", href: "/app/dashboard", icon: LayoutDashboard },
+  { label: "Leads", href: "/app/leads", icon: Users },
+  { label: "Conversations", href: "/app/inbox", icon: Inbox },
+  { label: "Appointments", href: "/app/appointments", icon: CalendarDays },
+]
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [plan, setPlan] = useState<MePlan | null>(null)
@@ -42,9 +50,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen w-full bg-background">
-      <Sidebar />
+      <aside className="hidden w-60 shrink-0 border-r md:block"><Sidebar /></aside>
       <div className="flex w-full flex-col">
         <Topbar />
+        <nav className="flex overflow-x-auto border-b bg-background px-2 py-1 md:hidden" aria-label="Client navigation">
+          {mobileNavItems.map(({ label, href, icon: Icon }) => (
+            <Link key={href} href={href} className="flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
+              <Icon className="h-4 w-4" />{label}
+            </Link>
+          ))}
+        </nav>
         <ImpersonationBanner />
 
         {(pastDue || canceling) && (

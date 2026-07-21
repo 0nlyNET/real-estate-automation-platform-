@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -19,6 +19,7 @@ import { Team } from '../teams/team.entity';
 import { RoutingService } from '../routing/routing.service';
 import { ComplianceService } from '../compliance/compliance.service';
 import { LeadStageEvent } from './lead-stage-event.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class LeadsService {
@@ -48,6 +49,7 @@ export class LeadsService {
     private readonly sequencesService: SequencesService,
     private readonly routingService: RoutingService,
     private readonly complianceService: ComplianceService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   private async applyRoutingRules(lead: Lead, plan: string) {
@@ -225,13 +227,19 @@ export class LeadsService {
 
       leadType: (payload.leadType ?? 'buyer') as any,
       temperature: (payload.temperature ?? 'warm') as any,
+      temperatureReason:
+        this.normalizeString(payload.temperatureReason) ||
+        'New lead; qualification is still in progress.',
       stage: (payload.stage ?? 'new') as any,
+
+      timeline: this.normalizeString(payload.timeline),
+      preapproved: payload.preapproved,
 
       budgetRange: this.normalizeString((payload as any).budgetRange),
       estimatedPrice: this.normalizeString((payload as any).estimatedPrice),
       preferredAreas: this.normalizeStringArray((payload as any).preferredAreas),
 
-      notes: this.normalizeString((payload as any).notes),
+      notes: this.normalizeString(payload.message),
 
       assignedToUserId: assigneeUserId,
       assignedToTeamId: teamId,
@@ -247,6 +255,19 @@ export class LeadsService {
     await this.logLeadEvent(saved, 'created', payload as any);
     await this.recordStageChange(saved, null, saved.stage, undefined, 'intake');
     await this.complianceService.recordLeadConsent(tenant.id, saved.id, payload.consent);
+    await this.notifications?.createForTenant({
+      tenantId: tenant.id,
+      assignedUserId: saved.assignedToUserId,
+      eventType: 'lead.received',
+      category: 'leads',
+      severity: 'info',
+      title: `New lead: ${saved.fullName}`,
+      message: 'RealtyTechAI saved the lead and is tracking the approved response workflow.',
+      deduplicationKey: `lead-received:${saved.id}`,
+      actionUrl: `/app/leads/${saved.id}`,
+      entityType: 'lead',
+      entityId: saved.id,
+    });
 
     // Automation hooks
     await this.messagingService.queueInstantResponses(saved);
@@ -329,7 +350,15 @@ export class LeadsService {
 
       leadType: (payload.leadType ?? 'buyer') as any,
       temperature: (payload.temperature ?? 'warm') as any,
+      temperatureReason:
+        this.normalizeString(payload.temperatureReason) ||
+        'New lead; qualification is still in progress.',
+      readinessLevel: payload.readinessLevel || 'exploring',
+      mainBlocker: this.normalizeString(payload.mainBlocker),
       stage: (payload.stage ?? 'new') as any,
+
+      timeline: this.normalizeString(payload.timeline),
+      preapproved: payload.preapproved,
 
       budgetRange: this.normalizeString((payload as any).budgetRange),
       estimatedPrice: this.normalizeString((payload as any).estimatedPrice),
@@ -409,8 +438,29 @@ export class LeadsService {
     }
 
     if (payload.leadType !== undefined) lead.leadType = payload.leadType as any;
-    if (payload.temperature !== undefined) lead.temperature = payload.temperature as any;
+    if (payload.temperature !== undefined) {
+      lead.temperature = payload.temperature as any;
+      if (payload.temperatureReason === undefined) {
+        lead.temperatureReason = `Manually marked ${payload.temperature}; review the lead notes for context.`;
+      }
+    }
     if (payload.stage !== undefined) lead.stage = payload.stage as any;
+
+    if (payload.temperatureReason !== undefined) {
+      const reason = this.normalizeString(payload.temperatureReason);
+      if (reason) lead.temperatureReason = reason;
+    }
+    if (payload.readinessLevel !== undefined) lead.readinessLevel = payload.readinessLevel;
+    if (payload.mainBlocker !== undefined) lead.mainBlocker = this.normalizeString(payload.mainBlocker) || null;
+    if (payload.nextMilestone !== undefined) lead.nextMilestone = this.normalizeString(payload.nextMilestone) || null;
+    if (payload.recommendedNextAction !== undefined) {
+      lead.recommendedNextAction = this.normalizeString(payload.recommendedNextAction) || null;
+    }
+    if (payload.followUpCadence !== undefined) lead.followUpCadence = this.normalizeString(payload.followUpCadence) || null;
+    if (payload.timeline !== undefined) lead.timeline = this.normalizeString(payload.timeline) || null;
+    if (payload.preapproved !== undefined) lead.preapproved = payload.preapproved;
+    if (payload.bestTimeToTalk !== undefined) lead.bestTimeToTalk = this.normalizeString(payload.bestTimeToTalk) || null;
+    if (payload.outcome !== undefined) lead.outcome = this.normalizeString(payload.outcome) || null;
 
     if ((payload as any).budgetRange !== undefined) lead.budgetRange = this.normalizeString((payload as any).budgetRange);
     if ((payload as any).estimatedPrice !== undefined) lead.estimatedPrice = this.normalizeString((payload as any).estimatedPrice);
@@ -478,6 +528,7 @@ export class LeadsService {
         leadType: 'buyer' as any,
         stage: 'new' as any,
         temperature: 'warm' as any,
+        temperatureReason: 'New buyer lead; qualification is still in progress.',
         score: 58,
         source: 'Facebook',
         location: 'Brooklyn',
@@ -489,6 +540,7 @@ export class LeadsService {
         leadType: 'seller' as any,
         stage: 'contacted' as any,
         temperature: 'warm' as any,
+        temperatureReason: 'Seller has responded; motivation and timing still need confirmation.',
         score: 62,
         source: 'Referral',
         location: 'Queens',
@@ -500,6 +552,7 @@ export class LeadsService {
         leadType: 'buyer' as any,
         stage: 'qualified' as any,
         temperature: 'hot' as any,
+        temperatureReason: 'Qualified buyer with an immediate housing need.',
         score: 88,
         source: 'Website',
         location: 'Manhattan',
@@ -510,6 +563,7 @@ export class LeadsService {
         leadType: 'investor' as any,
         stage: 'contacted' as any,
         temperature: 'warm' as any,
+        temperatureReason: 'Investor is engaged; purchase timing still needs confirmation.',
         score: 73,
         source: 'Open house',
         location: 'Jersey City',
@@ -520,6 +574,7 @@ export class LeadsService {
         leadType: 'buyer' as any,
         stage: 'under_contract' as any,
         temperature: 'hot' as any,
+        temperatureReason: 'Active buyer already under contract.',
         score: 85,
         source: 'Facebook',
         location: 'Long Island',
@@ -530,6 +585,7 @@ export class LeadsService {
         leadType: 'seller' as any,
         stage: 'new' as any,
         temperature: 'cold' as any,
+        temperatureReason: 'Seller is only exploring and has not chosen a timeline.',
         score: 42,
         source: 'Manual',
         location: 'Bronx',
@@ -540,6 +596,7 @@ export class LeadsService {
         leadType: 'renter' as any,
         stage: 'contacted' as any,
         temperature: 'warm' as any,
+        temperatureReason: 'Renter is engaged; next-step timing still needs confirmation.',
         score: 55,
         source: 'Website',
         location: 'Downtown Brooklyn',
@@ -550,6 +607,7 @@ export class LeadsService {
         leadType: 'buyer' as any,
         stage: 'closed' as any,
         temperature: 'warm' as any,
+        temperatureReason: 'Past client record retained for outcome reporting.',
         score: 67,
         source: 'Referral',
         location: 'Staten Island',

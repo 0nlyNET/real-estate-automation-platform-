@@ -8,6 +8,7 @@ import { inspectDatabaseSchema } from "./schema-readiness";
 import { ProductionSchemaReconciliation1784332800004 } from "./migrations/202607180004-production-schema-reconciliation";
 import { ClientReadinessFoundations1784419200001 } from "./migrations/202607190001-client-readiness-foundations";
 import { AdminOperationsNotifications1784505600001 } from "./migrations/202607200001-admin-operations-notifications";
+import { ClientTodayWorkflow1784592000001 } from "./migrations/202607210001-client-today-workflow";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -112,17 +113,19 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 30,
+      expectedTables: 32,
       actualTables: 12,
       missingTables: [
         "admin_notification_preferences",
         "admin_notifications",
         "admin_push_subscriptions",
         "agent_presence",
+        "appointments",
         "billing_events",
         "compliance_events",
         "compliance_optouts",
         "lead_consent_records",
+        "lead_handoffs",
         "lead_stage_events",
         "onboarding_records",
         "operations_tasks",
@@ -141,12 +144,13 @@ describe("deployed legacy schema reproduction", () => {
     await new ProductionSchemaReconciliation1784332800004().up(queryRunner);
     await new ClientReadinessFoundations1784419200001().up(queryRunner);
     await new AdminOperationsNotifications1784505600001().up(queryRunner);
+    await new ClientTodayWorkflow1784592000001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 30,
-      actualTables: 30,
+      expectedTables: 32,
+      actualTables: 32,
       missingTables: [],
       missingColumns: [],
     });
@@ -200,12 +204,13 @@ describe("deployed legacy schema reproduction", () => {
     await new ProductionSchemaReconciliation1784332800004().up(queryRunner);
     await new ClientReadinessFoundations1784419200001().up(queryRunner);
     await new AdminOperationsNotifications1784505600001().up(queryRunner);
+    await new ClientTodayWorkflow1784592000001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 30,
-      actualTables: 30,
+      expectedTables: 32,
+      actualTables: 32,
       missingTables: [],
       missingColumns: [],
     });

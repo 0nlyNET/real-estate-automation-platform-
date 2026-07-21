@@ -5,10 +5,12 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
+  CalendarDays,
   CheckCircle2,
   ClipboardCheck,
   CreditCard,
   Inbox,
+  Handshake,
   LifeBuoy,
   ListTodo,
   Plug,
@@ -23,7 +25,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 
-type View = "overview" | "leads" | "clients" | "onboarding" | "tasks" | "support" | "activity" | "billing"
+type View = "overview" | "leads" | "clients" | "handoffs" | "appointments" | "onboarding" | "tasks" | "support" | "activity" | "billing"
 type Overview = {
   totalClients: number; active: number; onboarding: number; newApplications: number
   openTasks: number; urgentTasks: number; openSupport: number
@@ -84,6 +86,16 @@ type Communication = {
   body: string; status: string; providerStatus?: string | null; createdAt: string
 }
 type Connection = { tenantId: string; tenantName: string; provider: string; status: string; updatedAt: string }
+type ClientHandoff = {
+  id: string; tenantId: string; priority: "normal" | "high" | "urgent"; status: "open" | "opened" | "snoozed" | "completed"
+  reason: string; summary: string; recommendedAction: string; dueAt?: string | null; completionNote?: string | null
+  tenant: { id: string; name: string }; lead: { id: string; fullName: string; leadType: string; temperature: string }
+}
+type ClientAppointment = {
+  id: string; tenantId: string; startsAt: string; endsAt: string; status: "scheduled" | "confirmed" | "completed" | "cancelled" | "no_show"
+  confirmationStatus: string; followUpStatus: string; calendarSource: string; notes?: string | null
+  tenant: { id: string; name: string }; lead: { id: string; fullName: string }
+}
 type TenantUser = { id: string; tenantId: string; email: string; role: string; isActive: boolean }
 type ReadinessItem = { key: string; label: string; passed: boolean; required: boolean }
 type TenantReadiness = { state: string; activationStatus: string; ready: boolean; blockers: ReadinessItem[]; required: ReadinessItem[] }
@@ -96,6 +108,8 @@ const views: Array<{ id: View; label: string; icon: typeof Users; ownerOnly?: bo
   { id: "overview", label: "Today", icon: Activity },
   { id: "leads", label: "Leads", icon: Inbox },
   { id: "clients", label: "Clients", icon: Users },
+  { id: "handoffs", label: "Handoffs", icon: Handshake },
+  { id: "appointments", label: "Appointments", icon: CalendarDays },
   { id: "onboarding", label: "Onboarding", icon: ClipboardCheck },
   { id: "tasks", label: "Tasks", icon: ListTodo },
   { id: "support", label: "Support", icon: LifeBuoy },
@@ -133,6 +147,8 @@ export default function AdminDashboardPage() {
   const [platformUsers, setPlatformUsers] = useState<PlatformAccessUser[]>([])
   const [communications, setCommunications] = useState<Communication[]>([])
   const [connections, setConnections] = useState<Connection[]>([])
+  const [handoffs, setHandoffs] = useState<ClientHandoff[]>([])
+  const [appointments, setAppointments] = useState<ClientAppointment[]>([])
   const [search, setSearch] = useState("")
   const [ownerFilter, setOwnerFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
@@ -159,7 +175,7 @@ export default function AdminDashboardPage() {
       setMe(current)
       const requested = new URLSearchParams(window.location.search).get("view") as View | null
       if (requested && views.some((item) => item.id === requested && (!item.ownerOnly || current.platformRole === "super_admin"))) setView(requested)
-      const [nextOverview, nextTenants, nextApplications, nextTasks, nextSupport, nextOperators, nextCommunications, nextConnections, nextReport] = await Promise.all([
+      const [nextOverview, nextTenants, nextApplications, nextTasks, nextSupport, nextOperators, nextCommunications, nextConnections, nextReport, nextHandoffs, nextAppointments] = await Promise.all([
         apiFetch<Overview>("/admin/overview"),
         apiFetch<Tenant[]>("/admin/tenants"),
         apiFetch<ProspectApplication[]>("/admin/applications?take=100"),
@@ -169,10 +185,13 @@ export default function AdminDashboardPage() {
         apiFetch<Communication[]>("/admin/communications?take=50"),
         apiFetch<Connection[]>("/admin/integrations-overview"),
         apiFetch<BusinessReport>("/admin/reporting-overview"),
+        apiFetch<ClientHandoff[]>("/admin/client-operations/handoffs?take=100"),
+        apiFetch<ClientAppointment[]>("/admin/client-operations/appointments?take=100"),
       ])
       setOverview(nextOverview); setTenants(nextTenants); setApplications(nextApplications); setTasks(nextTasks)
       setSupport(nextSupport); setOperators(nextOperators); setCommunications(nextCommunications); setConnections(nextConnections)
       setReport(nextReport)
+      setHandoffs(nextHandoffs); setAppointments(nextAppointments)
       setNotes(Object.fromEntries(nextApplications.map((item) => [item.id, item.operatorNotes || ""])))
       if (current.platformRole === "super_admin") {
         const [nextBilling, nextHealth, nextPlatformUsers] = await Promise.all([
@@ -201,6 +220,8 @@ export default function AdminDashboardPage() {
   const filteredApplications = applications.filter((item) => matches(`${item.name} ${item.company} ${item.email}`) && ownerMatches(item.assignedOperatorId) && (statusFilter === "all" || item.status === statusFilter))
   const filteredTenants = tenants.filter((item) => matches(item.name) && ownerMatches(item.assignedOperatorId) && (statusFilter === "all" || item.lifecycleStatus === statusFilter))
   const filteredTasks = tasks.filter((item) => matches(`${item.title} ${item.description} ${item.category}`) && ownerMatches(item.assignedOperatorId) && (statusFilter === "all" || item.status === statusFilter))
+  const filteredHandoffs = handoffs.filter((item) => matches(`${item.tenant.name} ${item.lead.fullName} ${item.reason}`) && (statusFilter === "all" || item.status === statusFilter))
+  const filteredAppointments = appointments.filter((item) => matches(`${item.tenant.name} ${item.lead.fullName}`) && (statusFilter === "all" || item.status === statusFilter))
 
   function switchView(next: View) {
     setView(next); setStatusFilter("all"); setSearch(""); setOwnerFilter("all")
@@ -240,6 +261,20 @@ export default function AdminDashboardPage() {
       const updated = await apiFetch<OperationsTask>(`/admin/operations/${item.id}`, { method: "PATCH", body: patch })
       setTasks((current) => current.map((row) => row.id === updated.id ? updated : row)); setNotice("Task updated.")
     } catch (cause) { setError(messageFor(cause, "Task could not be updated")) }
+  }
+
+  async function patchHandoff(item: ClientHandoff, patch: { action: "opened" | "completed" | "snoozed"; note?: string; snoozedUntil?: string }) {
+    try {
+      const updated = await apiFetch<ClientHandoff>(`/admin/client-operations/handoffs/${item.id}`, { method: "PATCH", body: patch })
+      setHandoffs((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row)); setNotice("Client handoff updated.")
+    } catch (cause) { setError(messageFor(cause, "The handoff could not be updated")) }
+  }
+
+  async function patchAppointment(item: ClientAppointment, patch: Record<string, unknown>) {
+    try {
+      const updated = await apiFetch<ClientAppointment>(`/admin/client-operations/appointments/${item.id}`, { method: "PATCH", body: patch })
+      setAppointments((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row)); setNotice("Client appointment updated.")
+    } catch (cause) { setError(messageFor(cause, "The appointment could not be updated")) }
   }
 
   async function patchSupport(item: SupportTicket, patch: Record<string, unknown>) {
@@ -341,6 +376,8 @@ export default function AdminDashboardPage() {
               <Action title={`${unassignedLeads.length} unassigned lead(s)`} detail="Assign an owner so important follow-up does not sit in the shared queue." button="Assign leads" onClick={() => { switchView("leads"); setOwnerFilter("unassigned") }} urgent={unassignedLeads.length > 0} />
               <Action title={`${urgentTasks.length} high-priority task(s)`} detail="Includes onboarding blocks, failed payments, provider issues, and follow-up." button="Open tasks" onClick={() => switchView("tasks")} urgent={urgentTasks.length > 0} />
               <Action title={`${urgentSupport.length} urgent support request(s)`} detail="Acknowledge, assign, and resolve client issues before their due time." button="Review support" onClick={() => switchView("support")} urgent={urgentSupport.length > 0} />
+              <Action title={`${handoffs.filter((item) => item.status !== "completed").length} open client handoff(s)`} detail="See the same personal follow-ups currently shown to clients." button="Review handoffs" onClick={() => switchView("handoffs")} urgent={handoffs.some((item) => item.priority === "urgent" && item.status !== "completed")} />
+              <Action title={`${appointments.filter((item) => ["scheduled", "confirmed"].includes(item.status)).length} upcoming appointment(s)`} detail="Confirm, reschedule, or close the loop for any client." button="Review appointments" onClick={() => switchView("appointments")} />
               <Action title={`${tenants.filter((item) => item.lifecycleStatus === "ONBOARDING").length} client(s) onboarding`} detail="See exactly what is missing and record launch evidence in one place." button="Review onboarding" onClick={() => switchView("onboarding")} />
               {isOwner ? <Action title={`${overview?.pastDue || 0} client(s) past due`} detail="Payment status is visible only to the owner." button="Review billing" onClick={() => switchView("billing")} urgent={Boolean(overview?.pastDue)} /> : null}
             </CardContent>
@@ -364,6 +401,10 @@ export default function AdminDashboardPage() {
           <Section title="Clients" subtitle="Service status and ownership at a glance."><Filters search={search} setSearch={setSearch} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} operators={operators} statuses={["ONBOARDING", "READY_FOR_UAT", "UAT_FAILED", "READY_FOR_ACTIVATION", "ACTIVE", "PAUSED", "SUSPENDED", "CANCELED"]} /><div className="grid gap-3 md:grid-cols-2">{filteredTenants.map((tenant) => <Card key={tenant.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{tenant.name}</div><div className="text-sm text-muted-foreground">{label(tenant.lifecycleStatus)}</div></div><Badge variant={tenant.lifecycleStatus === "ACTIVE" ? "default" : "secondary"}>{label(tenant.lifecycleStatus)}</Badge></div><div className="text-xs text-muted-foreground">Owner: {operatorName(tenant.assignedOperatorId)}</div>{isOwner ? <OwnerSelect value={tenant.assignedOperatorId || ""} operators={operators} onChange={(value) => void assignClient(tenant, value)} /> : null}<Button variant="outline" className="w-full" onClick={() => { void openClient(tenant); switchView("onboarding") }}>Open client workspace</Button></CardContent></Card>)}{!filteredTenants.length ? <Empty text="No clients match these filters." /> : null}</div></Section>
         </div>
       ) : null}
+
+      {view === "handoffs" ? <Section title="Client handoffs" subtitle="The same human follow-ups clients see on Today, with operator oversight and completion state."><div className="grid gap-2 md:grid-cols-[1fr_240px]"><Input placeholder="Search client, lead, or reason" value={search} onChange={(event) => setSearch(event.target.value)} /><select className="h-10 rounded-md border bg-background px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option>{["open", "opened", "snoozed", "completed"].map((status) => <option key={status} value={status}>{label(status)}</option>)}</select></div><div className="space-y-3">{filteredHandoffs.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{item.lead.fullName} · {item.tenant.name}</div><div className="text-xs text-muted-foreground">{label(item.lead.leadType)} · {label(item.lead.temperature)} · due {item.dueAt ? new Date(item.dueAt).toLocaleString() : "not set"}</div></div><div className="flex gap-2"><Badge variant={item.priority === "urgent" ? "destructive" : "secondary"}>{item.priority}</Badge><Badge variant="outline">{label(item.status)}</Badge></div></div><p className="text-sm">{item.summary}</p><div className="rounded-md bg-muted p-3 text-sm"><span className="font-medium">Why:</span> {item.reason}<br /><span className="font-medium">Next:</span> {item.recommendedAction}</div>{item.status !== "completed" ? <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => void patchHandoff(item, { action: "opened" })}>Mark opened</Button><Button size="sm" onClick={() => void patchHandoff(item, { action: "completed", note: "Completed with operator assistance" })}>Mark completed</Button><Button size="sm" variant="ghost" onClick={() => void patchHandoff(item, { action: "snoozed", snoozedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), note: "Snoozed by operator" })}>Snooze one day</Button></div> : null}</CardContent></Card>)}{!filteredHandoffs.length ? <Empty text="No handoffs match these filters." /> : null}</div></Section> : null}
+
+      {view === "appointments" ? <Section title="Client appointments" subtitle="One appointment record powers both the client workspace and this operational view."><div className="grid gap-2 md:grid-cols-[1fr_240px]"><Input placeholder="Search client or lead" value={search} onChange={(event) => setSearch(event.target.value)} /><select className="h-10 rounded-md border bg-background px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option>{["scheduled", "confirmed", "completed", "cancelled", "no_show"].map((status) => <option key={status} value={status}>{label(status)}</option>)}</select></div><div className="space-y-3">{filteredAppointments.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{item.lead.fullName} · {item.tenant.name}</div><div className="text-sm text-muted-foreground">{new Date(item.startsAt).toLocaleString()} · {item.calendarSource}</div></div><div className="flex gap-2"><Badge variant={item.confirmationStatus === "confirmed" ? "default" : "secondary"}>{label(item.confirmationStatus)}</Badge><Badge variant="outline">{label(item.status)}</Badge></div></div>{item.notes ? <p className="text-sm">{item.notes}</p> : null}<div className="flex flex-wrap gap-2">{item.status === "scheduled" ? <Button size="sm" onClick={() => void patchAppointment(item, { status: "confirmed", confirmationStatus: "confirmed" })}>Confirm</Button> : null}{["scheduled", "confirmed"].includes(item.status) ? <Button size="sm" variant="outline" onClick={() => void patchAppointment(item, { status: "completed", followUpStatus: "due" })}>Mark completed</Button> : null}{["scheduled", "confirmed"].includes(item.status) ? <Button size="sm" variant="ghost" onClick={() => void patchAppointment(item, { status: "cancelled" })}>Cancel</Button> : null}</div></CardContent></Card>)}{!filteredAppointments.length ? <Empty text="No appointments match these filters." /> : null}</div></Section> : null}
 
       {view === "onboarding" ? (
         <div className="grid gap-5 lg:grid-cols-[360px_1fr]">

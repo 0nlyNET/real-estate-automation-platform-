@@ -39,7 +39,8 @@ function applicationKey(value: string) {
   return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)))
 }
 
-export function NotificationCenter() {
+export function NotificationCenter({ audience = "admin" }: { audience?: "admin" | "client" }) {
+  const basePath = audience === "client" ? "/notifications" : "/admin/notifications"
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<NotificationItem[]>([])
   const [summary, setSummary] = useState<Summary>({ unread: 0, activeDevices: 0, pushConfigured: false })
@@ -65,9 +66,9 @@ export function NotificationCenter() {
       if (severityFilter !== "all") query.set("severity", severityFilter)
       if (readFilter !== "all") query.set("read", readFilter)
       const [nextItems, nextSummary, nextPreferences] = await Promise.all([
-        apiFetch<NotificationItem[]>(`/admin/notifications?${query.toString()}`),
-        apiFetch<Summary>("/admin/notifications/summary"),
-        apiFetch<Preferences>("/admin/notifications/preferences/me"),
+        apiFetch<NotificationItem[]>(`${basePath}?${query.toString()}`),
+        apiFetch<Summary>(`${basePath}/summary`),
+        apiFetch<Preferences>(`${basePath}/preferences/me`),
         loadDeviceState(),
       ])
       setItems(nextItems)
@@ -76,7 +77,7 @@ export function NotificationCenter() {
     } catch {
       setMessage("Notifications could not be loaded.")
     }
-  }, [categoryFilter, loadDeviceState, readFilter, severityFilter])
+  }, [basePath, categoryFilter, loadDeviceState, readFilter, severityFilter])
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0)
@@ -88,7 +89,7 @@ export function NotificationCenter() {
   }, [load])
 
   async function updatePreferences(patch: Partial<Preferences>) {
-    const updated = await apiFetch<Preferences>("/admin/notifications/preferences/me", {
+    const updated = await apiFetch<Preferences>(`${basePath}/preferences/me`, {
       method: "PATCH",
       body: patch,
     })
@@ -103,7 +104,7 @@ export function NotificationCenter() {
         throw new Error("This browser does not support web push notifications.")
       }
       const config = await apiFetch<{ configured: boolean; publicKey: string | null }>(
-        "/admin/notifications/push/config",
+        `${basePath}/push/config`,
       )
       if (!config.configured || !config.publicKey) {
         throw new Error("Phone alerts need VAPID keys in Railway before they can be enabled.")
@@ -117,7 +118,7 @@ export function NotificationCenter() {
         applicationServerKey: applicationKey(config.publicKey),
       })
       const payload = subscription.toJSON()
-      await apiFetch("/admin/notifications/push/subscriptions", {
+      await apiFetch(`${basePath}/push/subscriptions`, {
         method: "POST",
         body: {
           endpoint: subscription.endpoint,
@@ -142,7 +143,7 @@ export function NotificationCenter() {
       const registration = await navigator.serviceWorker.getRegistration("/")
       const subscription = await registration?.pushManager.getSubscription()
       if (subscription) {
-        await apiFetch("/admin/notifications/push/subscriptions", {
+        await apiFetch(`${basePath}/push/subscriptions`, {
           method: "DELETE",
           body: { endpoint: subscription.endpoint },
         })
@@ -160,14 +161,14 @@ export function NotificationCenter() {
   }
 
   async function markAllRead() {
-    await apiFetch("/admin/notifications/read-all", { method: "POST" })
+    await apiFetch(`${basePath}/read-all`, { method: "POST" })
     setItems((current) => current.map((item) => ({ ...item, readAt: item.readAt || new Date().toISOString() })))
     setSummary((current) => ({ ...current, unread: 0 }))
   }
 
   async function openItem(item: NotificationItem) {
-    if (!item.readAt) await apiFetch(`/admin/notifications/${item.id}/read`, { method: "PATCH" })
-    if (item.actionUrl?.startsWith("/admin")) window.location.assign(item.actionUrl)
+    if (!item.readAt) await apiFetch(`${basePath}/${item.id}/read`, { method: "PATCH" })
+    if (item.actionUrl?.startsWith("/admin") || item.actionUrl?.startsWith("/app")) window.location.assign(item.actionUrl)
     else await load()
   }
 
@@ -187,7 +188,9 @@ export function NotificationCenter() {
         <div className="flex items-center justify-between border-b p-4">
           <div>
             <div className="font-semibold">Notifications</div>
-            <div className="text-xs text-muted-foreground">Business updates and action items</div>
+            <div className="text-xs text-muted-foreground">
+              {audience === "client" ? "Lead replies, appointments, and action items" : "Business updates and action items"}
+            </div>
           </div>
           <Button variant="ghost" size="sm" onClick={() => void markAllRead()} disabled={!summary.unread}>
             <CheckCheck className="mr-1 h-4 w-4" /> Mark read

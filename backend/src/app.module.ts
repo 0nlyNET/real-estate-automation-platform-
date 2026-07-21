@@ -32,6 +32,7 @@ import { OperationsModule } from './modules/operations/operations.module';
 import { EntitlementsModule } from './modules/entitlements/entitlements.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { ClientOperationsModule } from './modules/client-operations/client-operations.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     EntitlementsModule,
     OnboardingModule,
     NotificationsModule,
+    ClientOperationsModule,
   ],
   controllers: [AppController],
   providers: [

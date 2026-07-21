@@ -430,6 +430,18 @@ export class BillingService {
               entityType: 'tenant',
               entityId: tenantId,
             });
+            await this.notifications?.createForTenant?.({
+              tenantId,
+              eventType: 'billing.payment_failed',
+              category: 'billing',
+              severity: 'warning',
+              title: 'Payment needs attention',
+              message: 'Open Billing to update the payment method and keep service active.',
+              deduplicationKey: `stripe:${event.id}`,
+              actionUrl: '/app/billing',
+              entityType: 'tenant',
+              entityId: tenantId,
+            });
           } else {
             await this.tenants.updateBilling(tenantId, {
               status: mapStripeStatusToTenantStatus(subscription.status),
@@ -453,6 +465,18 @@ export class BillingService {
               message: 'A client invoice was paid successfully.',
               deduplicationKey: `stripe:${event.id}`,
               actionUrl: '/admin/dashboard?view=billing',
+              entityType: 'tenant',
+              entityId: tenantId,
+            });
+            await this.notifications?.createForTenant?.({
+              tenantId,
+              eventType: 'billing.invoice_paid',
+              category: 'billing',
+              severity: 'success',
+              title: 'Payment received',
+              message: 'Your RealtyTechAI payment was received successfully.',
+              deduplicationKey: `stripe:${event.id}`,
+              actionUrl: '/app/billing',
               entityType: 'tenant',
               entityId: tenantId,
             });

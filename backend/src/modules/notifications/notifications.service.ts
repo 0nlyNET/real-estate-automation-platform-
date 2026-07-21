@@ -31,6 +31,14 @@ export type CreatePlatformNotification = {
   metadata?: Record<string, string | number | boolean | null>;
 };
 
+export type CreateTenantNotification = Omit<
+  CreatePlatformNotification,
+  'audience' | 'assignedOperatorId'
+> & {
+  tenantId: string;
+  assignedUserId?: string | null;
+};
+
 const DEFAULT_CATEGORIES: Record<NotificationCategory, boolean> = {
   leads: true,
   clients: true,
@@ -85,8 +93,12 @@ export class NotificationsService {
 
   private ensureActionUrl(value?: string | null) {
     if (!value) return null;
-    if (!value.startsWith('/admin') || value.startsWith('//') || value.includes('://')) {
-      throw new BadRequestException('Notification action must be an internal admin URL');
+    if (
+      (!value.startsWith('/admin') && !value.startsWith('/app')) ||
+      value.startsWith('//') ||
+      value.includes('://')
+    ) {
+      throw new BadRequestException('Notification action must be an internal RealtyTechAI URL');
     }
     return value;
   }
@@ -132,43 +144,7 @@ export class NotificationsService {
     try {
       const actionUrl = this.ensureActionUrl(input.actionUrl);
       const recipientIds = await this.recipientIds(input);
-      const created: AdminNotification[] = [];
-      for (const recipientUserId of recipientIds) {
-        const preference = await this.getPreferences(recipientUserId);
-        if (!preference.inAppEnabled && !preference.pushEnabled) continue;
-        let notification = await this.notifications.findOne({
-          where: {
-            recipientUserId,
-            deduplicationKey: input.deduplicationKey,
-          },
-        });
-        if (notification) continue;
-        try {
-          notification = await this.notifications.save(
-            this.notifications.create({
-              recipientUserId,
-              eventType: input.eventType,
-              category: input.category,
-              severity: input.severity,
-              title: input.title.slice(0, 180),
-              message: input.message.slice(0, 2000),
-              actionUrl,
-              entityType: input.entityType || null,
-              entityId: input.entityId || null,
-              deduplicationKey: input.deduplicationKey.slice(0, 255),
-              incidentKey: input.incidentKey?.slice(0, 255) || null,
-              metadata: input.metadata || {},
-              expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-            }),
-          );
-        } catch (error: any) {
-          if (String(error?.code || '') === '23505') continue;
-          throw error;
-        }
-        created.push(notification);
-        await this.deliverPush(notification, preference);
-      }
-      return created;
+      return this.createForRecipients(input, actionUrl, recipientIds);
     } catch (error: unknown) {
       this.logger.error(
         operationalEvent('admin_notification_creation_failed', {
@@ -178,6 +154,84 @@ export class NotificationsService {
       );
       return [];
     }
+  }
+
+  async createForTenant(input: CreateTenantNotification) {
+    try {
+      const actionUrl = this.ensureActionUrl(input.actionUrl);
+      const tenantUsers = await this.users.find({
+        where: {
+          tenantId: input.tenantId,
+          isActive: true,
+          isEmailVerified: true,
+        },
+      });
+      const recipientIds = tenantUsers
+        .filter((user) => {
+          if (user.role === 'read_only') return false;
+          if (!input.assignedUserId) return user.role === 'owner' || user.role === 'admin';
+          return (
+            user.id === input.assignedUserId ||
+            user.role === 'owner' ||
+            user.role === 'admin'
+          );
+        })
+        .map((user) => user.id);
+      return this.createForRecipients(input, actionUrl, [...new Set(recipientIds)]);
+    } catch (error: unknown) {
+      this.logger.error(
+        operationalEvent('client_notification_creation_failed', {
+          tenantId: input.tenantId,
+          eventType: input.eventType,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      return [];
+    }
+  }
+
+  private async createForRecipients(
+    input: CreatePlatformNotification | CreateTenantNotification,
+    actionUrl: string | null,
+    recipientIds: string[],
+  ) {
+    const created: AdminNotification[] = [];
+    for (const recipientUserId of recipientIds) {
+      const preference = await this.getPreferences(recipientUserId);
+      if (!preference.inAppEnabled && !preference.pushEnabled) continue;
+      let notification = await this.notifications.findOne({
+        where: {
+          recipientUserId,
+          deduplicationKey: input.deduplicationKey,
+        },
+      });
+      if (notification) continue;
+      try {
+        notification = await this.notifications.save(
+          this.notifications.create({
+            recipientUserId,
+            eventType: input.eventType,
+            category: input.category,
+            severity: input.severity,
+            title: input.title.slice(0, 180),
+            message: input.message.slice(0, 2000),
+            actionUrl,
+            entityType: input.entityType || null,
+            entityId: input.entityId || null,
+            deduplicationKey: input.deduplicationKey.slice(0, 255),
+            incidentKey: input.incidentKey?.slice(0, 255) || null,
+            metadata: input.metadata || {},
+            expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+          }),
+        );
+      } catch (error: any) {
+        if (String(error?.code || '') === '23505') continue;
+        throw error;
+      }
+      created.push(notification);
+      await this.deliverPush(notification, preference);
+    }
+    return created;
   }
 
   async listForUser(
@@ -444,9 +498,9 @@ export class NotificationsService {
           JSON.stringify({
             title: preference.privacyMode ? 'RealtyTechAI update' : notification.title,
             body: preference.privacyMode
-              ? 'Open the admin workspace to view this update.'
+              ? 'Open RealtyTechAI to view this update.'
               : notification.message,
-            url: notification.actionUrl || '/admin/dashboard',
+            url: notification.actionUrl || '/login',
             tag: notification.incidentKey || notification.deduplicationKey,
             severity: notification.severity,
           }),

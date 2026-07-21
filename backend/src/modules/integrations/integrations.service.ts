@@ -219,18 +219,33 @@ export class IntegrationsService {
       );
     }
     if (!existing.error) {
-      await this.notifications?.createForPlatform({
-        eventType: "integration.connection_failed",
-        category: "integrations",
-        severity: "warning",
-        title: `${provider} connection needs attention`,
-        message: "A client connection test failed. Review the connection and its operations task.",
-        deduplicationKey: `integration-incident:${incidentKey}`,
-        incidentKey: `integration:${tenantId}:${provider}`,
-        actionUrl: "/admin/dashboard?view=activity",
-        entityType: "tenant",
-        entityId: tenantId,
-      });
+      await Promise.all([
+        this.notifications?.createForPlatform({
+          eventType: "integration.connection_failed",
+          category: "integrations",
+          severity: "warning",
+          title: `${provider} connection needs attention`,
+          message: "A client connection test failed. Review the connection and its operations task.",
+          deduplicationKey: `integration-incident:${incidentKey}`,
+          incidentKey: `integration:${tenantId}:${provider}`,
+          actionUrl: "/admin/dashboard?view=activity",
+          entityType: "tenant",
+          entityId: tenantId,
+        }),
+        this.notifications?.createForTenant({
+          tenantId,
+          eventType: "integration.connection_failed",
+          category: "integrations",
+          severity: "warning",
+          title: "A connection needs attention",
+          message: "Open Integrations to reconnect or test the account.",
+          deduplicationKey: `integration-incident:${incidentKey}`,
+          incidentKey: `integration:${tenantId}:${provider}`,
+          actionUrl: "/app/integrations",
+          entityType: "tenant",
+          entityId: tenantId,
+        }),
+      ]);
     }
   }
 
@@ -240,18 +255,34 @@ export class IntegrationsService {
     previous: any,
   ) {
     if (!previous?.error) return;
-    await this.notifications?.createForPlatform({
-      eventType: "integration.connection_recovered",
-      category: "integrations",
-      severity: "success",
-      title: `${provider} connection recovered`,
-      message: "The client connection test is passing again.",
-      deduplicationKey: `integration-recovery:${previous.incidentKey || crypto.randomUUID()}`,
-      incidentKey: `integration:${tenantId}:${provider}`,
-      actionUrl: "/admin/dashboard?view=activity",
-      entityType: "tenant",
-      entityId: tenantId,
-    });
+    const recoveryKey = `integration-recovery:${previous.incidentKey || crypto.randomUUID()}`;
+    await Promise.all([
+      this.notifications?.createForPlatform({
+        eventType: "integration.connection_recovered",
+        category: "integrations",
+        severity: "success",
+        title: `${provider} connection recovered`,
+        message: "The client connection test is passing again.",
+        deduplicationKey: recoveryKey,
+        incidentKey: `integration:${tenantId}:${provider}`,
+        actionUrl: "/admin/dashboard?view=activity",
+        entityType: "tenant",
+        entityId: tenantId,
+      }),
+      this.notifications?.createForTenant({
+        tenantId,
+        eventType: "integration.connection_recovered",
+        category: "integrations",
+        severity: "success",
+        title: "Connection restored",
+        message: "The connection test is passing again.",
+        deduplicationKey: recoveryKey,
+        incidentKey: `integration:${tenantId}:${provider}`,
+        actionUrl: "/app/integrations",
+        entityType: "tenant",
+        entityId: tenantId,
+      }),
+    ]);
   }
 
   async list(tenantId: string): Promise<IntegrationSummary[]> {

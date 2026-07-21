@@ -28,6 +28,8 @@ import { AdminNotification } from '../modules/notifications/notification.entity'
 import { AdminNotificationPreference } from '../modules/notifications/notification-preference.entity';
 import { AdminPushSubscription } from '../modules/notifications/push-subscription.entity';
 import { BillingEvent } from '../modules/billing/billing-event.entity';
+import { LeadHandoff } from '../modules/client-operations/lead-handoff.entity';
+import { Appointment } from '../modules/client-operations/appointment.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -60,4 +62,6 @@ export const databaseEntities = [
   AdminNotificationPreference,
   AdminPushSubscription,
   BillingEvent,
+  LeadHandoff,
+  Appointment,
 ] as const;

@@ -4,6 +4,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
@@ -21,6 +22,8 @@ import { UserRole, hasAtLeastRole } from '../../common/rbac';
 import { EntitlementService } from '../entitlements/entitlement.service';
 import { OperationsService } from '../operations/operations.service';
 import { operationalEvent } from '../../common/operational-log';
+import { ClientOperationsService } from '../client-operations/client-operations.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 type ProviderConfig = {
   sendgrid?: { apiKey?: string; fromEmail?: string; fromName?: string };
@@ -57,6 +60,8 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     private readonly complianceService: ComplianceService,
     private readonly entitlements: EntitlementService,
     private readonly operations: OperationsService,
+    @Optional() private readonly clientOperations?: ClientOperationsService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   onModuleInit(): void {
@@ -154,6 +159,13 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       direction: message.direction,
       status: message.status,
       providerStatus: message.providerStatus || null,
+      sequenceStatus: message.lead?.sequenceStatus || 'idle',
+      temperature: message.lead?.temperature || 'warm',
+      temperatureReason: message.lead?.temperatureReason || null,
+      readiness: message.lead?.readinessLevel || 'exploring',
+      blocker: message.lead?.mainBlocker || null,
+      conversationSummary: message.lead?.conversationSummary || null,
+      talkingPoints: message.lead?.recommendedTalkingPoints || [],
     }));
   }
 
@@ -415,6 +427,19 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         relatedEntityId: message.id,
         dedupeOpen: true,
       });
+      await this.notifications?.createForTenant({
+        tenantId: message.lead.tenantId,
+        assignedUserId: message.lead.assignedToUserId,
+        eventType: 'message.failed',
+        category: 'leads',
+        severity: 'warning',
+        title: `A message to ${message.lead.fullName} did not send`,
+        message: 'Open the conversation and try again or contact the lead another way.',
+        deduplicationKey: `message-failed:${message.id}`,
+        actionUrl: `/app/inbox?leadId=${message.lead.id}`,
+        entityType: 'message',
+        entityId: message.id,
+      });
     }
   }
 
@@ -482,6 +507,18 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       subject,
     });
     await this.sequencesService.stopForLead(lead.id, 'reply');
+    try {
+      await this.clientOperations?.processInboundReply(lead, message.body, message.id);
+    } catch (error: any) {
+      this.logger.error(
+        operationalEvent('lead_qualification_failed', {
+          tenantId: lead.tenantId,
+          leadId: lead.id,
+          messageId: message.id,
+          error: error?.message || String(error),
+        }),
+      );
+    }
   }
 
   async createMessage(data: Partial<Message>) {

@@ -14,6 +14,7 @@ import { RetentionService } from './retention.service';
 import { OperationsTask } from '../operations/operations-task.entity';
 import { ProspectApplication } from '../public/prospect-application.entity';
 import { OperationalRemindersService } from './operational-reminders.service';
+import { ClientNotificationsController } from './client-notifications.controller';
 
 @Global()
 @Module({
@@ -30,7 +31,7 @@ import { OperationalRemindersService } from './operational-reminders.service';
     ]),
     CommonModule,
   ],
-  controllers: [NotificationsController],
+  controllers: [NotificationsController, ClientNotificationsController],
   providers: [
     NotificationsService,
     RetentionService,

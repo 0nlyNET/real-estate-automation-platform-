@@ -17,6 +17,19 @@ type Lead = {
   source?: string
   stage: string
   temperature: string
+  temperatureReason?: string
+  readinessLevel?: string
+  mainBlocker?: string | null
+  nextMilestone?: string | null
+  recommendedNextAction?: string | null
+  timeline?: string | null
+  budgetRange?: string | null
+  estimatedPrice?: string | null
+  preapproved?: string | null
+  conversationSummary?: string | null
+  recommendedTalkingPoints?: string[] | null
+  nextFollowUpAt?: string | null
+  leadType?: string
   notes?: string
   assignedTo?: string
 }
@@ -50,8 +63,8 @@ export default function LeadDetailPage() {
         body: { stage, notes },
       })
       setLead(updated)
-    } catch (e: any) {
-      setError(e?.message || "Failed to save lead")
+    } catch (cause: unknown) {
+      setError(cause instanceof Error ? cause.message : "Failed to save lead")
     } finally {
       setSaving(false)
     }
@@ -59,7 +72,7 @@ export default function LeadDetailPage() {
 
   return (
     <PageShell title={lead?.fullName || "Lead"} subtitle="Review qualification details and update follow-up status.">
-      <Button asChild variant="outline"><Link href="/app/leads">Back to leads</Link></Button>
+      <div className="flex flex-wrap gap-2"><Button asChild variant="outline"><Link href="/app/leads">Back to leads</Link></Button>{lead ? <Button asChild><Link href={`/app/inbox?leadId=${lead.id}`}>Open conversation</Link></Button> : null}</div>
       {error ? <div className="text-sm text-red-500">{error}</div> : null}
       {!lead && !error ? <div className="text-sm text-muted-foreground">Loading...</div> : null}
       {lead ? (
@@ -71,6 +84,28 @@ export default function LeadDetailPage() {
               <div><span className="text-muted-foreground">Phone:</span> {lead.phone || "Not provided"}</div>
               <div><span className="text-muted-foreground">Source:</span> {lead.source || "Unknown"}</div>
               <div><span className="text-muted-foreground">Assigned:</span> {lead.assignedTo || "Unassigned"}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Why this lead is here</CardTitle></CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div><span className="text-muted-foreground">Intent:</span> {(lead.leadType || "Not set").replaceAll("_", " ")}</div>
+              <div><span className="text-muted-foreground">Status:</span> {lead.temperature} — {lead.temperatureReason || "Qualification is still in progress."}</div>
+              <div><span className="text-muted-foreground">Readiness:</span> {(lead.readinessLevel || "Not set").replaceAll("_", " ")}</div>
+              <div><span className="text-muted-foreground">Blocker:</span> {lead.mainBlocker || "None recorded"}</div>
+              <div><span className="text-muted-foreground">Timeline:</span> {lead.timeline || "Not known"}</div>
+              <div><span className="text-muted-foreground">Budget / expected price:</span> {lead.budgetRange || lead.estimatedPrice || "Not known"}</div>
+              <div><span className="text-muted-foreground">Pre-approved:</span> {lead.preapproved || "Not known"}</div>
+              <div><span className="text-muted-foreground">Next milestone:</span> {lead.nextMilestone || "Not set"}</div>
+              <div><span className="text-muted-foreground">Next action:</span> {lead.recommendedNextAction || "Continue qualification"}</div>
+              <div><span className="text-muted-foreground">Follow-up:</span> {lead.nextFollowUpAt ? new Date(lead.nextFollowUpAt).toLocaleString() : "Not scheduled"}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Conversation summary</CardTitle></CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <p>{lead.conversationSummary || "A summary will appear after the lead replies."}</p>
+              {lead.recommendedTalkingPoints?.length ? <div><div className="font-medium">Talking points</div><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{lead.recommendedTalkingPoints.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
             </CardContent>
           </Card>
           <Card>

@@ -4,35 +4,22 @@ import type React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
-  BarChart3,
-  ClipboardCheck,
-  CreditCard,
+  CalendarDays,
   Inbox,
   LayoutDashboard,
   LifeBuoy,
   Plug,
-  Route,
-  Settings,
-  Shield,
   Users,
-  Zap,
 } from "lucide-react"
 import { Logo } from "@/components/logo"
 import { cn } from "@/lib/utils"
 
 const navItems = [
-  { label: "Home", href: "/app/dashboard", icon: LayoutDashboard },
-  { label: "Get started", href: "/app/onboarding", icon: ClipboardCheck },
+  { label: "Today", href: "/app/dashboard", icon: LayoutDashboard },
   { label: "Leads", href: "/app/leads", icon: Users },
-  { label: "Messages", href: "/app/inbox", icon: Inbox },
-  { label: "Follow-up", href: "/app/automations", icon: Zap },
-  { label: "Reports", href: "/app/reports", icon: BarChart3 },
-  { label: "Connections", href: "/app/integrations", icon: Plug },
-  { label: "Team", href: "/app/team", icon: Users },
-  { label: "Lead routing", href: "/app/routing", icon: Route },
-  { label: "Compliance", href: "/app/compliance", icon: Shield },
-  { label: "Settings", href: "/app/settings", icon: Settings },
-  { label: "Billing", href: "/app/billing", icon: CreditCard },
+  { label: "Conversations", href: "/app/inbox", icon: Inbox },
+  { label: "Appointments", href: "/app/appointments", icon: CalendarDays },
+  { label: "Integrations", href: "/app/integrations", icon: Plug },
   { label: "Help", href: "/support", icon: LifeBuoy },
 ]
 
@@ -73,7 +60,7 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
       </nav>
       {!isCollapsed ? (
         <div className="border-t border-sidebar-border p-4 text-xs text-muted-foreground">
-          One managed RealtyTechAI service. Your team handles strategy; the workspace keeps setup and delivery clear.
+          RealtyTechAI handles the follow-up. You step in when a person needs you.
         </div>
       ) : null}
     </div>

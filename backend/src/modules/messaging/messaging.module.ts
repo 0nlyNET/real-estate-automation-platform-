@@ -13,12 +13,14 @@ import { Credential } from '../settings/credential.entity';
 
 import { SequencesModule } from '../sequences/sequences.module';
 import { ComplianceModule } from '../compliance/compliance.module';
+import { ClientOperationsModule } from '../client-operations/client-operations.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Message, Lead, Tenant, LeadEvent, Credential]),
     SequencesModule,
     ComplianceModule,
+    ClientOperationsModule,
   ],
   controllers: [MessagingController],
   providers: [MessagingService, InboxSendService],

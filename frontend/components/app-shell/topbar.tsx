@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useTheme } from "next-themes"
-import { LogOut, Moon, Settings, Sun } from "lucide-react"
+import { ClipboardCheck, CreditCard, LifeBuoy, LogOut, Moon, Plug, Settings, Sun } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { getInitials } from "@/lib/profile"
 import { fetchMe, type Me } from "@/lib/me"
+import { NotificationCenter } from "@/components/admin/notification-center"
 
 export function Topbar() {
   const [me, setMe] = useState<Me | null>(null)
@@ -38,6 +39,7 @@ export function Topbar() {
         <div className="text-sm font-medium">RealtyTechAI</div>
         <div className="flex items-center gap-2">
           <div className="hidden text-sm text-muted-foreground sm:block">{displayName}</div>
+          <NotificationCenter audience="client" />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full">
@@ -55,7 +57,19 @@ export function Topbar() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild>
+                <Link href="/app/integrations"><Plug className="mr-2 h-4 w-4" />Integrations</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/app/onboarding"><ClipboardCheck className="mr-2 h-4 w-4" />Setup progress</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
                 <Link href="/app/settings"><Settings className="mr-2 h-4 w-4" />Settings</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/app/billing"><CreditCard className="mr-2 h-4 w-4" />Billing</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/support"><LifeBuoy className="mr-2 h-4 w-4" />Help</Link>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild>

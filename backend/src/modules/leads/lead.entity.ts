@@ -6,9 +6,12 @@ import { LeadEvent } from './lead-event.entity';
 import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
 import { User } from '../users/user.entity';
 import { Team } from '../teams/team.entity';
+import { LeadHandoff } from '../client-operations/lead-handoff.entity';
+import { Appointment } from '../client-operations/appointment.entity';
 
 export type LeadType = 'buyer' | 'seller' | 'investor' | 'renter';
 export type LeadTemperature = 'hot' | 'warm' | 'cold';
+export type LeadReadiness = 'not_ready' | 'exploring' | 'ready' | 'urgent';
 export type LeadStage =
   | 'new'
   | 'contacted'
@@ -105,6 +108,40 @@ export class Lead extends BaseEntity {
   @Column({ name: 'temperature', type: 'varchar', default: 'warm' })
   temperature!: LeadTemperature;
 
+  @Column({
+    name: 'temperature_reason',
+    type: 'text',
+    default: 'Needs more qualification before the next step.',
+  })
+  temperatureReason!: string;
+
+  @Column({ name: 'readiness_level', type: 'varchar', default: 'exploring' })
+  readinessLevel!: LeadReadiness;
+
+  @Column({ name: 'main_blocker', type: 'varchar', nullable: true })
+  mainBlocker?: string | null;
+
+  @Column({ name: 'next_milestone', type: 'varchar', nullable: true })
+  nextMilestone?: string | null;
+
+  @Column({ name: 'recommended_next_action', type: 'varchar', nullable: true })
+  recommendedNextAction?: string | null;
+
+  @Column({ name: 'follow_up_cadence', type: 'varchar', nullable: true })
+  followUpCadence?: string | null;
+
+  @Column({ name: 'qualification_data', type: 'jsonb', default: () => "'{}'::jsonb" })
+  qualificationData!: Record<string, string | boolean | number | null>;
+
+  @Column({ name: 'conversation_summary', type: 'text', nullable: true })
+  conversationSummary?: string | null;
+
+  @Column({ name: 'recommended_talking_points', type: 'simple-array', nullable: true })
+  recommendedTalkingPoints?: string[] | null;
+
+  @Column({ name: 'outcome', type: 'varchar', nullable: true })
+  outcome?: string | null;
+
   // Back-compat field (older UI used a string). Keep it as optional label.
   @Column({ name: 'assigned_to', nullable: true })
   assignedTo?: string;
@@ -142,4 +179,10 @@ export class Lead extends BaseEntity {
 
   @OneToMany(() => SequenceEnrollment, (enrollment) => enrollment.lead)
   enrollments!: SequenceEnrollment[];
+
+  @OneToMany(() => LeadHandoff, (handoff) => handoff.lead)
+  handoffs!: LeadHandoff[];
+
+  @OneToMany(() => Appointment, (appointment) => appointment.lead)
+  appointments!: Appointment[];
 }
