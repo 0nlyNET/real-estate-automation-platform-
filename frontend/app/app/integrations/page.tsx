@@ -156,6 +156,7 @@ export default function IntegrationsPage() {
   const [facebookPageId, setFacebookPageId] = useState("")
 
   const canManage = role === "owner" || role === "admin"
+  const platformProviderSetupEnabled = false
   const byProvider = useMemo(
     () => new Map(integrations.map((item) => [item.provider, item])),
     [integrations],
@@ -579,10 +580,11 @@ export default function IntegrationsPage() {
       {!canManage ? (
         <Alert>
           <ShieldCheck />
-          <AlertTitle>View only</AlertTitle>
+          <AlertTitle>Messaging is managed by RealtyTechAI</AlertTitle>
           <AlertDescription>
-            An owner or admin must change credentials. You can still review
-            connection health.
+            RealtyTechAI controls the Twilio and SendGrid accounts. Your
+            brokerage name, approved sender identity, reply-to details, and
+            consent rules are applied automatically to your messages.
           </AlertDescription>
         </Alert>
       ) : null}
@@ -893,6 +895,8 @@ export default function IntegrationsPage() {
           </CardContent>
         </Card>
 
+        {platformProviderSetupEnabled ? (
+          <>
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div className="space-y-1">
@@ -1130,6 +1134,25 @@ export default function IntegrationsPage() {
             ) : null}
           </CardContent>
         </Card>
+          </>
+        ) : (
+          <Card className="xl:col-span-2">
+            <CardHeader>
+              <CardTitle>Messaging managed by RealtyTechAI</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                You do not need to connect Twilio or SendGrid. RealtyTechAI
+                securely manages SMS and email delivery for this workspace
+                using your approved brokerage branding and contact information.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                Replies, consent, opt-outs, delivery status, and message
+                history remain connected to your leads and conversations here.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card className="xl:col-span-2">
           <CardHeader className="flex flex-row items-start justify-between gap-4">
