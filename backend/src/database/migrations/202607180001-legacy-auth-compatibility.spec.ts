@@ -9,6 +9,8 @@ import { TenantSettingsIntakeKeys1784332800002 } from "./202607180002-tenant-set
 import { ProductionSchemaReconciliation1784332800004 } from "./202607180004-production-schema-reconciliation";
 import { ClientReadinessFoundations1784419200001 } from "./202607190001-client-readiness-foundations";
 import { AdminOperationsNotifications1784505600001 } from "./202607200001-admin-operations-notifications";
+import { ClientTodayWorkflow1784592000001 } from "./202607210001-client-today-workflow";
+import { ServiceSuspension1784764800001 } from "./202607230001-service-suspension";
 import { TenantSettings } from "../../modules/settings/tenant-settings.entity";
 
 function memoryDatabase() {
@@ -87,6 +89,8 @@ describe("legacy auth compatibility migration", () => {
         ProductionSchemaReconciliation1784332800004,
         ClientReadinessFoundations1784419200001,
         AdminOperationsNotifications1784505600001,
+        ClientTodayWorkflow1784592000001,
+        ServiceSuspension1784764800001,
       ],
       migrationsRun: true,
       migrationsTableName: "app_migrations",

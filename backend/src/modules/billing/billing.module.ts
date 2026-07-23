@@ -8,11 +8,13 @@ import { StripeWebhookEvent } from './stripe-webhook-event.entity';
 import { Tenant } from '../tenants/tenant.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { BillingEvent } from './billing-event.entity';
+import { ServiceControlModule } from '../service-control/service-control.module';
 
 @Module({
   imports: [
     TenantsModule,
     CommonModule,
+    ServiceControlModule,
     TypeOrmModule.forFeature([StripeWebhookEvent, BillingEvent, Tenant, TenantSettings]),
   ],
   controllers: [BillingController],

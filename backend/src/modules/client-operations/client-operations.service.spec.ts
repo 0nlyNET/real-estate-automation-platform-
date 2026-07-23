@@ -5,6 +5,7 @@ function queryBuilder(result: any[]) {
   const builder: any = {};
   for (const method of [
     'leftJoinAndSelect',
+    'innerJoin',
     'where',
     'andWhere',
     'orderBy',

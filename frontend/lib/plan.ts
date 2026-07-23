@@ -20,6 +20,17 @@ export type MePlan = {
   cancelAtPeriodEnd: boolean
   cancelAt: string | null
   stripeSubscriptionStatus: string | null
+  lifecycleStatus: string
+  serviceState: {
+    state: "active" | "payment_overdue" | "grace_period" | "suspended" | "paused" | "onboarding" | "canceled"
+    label: string
+    reason: string
+    graceEndsAt: string | null
+  }
+  serviceSuspendedAt: string | null
+  serviceSuspensionReason: string | null
+  serviceSuspensionSource: "manual" | "billing" | null
+  serviceRestoredAt: string | null
 }
 
 export async function fetchMePlan(): Promise<MePlan | null> {

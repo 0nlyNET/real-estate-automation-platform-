@@ -6,6 +6,7 @@ export default defineConfig([
   ...nextVitals,
   ...nextTs,
   {
+    files: ["**/*.{js,jsx,mjs,ts,tsx,mts,cts}"],
     // Existing pages predate the lint gate. Keep the debt visible while
     // allowing CI to enforce every other Next.js and Hooks rule immediately.
     rules: {

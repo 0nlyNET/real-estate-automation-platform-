@@ -34,6 +34,7 @@ import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ClientOperationsModule } from './modules/client-operations/client-operations.module';
 import { RealtorComModule } from './modules/realtor-com/realtor-com.module';
+import { ServiceControlModule } from './modules/service-control/service-control.module';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { RealtorComModule } from './modules/realtor-com/realtor-com.module';
     AuditModule,
     OperationsModule,
     EntitlementsModule,
+    ServiceControlModule,
     OnboardingModule,
     NotificationsModule,
     ClientOperationsModule,

@@ -45,8 +45,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const pastDue = plan?.status === "past_due"
+  const serviceState = plan?.serviceState?.state
+  const suspended = serviceState === "suspended"
+  const gracePeriod = serviceState === "grace_period"
+  const paymentOverdue = serviceState === "payment_overdue" || plan?.status === "past_due"
+  const serviceAttention = suspended || gracePeriod || paymentOverdue
   const canceling = Boolean(plan?.cancelAtPeriodEnd && plan?.currentPeriodEnd)
+  const billingRelated =
+    plan?.serviceSuspensionSource === "billing" ||
+    ["past_due", "unpaid"].includes(plan?.status || "")
 
   return (
     <div className="flex min-h-screen w-full bg-background">
@@ -62,15 +69,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
         <ImpersonationBanner />
 
-        {(pastDue || canceling) && (
-          <div className="border-b bg-muted/50 px-4 py-3">
+        {(serviceAttention || canceling) && (
+          <div className={`border-b px-4 py-3 ${suspended ? "border-red-500/30 bg-red-500/10" : "bg-muted/50"}`}>
             <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
               <div className="text-sm">
-                {pastDue ? (
+                {suspended ? (
                   <div>
-                    <div className="font-medium">Payment failed</div>
+                    <div className="font-medium">Services suspended</div>
                     <div className="text-muted-foreground">
-                      Your subscription is past due. Update your payment method to avoid losing access.
+                      {plan?.serviceSuspensionReason || "Automated follow-up is stopped. Your leads, conversations, appointments, and history remain available."}
+                    </div>
+                  </div>
+                ) : gracePeriod ? (
+                  <div>
+                    <div className="font-medium">Payment overdue — grace period</div>
+                    <div className="text-muted-foreground">
+                      Update the payment method before {formatDate(plan?.serviceState?.graceEndsAt) || "the grace period ends"} to keep service active.
+                    </div>
+                  </div>
+                ) : paymentOverdue ? (
+                  <div>
+                    <div className="font-medium">Payment overdue</div>
+                    <div className="text-muted-foreground">
+                      Automated services are blocked until payment is confirmed.
                     </div>
                   </div>
                 ) : (
@@ -83,9 +104,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 )}
               </div>
 
-              <Link href="/app/billing">
-                <Button size="sm" variant={pastDue ? "default" : "outline"}>
-                  Manage billing
+              <Link href={suspended && !billingRelated ? "/support" : "/app/billing"}>
+                <Button size="sm" variant={serviceAttention ? "default" : "outline"}>
+                  {suspended && !billingRelated ? "Contact support" : "Manage billing"}
                 </Button>
               </Link>
             </div>
