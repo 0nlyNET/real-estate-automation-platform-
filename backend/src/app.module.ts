@@ -33,6 +33,7 @@ import { EntitlementsModule } from './modules/entitlements/entitlements.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ClientOperationsModule } from './modules/client-operations/client-operations.module';
+import { RealtorComModule } from './modules/realtor-com/realtor-com.module';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { ClientOperationsModule } from './modules/client-operations/client-opera
     SettingsModule,
     IntegrationsModule,
     WebhooksModule,
+    RealtorComModule,
     PublicModule,
     SupportModule,
     AuditModule,
