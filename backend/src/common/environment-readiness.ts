@@ -2,6 +2,7 @@ const REQUIRED_PRODUCTION_VALUES = [
   'DATABASE_URL',
   'FRONTEND_URL',
   'PUBLIC_APP_URL',
+  'PUBLIC_API_URL',
   'PLATFORM_ADMIN_EMAILS',
   'GLOBAL_AUTOMATIONS_DISABLED',
   'BILLING_GRACE_DAYS',
@@ -53,6 +54,9 @@ export function environmentReadiness() {
     }
     if (!validHttpsUrl('PUBLIC_APP_URL')) {
       platformIssues.push('PUBLIC_APP_URL must be an absolute HTTPS URL');
+    }
+    if (!validHttpsUrl('PUBLIC_API_URL')) {
+      platformIssues.push('PUBLIC_API_URL must be an absolute HTTPS URL');
     }
     if (process.env.TYPEORM_SYNC !== 'false') {
       platformIssues.push('TYPEORM_SYNC must be explicitly false');

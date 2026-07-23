@@ -36,6 +36,8 @@ import {
   Unplug,
 } from "lucide-react"
 
+const REALTOR_PRO_LOGIN_URL = "https://www.realtor.com/marketing/log-in/"
+
 type Provider = "twilio" | "sendgrid" | "facebook_lead_ads"
 
 type Integration = {
@@ -68,15 +70,48 @@ type RotatedKey = {
 
 type FacebookPage = { id: string; name: string }
 
+type RealtorSetup = {
+  provider: "realtor_com"
+  configured: boolean
+  connected: boolean
+  status: "connected" | "configured" | "disconnected" | "error"
+  endpointPath: string
+  endpointUrl: string | null
+  loginName: string
+  apiKeyLast4: string | null
+  lastSync: string | null
+  error: string | null
+}
+
+type RealtorCredentials = {
+  provider: "realtor_com"
+  endpointPath: string
+  endpointUrl: string | null
+  loginName: string
+  apiKey: string
+  apiKeyLast4: string
+  createdAt: string
+  warning: string
+}
+
 function statusBadge(item?: Integration) {
-  if (item?.status === "connected") {
-    return <Badge>Connected</Badge>
-  }
+  if (item?.status === "connected") return <Badge>Connected</Badge>
   if (item?.status === "error") {
     return <Badge variant="destructive">Needs attention</Badge>
   }
   if (item?.status === "configured") {
     return <Badge variant="outline">Test required</Badge>
+  }
+  return <Badge variant="secondary">Not connected</Badge>
+}
+
+function realtorStatusBadge(item?: RealtorSetup | null) {
+  if (item?.status === "connected") return <Badge>Connected</Badge>
+  if (item?.status === "error") {
+    return <Badge variant="destructive">Needs attention</Badge>
+  }
+  if (item?.status === "configured") {
+    return <Badge variant="outline">Awaiting Realtor.com test</Badge>
   }
   return <Badge variant="secondary">Not connected</Badge>
 }
@@ -90,6 +125,7 @@ async function fetchIntegrationData() {
     apiFetch<Integration[]>("/integrations"),
     apiFetch<TenantSettings>("/settings/tenant"),
     apiFetch<Me>("/me"),
+    apiFetch<RealtorSetup>("/integrations/realtor-com"),
   ])
 }
 
@@ -101,6 +137,9 @@ export default function IntegrationsPage() {
   const [settings, setSettings] = useState<TenantSettings | null>(null)
   const [role, setRole] = useState<string>("read_only")
   const [rotatedKey, setRotatedKey] = useState<RotatedKey | null>(null)
+  const [realtorSetup, setRealtorSetup] = useState<RealtorSetup | null>(null)
+  const [realtorCredentials, setRealtorCredentials] =
+    useState<RealtorCredentials | null>(null)
 
   const [twilio, setTwilio] = useState({
     accountSid: "",
@@ -128,20 +167,22 @@ export default function IntegrationsPage() {
   const facebookWebhookUrl = facebookStatus?.display?.webhookUrl || ""
 
   const load = useCallback(async () => {
-    const [items, tenantSettings, me] = await fetchIntegrationData()
+    const [items, tenantSettings, me, realtor] = await fetchIntegrationData()
     setIntegrations(items)
     setSettings(tenantSettings)
     setRole(me.role)
+    setRealtorSetup(realtor)
   }, [])
 
   useEffect(() => {
     let alive = true
     fetchIntegrationData()
-      .then(([items, tenantSettings, me]) => {
+      .then(([items, tenantSettings, me, realtor]) => {
         if (!alive) return
         setIntegrations(items)
         setSettings(tenantSettings)
         setRole(me.role)
+        setRealtorSetup(realtor)
       })
       .catch((error) => {
         if (!alive) return
@@ -187,6 +228,121 @@ export default function IntegrationsPage() {
     } catch (error: unknown) {
       toast({
         title: "Could not create intake key",
+        description: errorMessage(error),
+        variant: "destructive",
+      })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const openRealtorPortal = (portal?: Window | null) => {
+    if (portal) {
+      portal.location.href = REALTOR_PRO_LOGIN_URL
+    } else {
+      window.location.assign(REALTOR_PRO_LOGIN_URL)
+    }
+  }
+
+  const connectRealtor = async () => {
+    const portal = window.open("about:blank", "_blank")
+    if (portal) portal.opener = null
+    setBusy("realtor-connect")
+    try {
+      let credentials = realtorCredentials
+      if (!realtorSetup?.configured) {
+        credentials = await apiFetch<RealtorCredentials>(
+          "/integrations/realtor-com/rotate-key",
+          { method: "POST" },
+        )
+        setRealtorCredentials(credentials)
+        await load()
+      }
+      openRealtorPortal(portal)
+      toast({
+        title: realtorSetup?.connected
+          ? "Realtor.com opened"
+          : "Finish setup in Realtor.com",
+        description: realtorSetup?.connected
+          ? "Your connection is already verified."
+          : credentials?.apiKey
+            ? "Copy the three values shown below, then run Realtor.com's connection test."
+            : "The active API key is hidden. Generate a new key below only if you need to enter it again.",
+      })
+    } catch (error: unknown) {
+      portal?.close()
+      toast({
+        title: "Realtor.com setup failed",
+        description: errorMessage(error),
+        variant: "destructive",
+      })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const rotateRealtorKey = async () => {
+    const portal = window.open("about:blank", "_blank")
+    if (portal) portal.opener = null
+    setBusy("realtor-rotate")
+    try {
+      const credentials = await apiFetch<RealtorCredentials>(
+        "/integrations/realtor-com/rotate-key",
+        { method: "POST" },
+      )
+      setRealtorCredentials(credentials)
+      await load()
+      openRealtorPortal(portal)
+      toast({
+        title: "New Realtor.com API key created",
+        description: "Copy it now, replace the old key in Realtor.com, and run the connection test again.",
+      })
+    } catch (error: unknown) {
+      portal?.close()
+      toast({
+        title: "Could not generate Realtor.com API key",
+        description: errorMessage(error),
+        variant: "destructive",
+      })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const refreshRealtor = async () => {
+    setBusy("realtor-refresh")
+    try {
+      const result = await apiFetch<RealtorSetup>("/integrations/realtor-com")
+      setRealtorSetup(result)
+      toast({
+        title: result.connected
+          ? "Realtor.com is connected"
+          : "Still waiting for Realtor.com",
+        description: result.connected
+          ? "The connection test reached RealtyTechAI successfully."
+          : "Run Test Connection and Save inside Realtor.com PRO, then check again.",
+      })
+    } catch (error: unknown) {
+      toast({
+        title: "Could not refresh Realtor.com",
+        description: errorMessage(error),
+        variant: "destructive",
+      })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const disconnectRealtor = async () => {
+    setBusy("realtor-disconnect")
+    try {
+      await apiFetch("/integrations/realtor-com", { method: "DELETE" })
+      setRealtorCredentials(null)
+      await load()
+      toast({ title: "Realtor.com disconnected" })
+    } catch (error: unknown) {
+      toast({
+        title: "Disconnect failed",
         description: errorMessage(error),
         variant: "destructive",
       })
@@ -242,13 +398,10 @@ export default function IntegrationsPage() {
         },
       )
       await load()
-      if (!result.ok)
-        throw new Error(result.error || "Twilio rejected the test")
+      if (!result.ok) throw new Error(result.error || "Twilio rejected the test")
       toast({
         title: "Twilio is working",
-        description: twilio.toNumber
-          ? "Test SMS sent."
-          : "Credentials verified.",
+        description: twilio.toNumber ? "Test SMS sent." : "Credentials verified.",
       })
     } catch (error: unknown) {
       toast({
@@ -296,13 +449,10 @@ export default function IntegrationsPage() {
         },
       )
       await load()
-      if (!result.ok)
-        throw new Error(result.error || "SendGrid rejected the test")
+      if (!result.ok) throw new Error(result.error || "SendGrid rejected the test")
       toast({
         title: "SendGrid is working",
-        description: sendgrid.toEmail
-          ? "Test email sent."
-          : "API key verified.",
+        description: sendgrid.toEmail ? "Test email sent." : "API key verified.",
       })
     } catch (error: unknown) {
       toast({
@@ -343,8 +493,7 @@ export default function IntegrationsPage() {
       if (!result.pages.length) {
         toast({
           title: "No Facebook Pages found",
-          description:
-            "Use a Facebook account that administers the brokerage Page.",
+          description: "Use a Facebook account that administers the brokerage Page.",
           variant: "destructive",
         })
       }
@@ -402,6 +551,10 @@ export default function IntegrationsPage() {
   const endpoint = settings
     ? `${API_URL.replace(/\/+$/, "")}${settings.intake.endpointPath}`
     : ""
+  const realtorEndpoint =
+    realtorCredentials?.endpointUrl || realtorSetup?.endpointUrl || ""
+  const realtorLogin =
+    realtorCredentials?.loginName || realtorSetup?.loginName || ""
 
   if (loading) {
     return (
@@ -439,11 +592,213 @@ export default function IntegrationsPage() {
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div className="space-y-1">
               <CardTitle className="flex items-center gap-2">
+                <PlugZap className="h-5 w-5" /> Realtor.com leads
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Send eligible Realtor.com leads into this RealtyTechAI workspace.
+              </p>
+            </div>
+            {realtorStatusBadge(realtorSetup)}
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {realtorSetup?.error ? (
+              <Alert variant="destructive">
+                <AlertTitle>Connection error</AlertTitle>
+                <AlertDescription>{realtorSetup.error}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            {realtorSetup?.connected ? (
+              <Alert>
+                <CheckCircle2 />
+                <AlertTitle>Realtor.com delivery is verified</AlertTitle>
+                <AlertDescription>
+                  Realtor.com successfully reached this workspace
+                  {realtorSetup.lastSync
+                    ? ` on ${new Date(realtorSetup.lastSync).toLocaleString()}`
+                    : ""}
+                  .
+                </AlertDescription>
+              </Alert>
+            ) : realtorSetup?.configured ? (
+              <Alert>
+                <RefreshCw />
+                <AlertTitle>Waiting for Realtor.com verification</AlertTitle>
+                <AlertDescription>
+                  Sign in to Realtor.com PRO, enter the setup values below, run
+                  its connection test, save, and then check the status here.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert>
+                <ExternalLink />
+                <AlertTitle>Agent sign-in required</AlertTitle>
+                <AlertDescription>
+                  The agent or broker must use their own eligible Realtor.com PRO
+                  account. RealtyTechAI does not ask you to share that password.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {(realtorSetup?.configured || realtorCredentials) && (
+              <div className="space-y-4 rounded-lg border bg-muted/30 p-4">
+                <div>
+                  <div className="font-medium">Realtor.com setup values</div>
+                  <p className="text-xs text-muted-foreground">
+                    In Realtor.com PRO, locate Lead Delivery or API settings and
+                    choose the option for another application or open API. Labels
+                    can vary by eligible product.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Application URL</Label>
+                  <div className="flex gap-2">
+                    <Input readOnly value={realtorEndpoint} className="font-mono text-xs" />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={() => copy(realtorEndpoint, "Application URL")}
+                      disabled={!realtorEndpoint}
+                    >
+                      <Clipboard />
+                      <span className="sr-only">Copy Application URL</span>
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Application login name</Label>
+                  <div className="flex gap-2">
+                    <Input readOnly value={realtorLogin} className="font-mono text-xs" />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={() => copy(realtorLogin, "Application login name")}
+                      disabled={!realtorLogin}
+                    >
+                      <Clipboard />
+                      <span className="sr-only">Copy login name</span>
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>API key / password</Label>
+                  {realtorCredentials?.apiKey ? (
+                    <div className="flex gap-2">
+                      <Input
+                        readOnly
+                        value={realtorCredentials.apiKey}
+                        className="font-mono text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => copy(realtorCredentials.apiKey, "Realtor.com API key")}
+                      >
+                        <Clipboard /> Copy
+                      </Button>
+                    </div>
+                  ) : (
+                    <Alert>
+                      <KeyRound />
+                      <AlertTitle>Secret key is hidden</AlertTitle>
+                      <AlertDescription>
+                        The active key ends in {realtorSetup?.apiKeyLast4 || "—"}.
+                        Generate a new key below only when you need to enter it
+                        again; the previous key will stop working immediately.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </div>
+
+                <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+                  <li>Sign in to the Realtor.com PRO dashboard.</li>
+                  <li>Open Settings and locate Lead Delivery or API settings.</li>
+                  <li>Add another application and paste the three values above.</li>
+                  <li>Run Realtor.com&apos;s connection test, then save.</li>
+                  <li>Return here and select Check connection status.</li>
+                </ol>
+              </div>
+            )}
+
+            {canManage ? (
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={connectRealtor} disabled={Boolean(busy)}>
+                  {busy === "realtor-connect" ? (
+                    <RefreshCw className="animate-spin" />
+                  ) : (
+                    <ExternalLink />
+                  )}
+                  {realtorSetup?.connected
+                    ? "Open Realtor.com PRO"
+                    : realtorSetup?.configured
+                      ? "Continue Realtor.com setup"
+                      : "Connect Realtor.com"}
+                </Button>
+                {realtorSetup?.configured && !realtorSetup.connected ? (
+                  <Button
+                    variant="outline"
+                    onClick={refreshRealtor}
+                    disabled={Boolean(busy)}
+                  >
+                    <RefreshCw
+                      className={
+                        busy === "realtor-refresh" ? "animate-spin" : undefined
+                      }
+                    />
+                    Check connection status
+                  </Button>
+                ) : null}
+                {realtorSetup?.configured ? (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="ghost" disabled={Boolean(busy)}>
+                        <KeyRound /> Generate new API key
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Generate a new Realtor.com API key?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          The current key will stop working immediately. You must
+                          replace it in Realtor.com and run the connection test again.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={rotateRealtorKey}>
+                          Generate key and open Realtor.com
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                ) : null}
+                {realtorSetup?.configured ? (
+                  <Button
+                    variant="ghost"
+                    onClick={disconnectRealtor}
+                    disabled={Boolean(busy)}
+                  >
+                    <Unplug /> Disconnect
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <Card className="xl:col-span-2">
+          <CardHeader className="flex flex-row items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2">
                 <PlugZap className="h-5 w-5" /> Website, Zapier, and lead forms
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                Send new buyer, seller, renter, or investor leads into this
-                workspace.
+                Send new buyer, seller, renter, or investor leads into this workspace.
               </p>
             </div>
             {settings?.intake.configured ? (
@@ -457,11 +812,7 @@ export default function IntegrationsPage() {
               <div className="space-y-2">
                 <Label>Lead intake endpoint</Label>
                 <div className="flex gap-2">
-                  <Input
-                    readOnly
-                    value={endpoint}
-                    className="font-mono text-xs"
-                  />
+                  <Input readOnly value={endpoint} className="font-mono text-xs" />
                   <Button
                     variant="outline"
                     size="icon"
@@ -482,9 +833,7 @@ export default function IntegrationsPage() {
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button
-                      variant={
-                        settings?.intake.configured ? "outline" : "default"
-                      }
+                      variant={settings?.intake.configured ? "outline" : "default"}
                       disabled={busy === "intake"}
                     >
                       {busy === "intake" ? (
@@ -492,9 +841,7 @@ export default function IntegrationsPage() {
                       ) : (
                         <KeyRound />
                       )}
-                      {settings?.intake.configured
-                        ? "Rotate key"
-                        : "Create key"}
+                      {settings?.intake.configured ? "Rotate key" : "Create key"}
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
@@ -513,9 +860,7 @@ export default function IntegrationsPage() {
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
                       <AlertDialogAction onClick={rotateIntakeKey}>
-                        {settings?.intake.configured
-                          ? "Rotate key"
-                          : "Create key"}
+                        {settings?.intake.configured ? "Rotate key" : "Create key"}
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
@@ -526,16 +871,10 @@ export default function IntegrationsPage() {
             {rotatedKey ? (
               <Alert>
                 <KeyRound />
-                <AlertTitle>
-                  Copy this key now—it will not be shown again
-                </AlertTitle>
+                <AlertTitle>Copy this key now—it will not be shown again</AlertTitle>
                 <AlertDescription className="w-full">
                   <div className="mt-2 flex w-full gap-2">
-                    <Input
-                      readOnly
-                      value={rotatedKey.key}
-                      className="font-mono text-xs"
-                    />
+                    <Input readOnly value={rotatedKey.key} className="font-mono text-xs" />
                     <Button
                       variant="outline"
                       onClick={() => copy(rotatedKey.key, "Intake key")}
@@ -547,17 +886,10 @@ export default function IntegrationsPage() {
               </Alert>
             ) : settings?.intake.configured ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CheckCircle2 className="h-4 w-4 text-primary" /> Active key
-                ends in {settings.intake.last4}.
+                <CheckCircle2 className="h-4 w-4 text-primary" /> Active key ends in{" "}
+                {settings.intake.last4}.
               </div>
             ) : null}
-
-            <div className="rounded-lg border bg-muted/30 p-4 text-sm">
-              <div className="font-medium">Minimum lead payload</div>
-              <code className="mt-2 block overflow-x-auto whitespace-pre text-xs text-muted-foreground">
-                {`{\n  "fullName": "Jordan Client",\n  "email": "jordan@example.com",\n  "phone": "+1 555 555 0100",\n  "leadType": "buyer",\n  "source": "Website"\n}`}
-              </code>
-            </div>
           </CardContent>
         </Card>
 
@@ -614,12 +946,6 @@ export default function IntegrationsPage() {
                   </AlertDescription>
                 </Alert>
               )}
-              <p className="text-xs text-muted-foreground">
-                In Twilio, open Phone Numbers → Active Numbers → your number →
-                Messaging. For “A message comes in,” paste this exact URL,
-                select HTTP POST, and save. Twilio signatures depend on an exact
-                match, including HTTPS, path, and any query string.
-              </p>
             </div>
             {canManage ? (
               <>
@@ -693,8 +1019,7 @@ export default function IntegrationsPage() {
                   >
                     Test connection
                   </Button>
-                  {twilioStatus?.connected ||
-                  twilioStatus?.status === "configured" ? (
+                  {twilioStatus?.connected || twilioStatus?.status === "configured" ? (
                     <Button
                       variant="ghost"
                       onClick={() => disconnect("twilio")}
@@ -755,27 +1080,20 @@ export default function IntegrationsPage() {
                     type="email"
                     value={sendgrid.fromEmail}
                     onChange={(event) =>
-                      setSendgrid({
-                        ...sendgrid,
-                        fromEmail: event.target.value,
-                      })
+                      setSendgrid({ ...sendgrid, fromEmail: event.target.value })
                     }
                     placeholder="agent@yourbrokerage.com"
                   />
                 </div>
                 <Button
                   onClick={saveSendGrid}
-                  disabled={
-                    Boolean(busy) || !sendgrid.apiKey || !sendgrid.fromEmail
-                  }
+                  disabled={Boolean(busy) || !sendgrid.apiKey || !sendgrid.fromEmail}
                 >
                   Save SendGrid
                 </Button>
                 <Separator />
                 <div className="space-y-2">
-                  <Label htmlFor="sendgridTest">
-                    Test recipient (optional)
-                  </Label>
+                  <Label htmlFor="sendgridTest">Test recipient (optional)</Label>
                   <Input
                     id="sendgridTest"
                     type="email"
@@ -798,8 +1116,7 @@ export default function IntegrationsPage() {
                   >
                     Test connection
                   </Button>
-                  {sendgridStatus?.connected ||
-                  sendgridStatus?.status === "configured" ? (
+                  {sendgridStatus?.connected || sendgridStatus?.status === "configured" ? (
                     <Button
                       variant="ghost"
                       onClick={() => disconnect("sendgrid")}
@@ -838,7 +1155,9 @@ export default function IntegrationsPage() {
             {facebookStatus?.display?.pageName ? (
               <Alert>
                 <CheckCircle2 />
-                <AlertTitle>Receiving leads from {facebookStatus.display.pageName}</AlertTitle>
+                <AlertTitle>
+                  Receiving leads from {facebookStatus.display.pageName}
+                </AlertTitle>
                 <AlertDescription>
                   Page ID: {facebookStatus.display.pageId}
                 </AlertDescription>
@@ -893,7 +1212,11 @@ export default function IntegrationsPage() {
               <div className="space-y-2 rounded-lg border bg-muted/30 p-4">
                 <Label>Meta webhook callback URL</Label>
                 <div className="flex gap-2">
-                  <Input readOnly value={facebookWebhookUrl} className="font-mono text-xs" />
+                  <Input
+                    readOnly
+                    value={facebookWebhookUrl}
+                    className="font-mono text-xs"
+                  />
                   <Button
                     variant="outline"
                     size="icon"

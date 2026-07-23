@@ -29,6 +29,7 @@ describe('production configuration contract', () => {
       DATABASE_URL: 'postgres://configured-but-never-returned',
       FRONTEND_URL: 'https://app.example.com',
       PUBLIC_APP_URL: 'https://app.example.com',
+      PUBLIC_API_URL: 'https://api.example.com',
       PLATFORM_ADMIN_EMAILS: 'operator@example.com',
       GLOBAL_AUTOMATIONS_DISABLED: 'true',
       BILLING_GRACE_DAYS: '0',
