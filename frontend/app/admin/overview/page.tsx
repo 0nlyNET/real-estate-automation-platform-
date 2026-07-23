@@ -256,7 +256,7 @@ export default function AdminOverviewPage() {
           </p>
         </div>
         <Button asChild variant="outline">
-          <Link href="/admin/dashboard">Open full operations</Link>
+          <Link href="/admin/dashboard?full=1">Open detailed operations</Link>
         </Button>
       </div>
 
@@ -297,7 +297,7 @@ export default function AdminOverviewPage() {
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button asChild size="sm">
-                    <Link href={`/admin/dashboard?view=onboarding&tenantId=${tenant.id}`}>
+                    <Link href={`/admin/dashboard?full=1&view=onboarding&tenantId=${tenant.id}`}>
                       Open client workspace
                     </Link>
                   </Button>
@@ -352,7 +352,7 @@ export default function AdminOverviewPage() {
                   icon={tenant.serviceState.state === "suspended" ? PauseCircle : AlertTriangle}
                   title={tenant.name}
                   detail={tenant.serviceState.label}
-                  href={`/admin/dashboard?view=onboarding&tenantId=${tenant.id}`}
+                  href={`/admin/dashboard?full=1&view=onboarding&tenantId=${tenant.id}`}
                 />
               ))}
               {leadAttention.slice(0, 3).map((lead) => (
@@ -361,7 +361,7 @@ export default function AdminOverviewPage() {
                   icon={Flame}
                   title={`${lead.fullName} · ${lead.readinessLevel === "urgent" ? "urgent" : lead.stage}`}
                   detail={`${lead.tenant.name} · ${lead.recommendedNextAction || "Review this lead"}`}
-                  href={`/admin/dashboard?view=onboarding&tenantId=${lead.tenant.id}`}
+                  href={`/admin/dashboard?full=1&view=onboarding&tenantId=${lead.tenant.id}`}
                 />
               ))}
               {openHandoffs.slice(0, 3).map((handoff) => (
@@ -370,7 +370,7 @@ export default function AdminOverviewPage() {
                   icon={Handshake}
                   title={`${handoff.lead.fullName} needs a handoff`}
                   detail={`${handoff.tenant.name} · ${handoff.recommendedAction}`}
-                  href="/admin/dashboard?view=handoffs"
+                  href="/admin/dashboard?full=1&view=handoffs"
                 />
               ))}
               {!clientAttention.length && !leadAttention.length && !openHandoffs.length ? (
@@ -393,7 +393,7 @@ export default function AdminOverviewPage() {
                   icon={CalendarDays}
                   title={appointment.lead.fullName}
                   detail={`${appointment.tenant.name} · ${time(appointment.startsAt)}`}
-                  href="/admin/dashboard?view=appointments"
+                  href="/admin/dashboard?full=1&view=appointments"
                 />
               ))}
               {openTasks.slice(0, 4).map((task) => (
@@ -402,7 +402,7 @@ export default function AdminOverviewPage() {
                   icon={ListTodo}
                   title={task.title}
                   detail={`${task.priority} priority${task.dueAt ? ` · ${time(task.dueAt)}` : ""}`}
-                  href="/admin/dashboard?view=tasks"
+                  href="/admin/dashboard?full=1&view=tasks"
                 />
               ))}
               {!today.length && !openTasks.length ? <Empty text="Nothing is due today." /> : null}

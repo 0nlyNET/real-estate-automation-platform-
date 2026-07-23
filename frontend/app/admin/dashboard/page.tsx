@@ -1,6 +1,7 @@
 "use client"
 
 import { FormEvent, useCallback, useEffect, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import {
   Activity,
   AlertTriangle,
@@ -132,6 +133,14 @@ function currency(cents: number | string, code = "usd") {
 }
 
 export default function AdminDashboardPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const fullOperations = searchParams.get("full") === "1"
+
+  useEffect(() => {
+    if (!fullOperations) router.replace("/admin/overview")
+  }, [fullOperations, router])
+
   const [me, setMe] = useState<Me | null>(null)
   const [view, setView] = useState<View>("overview")
   const [loading, setLoading] = useState(true)
@@ -227,6 +236,10 @@ export default function AdminDashboardPage() {
     const initialLoad = window.setTimeout(() => void loadAll(), 0)
     return () => window.clearTimeout(initialLoad)
   }, [loadAll])
+
+  if (!fullOperations) {
+    return <div className="min-h-screen" aria-label="Opening admin operating center" />
+  }
 
   const operatorName = (id?: string | null) => operators.find((operator) => operator.id === id)?.email || "Unassigned"
   const normalizedSearch = search.trim().toLowerCase()
