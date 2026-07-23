@@ -54,6 +54,24 @@ export class RealtorComService {
     );
   }
 
+  private requirePublicBaseUrl() {
+    const value = this.publicBaseUrl();
+    if (!value) {
+      throw new BadRequestException(
+        'Realtor.com delivery is unavailable until PUBLIC_API_URL is configured',
+      );
+    }
+    try {
+      const url = new URL(value);
+      if (process.env.NODE_ENV === 'production' && url.protocol !== 'https:') {
+        throw new Error('not https');
+      }
+    } catch {
+      throw new BadRequestException('PUBLIC_API_URL must be an absolute URL');
+    }
+    return value;
+  }
+
   private endpointPath(tenantId: string) {
     return `/webhooks/realtor-com/${encodeURIComponent(tenantId)}`;
   }
@@ -85,6 +103,7 @@ export class RealtorComService {
 
   async rotateKey(tenantId: string) {
     if (!tenantId) throw new BadRequestException('Missing tenant');
+    const baseUrl = this.requirePublicBaseUrl();
     const apiKey = crypto.randomBytes(32).toString('base64url');
     const loginName = `realtytechai-${tenantId}`;
     const previous = await this.findCredential(tenantId);
@@ -111,7 +130,6 @@ export class RealtorComService {
     row.encryptedValue = encryptString(JSON.stringify(config));
     await this.credentials.save(row);
 
-    const baseUrl = this.publicBaseUrl();
     return {
       provider: PROVIDER,
       endpointPath: this.endpointPath(tenantId),
@@ -147,19 +165,25 @@ export class RealtorComService {
     }
 
     if (this.isConnectionTest(body)) {
-      await this.markConnected(row, config);
-      return { success: true, status: 'connected' };
+      try {
+        await this.markConnected(row, config);
+        return { success: true, status: 'connected' };
+      } catch (error) {
+        await this.markError(row, config, error);
+        throw error;
+      }
     }
 
-    const payload = this.normalizeLead(body);
-    const lead = await this.leads.intake(tenantId, payload as any);
-    await this.markConnected(row, config);
+    try {
+      const payload = this.normalizeLead(body);
+      const lead = await this.leads.intake(tenantId, payload as any);
+      await this.markConnected(row, config);
 
-    return {
-      success: true,
-      status: 'accepted',
-      leadId: lead.id,
-    };
+      return { success: true, status: 'accepted', leadId: lead.id };
+    } catch (error) {
+      await this.markError(row, config, error);
+      throw error;
+    }
   }
 
   private async markConnected(row: Credential, config: StoredConfig) {
@@ -170,6 +194,18 @@ export class RealtorComService {
         connected: true,
         lastSync: new Date().toISOString(),
         error: null,
+      } satisfies StoredConfig),
+    );
+    await this.credentials.save(row);
+  }
+
+  private async markError(row: Credential, config: StoredConfig, error: unknown) {
+    const message = error instanceof Error ? error.message : 'Realtor.com delivery failed';
+    row.encryptedValue = encryptString(
+      JSON.stringify({
+        ...config,
+        connected: false,
+        error: message.slice(0, 500),
       } satisfies StoredConfig),
     );
     await this.credentials.save(row);
