@@ -32,7 +32,7 @@ export class SequenceEnrollment extends BaseEntity {
   nextRunAt?: Date;
 
   @Column({ name: 'stopped_reason', type: 'varchar', nullable: true })
-  stoppedReason?: 'reply' | 'manual' | 'other' | 'opt_out';
+  stoppedReason?: 'reply' | 'manual' | 'other' | 'opt_out' | 'service_suspended';
 
   @Column({ name: 'locked_at', type: 'timestamptz', nullable: true })
   lockedAt?: Date | null;

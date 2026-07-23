@@ -14,11 +14,17 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 md:px-6">
           <div className="flex items-center gap-3">
-            <Logo href="/admin/dashboard" size="sm" />
+            <Logo href="/admin/overview" size="sm" />
             <div className="rounded-full bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">Operations</div>
           </div>
 
           <nav className="flex items-center gap-2 text-sm md:gap-4">
+            <Link className="text-muted-foreground hover:text-foreground" href="/admin/overview">
+              Overview
+            </Link>
+            <Link className="hidden text-muted-foreground hover:text-foreground sm:inline" href="/admin/dashboard">
+              Full operations
+            </Link>
             <NotificationCenter />
             <Link className="text-muted-foreground hover:text-foreground" href="/logout">
               Logout

@@ -1,6 +1,7 @@
 import { Controller, Get, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantsService } from '../tenants/tenants.service';
+import { describeServiceState } from '../service-control/service-control.service';
 
 @Controller('me')
 export class MeController {
@@ -38,6 +39,17 @@ export class MeController {
         cancelAtPeriodEnd: false,
         cancelAt: null,
         stripeSubscriptionStatus: null,
+        lifecycleStatus: 'ACTIVE',
+        serviceState: {
+          state: 'active',
+          label: 'Active',
+          reason: 'RealtyTechAI services are active.',
+          graceEndsAt: null,
+        },
+        serviceSuspendedAt: null,
+        serviceSuspensionReason: null,
+        serviceSuspensionSource: null,
+        serviceRestoredAt: null,
       };
     }
 
@@ -50,6 +62,12 @@ export class MeController {
       cancelAtPeriodEnd: Boolean(t.cancelAtPeriodEnd),
       cancelAt: t.cancelAt || null,
       stripeSubscriptionStatus: t.stripeSubscriptionStatus || null,
+      lifecycleStatus: t.lifecycleStatus,
+      serviceState: describeServiceState(t),
+      serviceSuspendedAt: t.serviceSuspendedAt || null,
+      serviceSuspensionReason: t.serviceSuspensionReason || null,
+      serviceSuspensionSource: t.serviceSuspensionSource || null,
+      serviceRestoredAt: t.serviceRestoredAt || null,
     };
   }
 }

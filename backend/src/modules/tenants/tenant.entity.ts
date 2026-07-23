@@ -58,6 +58,27 @@ export class Tenant {
   @Column({ name: 'service_paused_at', type: 'timestamptz', nullable: true })
   servicePausedAt?: Date | null;
 
+  @Column({ name: 'service_suspended_at', type: 'timestamptz', nullable: true })
+  serviceSuspendedAt?: Date | null;
+
+  @Column({ name: 'service_suspension_reason', type: 'text', nullable: true })
+  serviceSuspensionReason?: string | null;
+
+  @Column({ name: 'service_suspension_source', type: 'varchar', length: 30, nullable: true })
+  serviceSuspensionSource?: 'manual' | 'billing' | null;
+
+  @Column({ name: 'service_suspended_by_id', type: 'uuid', nullable: true })
+  serviceSuspendedById?: string | null;
+
+  @Column({ name: 'service_previous_lifecycle_status', type: 'varchar', length: 40, nullable: true })
+  servicePreviousLifecycleStatus?: WorkspaceLifecycleStatus | null;
+
+  @Column({ name: 'service_restored_at', type: 'timestamptz', nullable: true })
+  serviceRestoredAt?: Date | null;
+
+  @Column({ name: 'service_restored_by_id', type: 'uuid', nullable: true })
+  serviceRestoredById?: string | null;
+
   @Column({ type: 'text', default: 'month' })
   billingInterval!: 'month' | 'year';
 

@@ -28,3 +28,9 @@ export class ImpersonateDto {
   @IsUUID()
   userId!: string;
 }
+
+export class SuspendClientServicesDto {
+  @IsString()
+  @Length(3, 1000)
+  reason!: string;
+}

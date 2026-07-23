@@ -233,6 +233,46 @@ export class AdminService {
     return tenants.filter((tenant) => !internalIds.has(tenant.id));
   }
 
+  async leadAttention(take = 50) {
+    const limit = Math.min(Math.max(take || 50, 1), 100);
+    const [rows, internalIds] = await Promise.all([
+      this.leadsRepo
+        .createQueryBuilder('lead')
+        .innerJoinAndSelect('lead.tenant', 'tenant')
+        .where('lead.stage NOT IN (:...finished)', {
+          finished: ['closed', 'lost'],
+        })
+        .andWhere(
+          '(lead.stage = :newStage OR lead.temperature = :hot OR lead.readinessLevel = :urgent)',
+          { newStage: 'new', hot: 'hot', urgent: 'urgent' },
+        )
+        .orderBy('lead.createdAt', 'DESC')
+        .take(limit)
+        .getMany(),
+      this.internalTenantIds(),
+    ]);
+    return rows
+      .filter((lead) => !internalIds.has(lead.tenantId))
+      .sort((a, b) => {
+        const priority = (lead: Lead) =>
+          lead.readinessLevel === 'urgent' ? 3 : lead.temperature === 'hot' ? 2 : 1;
+        return priority(b) - priority(a) || b.createdAt.getTime() - a.createdAt.getTime();
+      })
+      .map((lead) => ({
+        id: lead.id,
+        fullName: lead.fullName,
+        stage: lead.stage,
+        temperature: lead.temperature,
+        readinessLevel: lead.readinessLevel,
+        recommendedNextAction: lead.recommendedNextAction || null,
+        createdAt: lead.createdAt,
+        tenant: {
+          id: lead.tenantId,
+          name: lead.tenant?.name || 'Client workspace',
+        },
+      }));
+  }
+
   async listUsersByTenant(tenantId: string): Promise<User[]> {
     return this.usersRepo.find({
       where: { tenantId } as any,

@@ -20,6 +20,7 @@ import { ProspectApplication } from '../public/prospect-application.entity';
 import { OperationsTask } from '../operations/operations-task.entity';
 import { SupportTicket } from '../support/support-ticket.entity';
 import { BillingEvent } from '../billing/billing-event.entity';
+import { ServiceControlModule } from '../service-control/service-control.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { BillingEvent } from '../billing/billing-event.entity';
     AuditModule,
     MailModule,
     OnboardingModule,
+    ServiceControlModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],

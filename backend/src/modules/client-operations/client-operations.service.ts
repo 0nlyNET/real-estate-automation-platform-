@@ -900,16 +900,24 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     const dueLeads = await this.leads
       .createQueryBuilder('lead')
+      .innerJoin('lead.tenant', 'tenant')
       .where('lead.nextFollowUpAt BETWEEN :dayAgo AND :now', { dayAgo, now })
       .andWhere('lead.stage NOT IN (:...finished)', { finished: ['closed', 'lost'] })
+      .andWhere('tenant.lifecycleStatus = :activeLifecycle', {
+        activeLifecycle: 'ACTIVE',
+      })
       .take(100)
       .getMany();
     const appointments = await this.appointments
       .createQueryBuilder('appointment')
       .leftJoinAndSelect('appointment.lead', 'lead')
+      .innerJoin('appointment.tenant', 'tenant')
       .where('appointment.startsAt BETWEEN :now AND :tomorrow', { now, tomorrow })
       .andWhere('appointment.status = :scheduled', { scheduled: 'scheduled' })
       .andWhere('appointment.confirmationStatus = :pending', { pending: 'pending' })
+      .andWhere('tenant.lifecycleStatus = :activeLifecycle', {
+        activeLifecycle: 'ACTIVE',
+      })
       .take(100)
       .getMany();
     const dayKey = now.toISOString().slice(0, 10);

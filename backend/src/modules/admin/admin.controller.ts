@@ -19,7 +19,13 @@ import { AuthService } from '../auth/auth.service';
 import { AdminService } from './admin.service';
 import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
 import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
-import { AssignClientDto, CreateClientDto, ImpersonateDto, SetPlatformStaffDto } from './admin.dto';
+import {
+  AssignClientDto,
+  CreateClientDto,
+  ImpersonateDto,
+  SetPlatformStaffDto,
+  SuspendClientServicesDto,
+} from './admin.dto';
 import { AuditService } from '../audit/audit.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { OperatorOnboardingEvidenceDto } from '../onboarding/onboarding.dto';
@@ -29,6 +35,7 @@ import {
   SESSION_COOKIE,
   setSessionCookie,
 } from '../auth/session-cookie';
+import { describeServiceState, ServiceControlService } from '../service-control/service-control.service';
 
 @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 @Controller('admin')
@@ -38,11 +45,17 @@ export class AdminController {
     private readonly auth: AuthService,
     private readonly audit: AuditService,
     private readonly onboarding: OnboardingService,
+    private readonly serviceControl: ServiceControlService,
   ) {}
 
   @Get('overview')
   async overview(@Req() req: any) {
     return this.admin.overview(req.user?.platformRole === 'super_admin');
+  }
+
+  @Get('lead-attention')
+  leadAttention(@Query('take') take?: string) {
+    return this.admin.leadAttention(Number(take || 50));
   }
 
   @Get('tenants/:tenantId/readiness')
@@ -78,6 +91,36 @@ export class AdminController {
     return this.onboarding.pause(tenantId);
   }
 
+  @Post('tenants/:tenantId/suspend')
+  @UseGuards(PlatformAdminGuard)
+  suspendServices(
+    @Param('tenantId') tenantId: string,
+    @Body() body: SuspendClientServicesDto,
+    @Req() req: any,
+  ) {
+    return this.serviceControl.suspend({
+      tenantId,
+      reason: body.reason,
+      source: 'manual',
+      actor: {
+        id: String(req.user?.sub || ''),
+        email: String(req.user?.email || ''),
+      },
+    });
+  }
+
+  @Post('tenants/:tenantId/restore')
+  @UseGuards(PlatformAdminGuard)
+  restoreServices(@Param('tenantId') tenantId: string, @Req() req: any) {
+    return this.serviceControl.restore({
+      tenantId,
+      actor: {
+        id: String(req.user?.sub || ''),
+        email: String(req.user?.email || ''),
+      },
+    });
+  }
+
   @Get('system-health')
   @UseGuards(PlatformAdminGuard)
   async systemHealth() {
@@ -88,21 +131,45 @@ export class AdminController {
   async listTenants(@Req() req: any) {
     const financialAccess = req.user?.platformRole === 'super_admin';
     const items = await this.admin.listTenants();
-    return items.map((t: any) => ({
-      id: t.id,
-      name: t.name,
-      ...(financialAccess ? { status: t.status } : {}),
-      lifecycleStatus: t.lifecycleStatus,
-      assignedOperatorId: t.assignedOperatorId || null,
-      ...(financialAccess
-        ? {
-            currentPeriodEnd: t.currentPeriodEnd || null,
-            lastPaymentFailureAt: t.lastPaymentFailureAt || null,
-          }
-        : {}),
-      createdAt: t.createdAt,
-      updatedAt: t.updatedAt,
-    }));
+    return items.map((t: any) => {
+      const fullServiceState = describeServiceState(t);
+      const serviceState = financialAccess
+        ? fullServiceState
+        : ['payment_overdue', 'grace_period'].includes(fullServiceState.state)
+          ? {
+              state: 'paused',
+              label: 'Owner action required',
+              reason: 'The platform owner is handling this service status.',
+              graceEndsAt: null,
+            }
+          : fullServiceState.state === 'suspended'
+            ? {
+                ...fullServiceState,
+                reason: 'Services are stopped. Contact the platform owner for details.',
+                graceEndsAt: null,
+              }
+            : fullServiceState;
+      return {
+        id: t.id,
+        name: t.name,
+        ...(financialAccess ? { status: t.status } : {}),
+        lifecycleStatus: t.lifecycleStatus,
+        serviceState,
+        assignedOperatorId: t.assignedOperatorId || null,
+        ...(financialAccess
+          ? {
+              currentPeriodEnd: t.currentPeriodEnd || null,
+              lastPaymentFailureAt: t.lastPaymentFailureAt || null,
+              serviceSuspendedAt: t.serviceSuspendedAt || null,
+              serviceSuspensionReason: t.serviceSuspensionReason || null,
+              serviceSuspensionSource: t.serviceSuspensionSource || null,
+              serviceRestoredAt: t.serviceRestoredAt || null,
+            }
+          : {}),
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+      };
+    });
   }
 
   @Post('tenants')

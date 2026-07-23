@@ -60,6 +60,8 @@ type Operator = { id: string; email: string; platformRole: "super_admin" | "staf
 type PlatformAccessUser = { id: string; email: string; isActive: boolean; isEmailVerified: boolean; platformRole: "super_admin" | "staff" | null; accessManagedByEnvironment: boolean }
 type Tenant = {
   id: string; name: string; status?: string; lifecycleStatus: string; assignedOperatorId?: string | null
+  serviceState?: { state: string; label: string; reason: string; graceEndsAt?: string | null }
+  serviceSuspendedAt?: string | null; serviceSuspensionReason?: string | null
   currentPeriodEnd?: string | null; lastPaymentFailureAt?: string | null; createdAt: string; updatedAt: string
 }
 type ProspectApplication = {
@@ -193,6 +195,19 @@ export default function AdminDashboardPage() {
       setReport(nextReport)
       setHandoffs(nextHandoffs); setAppointments(nextAppointments)
       setNotes(Object.fromEntries(nextApplications.map((item) => [item.id, item.operatorNotes || ""])))
+      const requestedTenantId = new URLSearchParams(window.location.search).get("tenantId")
+      const requestedTenant = requestedTenantId
+        ? nextTenants.find((tenant) => tenant.id === requestedTenantId)
+        : null
+      if (requestedTenant) {
+        const [users, status] = await Promise.all([
+          apiFetch<TenantUser[]>(`/admin/tenants/${requestedTenant.id}/users`),
+          apiFetch<TenantReadiness>(`/admin/tenants/${requestedTenant.id}/readiness`),
+        ])
+        setSelectedTenant(requestedTenant)
+        setTenantUsers(users)
+        setReadiness(status)
+      }
       if (current.platformRole === "super_admin") {
         const [nextBilling, nextHealth, nextPlatformUsers] = await Promise.all([
           apiFetch<BillingOverview>("/admin/billing-overview"),
@@ -320,7 +335,7 @@ export default function AdminDashboardPage() {
     if (!selectedTenant) return
     try {
       await apiFetch(`/admin/tenants/${selectedTenant.id}/${action}`, { method: "POST" })
-      await Promise.all([refreshReadiness(), loadAll()]); setNotice(action === "activate" ? "Client service activated." : "Client service paused.")
+      await Promise.all([refreshReadiness(), loadAll()]); setNotice(action === "activate" ? "Client service activated." : "Client automations paused.")
     } catch (cause) { setError(messageFor(cause, `Client service could not be ${action}d`)); await refreshReadiness() }
   }
 
@@ -409,7 +424,7 @@ export default function AdminDashboardPage() {
       {view === "onboarding" ? (
         <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
           <Card><CardHeader><CardTitle>Clients onboarding</CardTitle><p className="text-sm text-muted-foreground">Choose a client to see exactly what remains.</p></CardHeader><CardContent className="space-y-2">{tenants.filter((tenant) => tenant.lifecycleStatus !== "CANCELED").map((tenant) => <button type="button" key={tenant.id} onClick={() => void openClient(tenant)} className={`w-full rounded-lg border p-3 text-left hover:bg-muted/50 ${selectedTenant?.id === tenant.id ? "border-primary bg-primary/5" : ""}`}><div className="font-medium">{tenant.name}</div><div className="mt-1 text-xs text-muted-foreground">{label(tenant.lifecycleStatus)} · {operatorName(tenant.assignedOperatorId)}</div></button>)}</CardContent></Card>
-          <Card><CardHeader><CardTitle>{selectedTenant?.name || "Select a client"}</CardTitle>{selectedTenant ? <p className="text-sm text-muted-foreground">{readiness?.ready ? "All required checks pass. The owner can activate service." : `${readiness?.blockers.length || 0} required check(s) remain.`}</p> : null}</CardHeader><CardContent className="space-y-5">{selectedTenant ? <><div className="grid gap-2 sm:grid-cols-2">{readiness?.required.map((item) => <div key={item.key} className="flex gap-2 rounded-lg border p-3 text-sm">{item.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />}<span>{item.label}</span></div>)}</div><div className="rounded-lg border p-4"><div className="font-medium">Record your review</div><div className="mt-3 grid gap-2 sm:grid-cols-2"><Button variant="outline" onClick={() => void recordEvidence({ testLeadCompletedAt: new Date().toISOString() })}>Test lead passed</Button><Button variant="outline" onClick={() => void recordEvidence({ providerRejectionTestedAt: new Date().toISOString() })}>Failure visibility tested</Button><Button variant="outline" onClick={() => void recordEvidence({ billingVerifiedAt: new Date().toISOString() })} disabled={!isOwner}>Billing verified</Button><Button variant="outline" onClick={() => void recordEvidence({ operatorApproved: true })}>Operator review approved</Button></div><div className="mt-3 flex gap-2"><Input placeholder="Reference the client's written launch approval" value={evidence[selectedTenant.id] || ""} onChange={(event) => setEvidence((current) => ({ ...current, [selectedTenant.id]: event.target.value }))} /><Button variant="outline" disabled={!evidence[selectedTenant.id]?.trim()} onClick={() => void recordEvidence({ clientApprovedAt: new Date().toISOString(), clientApprovalEvidence: evidence[selectedTenant.id].trim() })}>Save approval</Button></div></div>{isOwner ? <div className="flex flex-wrap gap-2"><Button disabled={!readiness?.ready} onClick={() => void changeService("activate")}>Activate service</Button><Button variant="outline" onClick={() => void changeService("pause")}>Pause service</Button></div> : null}<div><div className="mb-2 font-medium">Client users</div><div className="space-y-2">{tenantUsers.map((user) => <div key={user.id} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{user.email}</div><div className="text-xs text-muted-foreground">{user.role} · {user.isActive ? "active" : "inactive"}</div></div>{isOwner ? <Button size="sm" variant="outline" disabled={!user.isActive} onClick={() => void impersonate(user.id)}>View as client</Button> : null}</div>)}</div></div></> : <Empty text="Choose a client from the list to manage onboarding." />}</CardContent></Card>
+          <Card><CardHeader><CardTitle>{selectedTenant?.name || "Select a client"}</CardTitle>{selectedTenant ? <p className="text-sm text-muted-foreground">{readiness?.ready ? "All required checks pass. The owner can activate service." : `${readiness?.blockers.length || 0} required check(s) remain.`}</p> : null}</CardHeader><CardContent className="space-y-5">{selectedTenant ? <><div className="grid gap-2 sm:grid-cols-2">{readiness?.required.map((item) => <div key={item.key} className="flex gap-2 rounded-lg border p-3 text-sm">{item.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />}<span>{item.label}</span></div>)}</div><div className="rounded-lg border p-4"><div className="font-medium">Record your review</div><div className="mt-3 grid gap-2 sm:grid-cols-2"><Button variant="outline" onClick={() => void recordEvidence({ testLeadCompletedAt: new Date().toISOString() })}>Test lead passed</Button><Button variant="outline" onClick={() => void recordEvidence({ providerRejectionTestedAt: new Date().toISOString() })}>Failure visibility tested</Button><Button variant="outline" onClick={() => void recordEvidence({ billingVerifiedAt: new Date().toISOString() })} disabled={!isOwner}>Billing verified</Button><Button variant="outline" onClick={() => void recordEvidence({ operatorApproved: true })}>Operator review approved</Button></div><div className="mt-3 flex gap-2"><Input placeholder="Reference the client's written launch approval" value={evidence[selectedTenant.id] || ""} onChange={(event) => setEvidence((current) => ({ ...current, [selectedTenant.id]: event.target.value }))} /><Button variant="outline" disabled={!evidence[selectedTenant.id]?.trim()} onClick={() => void recordEvidence({ clientApprovedAt: new Date().toISOString(), clientApprovalEvidence: evidence[selectedTenant.id].trim() })}>Save approval</Button></div></div>{isOwner ? <div className="flex flex-wrap gap-2"><Button disabled={!readiness?.ready} onClick={() => void changeService("activate")}>Activate service</Button><Button variant="outline" onClick={() => void changeService("pause")}>Pause automations</Button></div> : null}<div><div className="mb-2 font-medium">Client users</div><div className="space-y-2">{tenantUsers.map((user) => <div key={user.id} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{user.email}</div><div className="text-xs text-muted-foreground">{user.role} · {user.isActive ? "active" : "inactive"}</div></div>{isOwner ? <Button size="sm" variant="outline" disabled={!user.isActive} onClick={() => void impersonate(user.id)}>View as client</Button> : null}</div>)}</div></div></> : <Empty text="Choose a client from the list to manage onboarding." />}</CardContent></Card>
         </div>
       ) : null}
 

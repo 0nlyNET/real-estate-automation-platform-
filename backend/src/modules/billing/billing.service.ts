@@ -24,6 +24,8 @@ import { OperationsService } from '../operations/operations.service';
 import { operationalEvent } from '../../common/operational-log';
 import { BillingEvent } from './billing-event.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { configuredBillingGraceDays } from '../entitlements/entitlement.service';
+import { ServiceControlService } from '../service-control/service-control.service';
 
 const OPEN_SUBSCRIPTION_STATES = new Set([
   'active',
@@ -70,6 +72,8 @@ export class BillingService {
     private readonly billingEvents?: Repository<BillingEvent>,
     @Optional()
     private readonly notifications?: NotificationsService,
+    @Optional()
+    private readonly serviceControl?: ServiceControlService,
   ) {
     const key = process.env.STRIPE_SECRET_KEY?.trim();
     this.stripe = key ? new Stripe(key) : null;
@@ -442,6 +446,14 @@ export class BillingService {
               entityType: 'tenant',
               entityId: tenantId,
             });
+            if (configuredBillingGraceDays() === 0) {
+              await this.serviceControl?.suspend({
+                tenantId,
+                source: 'billing',
+                reason:
+                  'Stripe confirmed a failed payment and no billing grace period is configured.',
+              });
+            }
           } else {
             await this.tenants.updateBilling(tenantId, {
               status: mapStripeStatusToTenantStatus(subscription.status),
@@ -690,6 +702,13 @@ export class BillingService {
         relatedEntityType: 'tenant',
         relatedEntityId: tenantId,
         dedupeOpen: true,
+      });
+    }
+    if (!deleted && status === 'unpaid') {
+      await this.serviceControl?.suspend({
+        tenantId,
+        source: 'billing',
+        reason: 'Stripe confirmed that the subscription is unpaid.',
       });
     }
   }

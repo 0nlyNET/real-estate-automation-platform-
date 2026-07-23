@@ -4,6 +4,7 @@ import { AdminService } from './admin.service';
 describe('AdminService client onboarding', () => {
   const originalFrontendUrl = process.env.FRONTEND_URL;
   const originalStaffEmails = process.env.PLATFORM_STAFF_EMAILS;
+  const originalAdminEmails = process.env.PLATFORM_ADMIN_EMAILS;
 
   afterEach(() => {
     jest.restoreAllMocks();
@@ -11,6 +12,8 @@ describe('AdminService client onboarding', () => {
     else process.env.FRONTEND_URL = originalFrontendUrl;
     if (originalStaffEmails === undefined) delete process.env.PLATFORM_STAFF_EMAILS;
     else process.env.PLATFORM_STAFF_EMAILS = originalStaffEmails;
+    if (originalAdminEmails === undefined) delete process.env.PLATFORM_ADMIN_EMAILS;
+    else process.env.PLATFORM_ADMIN_EMAILS = originalAdminEmails;
   });
 
   function setup(
@@ -181,5 +184,62 @@ describe('AdminService client onboarding', () => {
     expect(managedRepositories.get('User').save).toHaveBeenCalledWith(
       expect.objectContaining({ platformRole: null }),
     );
+  });
+
+  it('surfaces new and urgent client leads in priority order without contact details', async () => {
+    process.env.PLATFORM_ADMIN_EMAILS = '';
+    const rows = [
+      {
+        id: 'new-lead',
+        tenantId: 'tenant-1',
+        fullName: 'New Lead',
+        stage: 'new',
+        temperature: 'warm',
+        readinessLevel: 'exploring',
+        recommendedNextAction: 'Review',
+        createdAt: new Date('2026-07-23T02:00:00Z'),
+        tenant: { id: 'tenant-1', name: 'Example Realty' },
+        email: 'private@example.com',
+      },
+      {
+        id: 'urgent-lead',
+        tenantId: 'tenant-1',
+        fullName: 'Urgent Lead',
+        stage: 'qualified',
+        temperature: 'hot',
+        readinessLevel: 'urgent',
+        recommendedNextAction: 'Call now',
+        createdAt: new Date('2026-07-23T01:00:00Z'),
+        tenant: { id: 'tenant-1', name: 'Example Realty' },
+        phone: '+15555550100',
+      },
+    ];
+    const query = {
+      innerJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue(rows),
+    };
+    const service = new AdminService(
+      {} as never,
+      {} as never,
+      { createQueryBuilder: jest.fn().mockReturnValue(query) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    const result = await service.leadAttention(50);
+
+    expect(result.map((lead) => lead.id)).toEqual(['urgent-lead', 'new-lead']);
+    expect(result[0]).toMatchObject({
+      fullName: 'Urgent Lead',
+      tenant: { id: 'tenant-1', name: 'Example Realty' },
+    });
+    expect(result[0]).not.toHaveProperty('phone');
+    expect(result[1]).not.toHaveProperty('email');
   });
 });
