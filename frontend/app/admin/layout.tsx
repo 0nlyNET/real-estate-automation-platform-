@@ -22,8 +22,8 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             <Link className="text-muted-foreground hover:text-foreground" href="/admin/overview">
               Overview
             </Link>
-            <Link className="hidden text-muted-foreground hover:text-foreground sm:inline" href="/admin/dashboard">
-              Full operations
+            <Link className="hidden text-muted-foreground hover:text-foreground sm:inline" href="/admin/dashboard?full=1">
+              Detailed operations
             </Link>
             <NotificationCenter />
             <Link className="text-muted-foreground hover:text-foreground" href="/logout">
