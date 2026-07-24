@@ -7,6 +7,7 @@ import { Team } from "../teams/team.entity";
 import { TenantQuietHours } from "../compliance/tenant-quiet-hours.entity";
 import { parseHHMM } from "../../common/time";
 import { EntitlementService } from "../entitlements/entitlement.service";
+import { isSafeBookingUrl } from "../../common/booking-link";
 
 @Injectable()
 export class SettingsService {
@@ -62,6 +63,8 @@ export class SettingsService {
       quietHoursStart: settings.quietHoursStart,
       quietHoursEnd: settings.quietHoursEnd,
       bookingLink: settings.bookingLink || "",
+      bookingLinkVerifiedAt: settings.bookingLinkVerifiedAt || null,
+      bookingLinkStatus: !settings.bookingLink ? "missing" : settings.bookingLinkVerifiedAt ? "verified" : "test_required",
       automationsEnabled: settings.automationsEnabled,
       roundRobinEnabled: settings.roundRobinEnabled,
       roundRobinTeamId: settings.roundRobinTeamId || null,
@@ -69,8 +72,11 @@ export class SettingsService {
       leadSourceOtherLabel: settings.leadSourceOtherLabel || null,
       intake: {
         configured: Boolean(settings.intakeApiKeyHash),
+        tested: Boolean(settings.intakeLastReceivedAt),
+        status: !settings.intakeApiKeyHash ? "not_connected" : settings.intakeLastReceivedAt ? "connected" : "awaiting_test",
         last4: settings.intakeApiKeyLast4 || null,
         rotatedAt: settings.intakeApiKeyRotatedAt || null,
+        lastReceivedAt: settings.intakeLastReceivedAt || null,
         endpointPath: `/leads/intake/${settings.tenantId}`,
       },
     };
@@ -86,6 +92,7 @@ export class SettingsService {
     settings.intakeApiKeyHash = hashIntakeKey(key);
     settings.intakeApiKeyLast4 = key.slice(-4);
     settings.intakeApiKeyRotatedAt = new Date();
+    settings.intakeLastReceivedAt = null;
     const saved = await this.tenantSettingsRepo.save(settings);
 
     return {
@@ -94,6 +101,21 @@ export class SettingsService {
       rotatedAt: saved.intakeApiKeyRotatedAt,
       endpointPath: `/leads/intake/${tenantId}`,
     };
+  }
+
+  async markIntakeReceived(tenantId: string) {
+    const settings = await this.getTenantSettingsEntity(tenantId);
+    settings.intakeLastReceivedAt = new Date();
+    await this.tenantSettingsRepo.save(settings);
+  }
+
+  async verifyBookingLink(tenantId: string) {
+    const settings = await this.getTenantSettingsEntity(tenantId);
+    const link = String(settings.bookingLink || '').trim();
+    if (!isSafeBookingUrl(link)) throw new BadRequestException('Save a full HTTPS booking link before confirming it');
+    settings.bookingLink = link;
+    settings.bookingLinkVerifiedAt = new Date();
+    return this.safeSettings(await this.tenantSettingsRepo.save(settings));
   }
 
   async validateIntakeKey(tenantId: string, key?: string | null) {
@@ -149,8 +171,12 @@ export class SettingsService {
       (current as any).quietHoursStart = updates.quietHoursStart;
     if (typeof updates.quietHoursEnd === "string" && "quietHoursEnd" in current)
       (current as any).quietHoursEnd = updates.quietHoursEnd;
-    if (typeof updates.bookingLink === "string" && "bookingLink" in current)
-      (current as any).bookingLink = updates.bookingLink;
+    if (typeof updates.bookingLink === "string" && "bookingLink" in current) {
+      const link = updates.bookingLink.trim();
+      if (link && !isSafeBookingUrl(link)) throw new BadRequestException("Booking link must be a full HTTPS URL");
+      if (link !== String(current.bookingLink || '').trim()) current.bookingLinkVerifiedAt = null;
+      (current as any).bookingLink = link;
+    }
     if (
       typeof updates.automationsEnabled === "boolean" &&
       "automationsEnabled" in current

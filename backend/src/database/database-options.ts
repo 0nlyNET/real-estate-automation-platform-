@@ -9,6 +9,7 @@ import { ClientReadinessFoundations1784419200001 } from './migrations/2026071900
 import { AdminOperationsNotifications1784505600001 } from './migrations/202607200001-admin-operations-notifications';
 import { ClientTodayWorkflow1784592000001 } from './migrations/202607210001-client-today-workflow';
 import { ServiceSuspension1784764800001 } from './migrations/202607230001-service-suspension';
+import { ClientExperienceReadiness1784851200001 } from './migrations/202607240001-client-experience-readiness';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -19,6 +20,7 @@ const databaseMigrations = [
   AdminOperationsNotifications1784505600001,
   ClientTodayWorkflow1784592000001,
   ServiceSuspension1784764800001,
+  ClientExperienceReadiness1784851200001,
 ];
 
 function migrationOptions() {

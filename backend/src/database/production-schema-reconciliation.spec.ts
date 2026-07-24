@@ -10,6 +10,7 @@ import { ClientReadinessFoundations1784419200001 } from "./migrations/2026071900
 import { AdminOperationsNotifications1784505600001 } from "./migrations/202607200001-admin-operations-notifications";
 import { ClientTodayWorkflow1784592000001 } from "./migrations/202607210001-client-today-workflow";
 import { ServiceSuspension1784764800001 } from "./migrations/202607230001-service-suspension";
+import { ClientExperienceReadiness1784851200001 } from "./migrations/202607240001-client-experience-readiness";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -147,6 +148,7 @@ describe("deployed legacy schema reproduction", () => {
     await new AdminOperationsNotifications1784505600001().up(queryRunner);
     await new ClientTodayWorkflow1784592000001().up(queryRunner);
     await new ServiceSuspension1784764800001().up(queryRunner);
+    await new ClientExperienceReadiness1784851200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
@@ -208,6 +210,7 @@ describe("deployed legacy schema reproduction", () => {
     await new AdminOperationsNotifications1784505600001().up(queryRunner);
     await new ClientTodayWorkflow1784592000001().up(queryRunner);
     await new ServiceSuspension1784764800001().up(queryRunner);
+    await new ClientExperienceReadiness1784851200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({

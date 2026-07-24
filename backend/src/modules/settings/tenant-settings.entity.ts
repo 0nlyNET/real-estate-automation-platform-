@@ -19,6 +19,9 @@ export class TenantSettings extends BaseEntity {
   @Column({ name: "booking_link", type: "varchar", nullable: true })
   bookingLink?: string;
 
+  @Column({ name: 'booking_link_verified_at', type: 'timestamptz', nullable: true })
+  bookingLinkVerifiedAt?: Date | null;
+
   @Column({ name: "automations_enabled", type: "bool", default: false })
   automationsEnabled!: boolean;
 
@@ -50,6 +53,9 @@ export class TenantSettings extends BaseEntity {
     nullable: true,
   })
   intakeApiKeyRotatedAt?: Date | null;
+
+  @Column({ name: 'intake_last_received_at', type: 'timestamptz', nullable: true })
+  intakeLastReceivedAt?: Date | null;
 
   @Column({ name: "webhook_url", type: "varchar", nullable: true })
   webhookUrl?: string;

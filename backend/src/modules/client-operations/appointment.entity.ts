@@ -64,6 +64,15 @@ export class Appointment extends BaseEntity {
   @Column({ name: 'confirmation_status', type: 'varchar', length: 30, default: 'pending' })
   confirmationStatus!: 'pending' | 'confirmed' | 'declined';
 
+  @Column({ name: 'confirmation_task_created_at', type: 'timestamptz', nullable: true })
+  confirmationTaskCreatedAt?: Date | null;
+
+  @Column({ name: 'reminder_status', type: 'varchar', length: 30, default: 'scheduled' })
+  reminderStatus!: 'scheduled' | 'sent' | 'cancelled';
+
+  @Column({ name: 'reminder_sent_at', type: 'timestamptz', nullable: true })
+  reminderSentAt?: Date | null;
+
   @Column({ name: 'follow_up_status', type: 'varchar', length: 30, default: 'not_due' })
   followUpStatus!: 'not_due' | 'due' | 'completed';
 

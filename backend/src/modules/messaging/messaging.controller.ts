@@ -20,7 +20,9 @@ import { ComplianceService } from '../compliance/compliance.service';
 import { Lead } from '../leads/lead.entity';
 import { UserRole } from '../../common/rbac';
 import { RolesGuard, RequireRole } from '../../common/guards/roles.guard';
-import { SendMessageDto } from './messaging.dto';
+import { SendBookingLinkDto, SendMessageDto } from './messaging.dto';
+import { SettingsService } from '../settings/settings.service';
+import { isSafeBookingUrl } from '../../common/booking-link';
 
 @UseGuards(JwtAuthGuard)
 @Controller('messaging')
@@ -29,6 +31,7 @@ export class MessagingController {
     private readonly messagingService: MessagingService,
     private readonly inboxSendService: InboxSendService,
     private readonly complianceService: ComplianceService,
+    private readonly settingsService: SettingsService,
     @InjectRepository(Lead)
     private readonly leadRepository: Repository<Lead>,
   ) {}
@@ -94,6 +97,21 @@ export class MessagingController {
     }
 
     return this.inboxSendService.sendSmsToLead(tenantId, leadId, messageBody);
+  }
+
+  @Post('send-booking-link')
+  @UseGuards(RolesGuard)
+  @RequireRole('tc')
+  async sendBookingLink(@Req() req: any, @Body() body: SendBookingLinkDto) {
+    const tenantId = req.user?.tenantId;
+    const lead = await this.leadRepository.findOne({ where: { id: body.leadId, tenantId } });
+    if (!lead) throw new ForbiddenException('Lead not found');
+    if (!lead.phone) throw new BadRequestException('Add a phone number before sending the booking link');
+    const role = req.user?.role as UserRole;
+    if (!['owner', 'admin'].includes(role) && lead.assignedToUserId !== req.user?.sub) throw new ForbiddenException('Lead is not assigned to this user');
+    const settings = await this.settingsService.getTenantSettings(tenantId);
+    if (!settings || !isSafeBookingUrl(settings.bookingLink) || !settings.bookingLinkVerifiedAt) throw new ConflictException('Test and confirm the workspace booking link before sending it');
+    return this.inboxSendService.sendSmsToLead(tenantId, lead.id, `Choose a convenient appointment time here: ${settings.bookingLink}`);
   }
 
 }

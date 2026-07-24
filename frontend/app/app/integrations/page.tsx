@@ -577,6 +577,13 @@ export default function IntegrationsPage() {
       title="Connections"
       subtitle="Connect each account once. We show what is ready and test everything before launch."
     >
+      <Alert>
+        <ShieldCheck />
+        <AlertTitle>Messaging is managed by RealtyTechAI</AlertTitle>
+        <AlertDescription>
+          You do not need to connect Twilio or SendGrid. RealtyTechAI applies your approved brokerage identity, sender details, consent rules, and message history automatically.
+        </AlertDescription>
+      </Alert>
       {!canManage ? (
         <Alert>
           <ShieldCheck />
@@ -1037,7 +1044,6 @@ export default function IntegrationsPage() {
             ) : null}
           </CardContent>
         </Card>
-
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div className="space-y-1">

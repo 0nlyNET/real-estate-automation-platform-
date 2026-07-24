@@ -35,4 +35,11 @@ export class SettingsController {
   rotateIntakeKey(@Req() req: any) {
     return this.settingsService.rotateIntakeKey(req.user.tenantId);
   }
+
+  @UseGuards(AuthGuard("jwt"), RolesGuard)
+  @RequireRole("admin")
+  @Post("booking-link/verify")
+  verifyBookingLink(@Req() req: any) {
+    return this.settingsService.verifyBookingLink(req.user.tenantId);
+  }
 }

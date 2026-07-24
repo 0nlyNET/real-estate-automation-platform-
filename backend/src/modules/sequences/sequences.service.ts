@@ -15,6 +15,7 @@ import { SequenceStep } from './sequence-step.entity';
 import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { Message } from '../messaging/message.entity';
+import { isSafeBookingUrl } from '../../common/booking-link';
 import { Tenant } from '../tenants/tenant.entity';
 import { formatHHMM, isWithinQuietHours, nextAllowedSendTime } from '../../common/time';
 import { ComplianceService } from '../compliance/compliance.service';
@@ -555,10 +556,24 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
       where: { tenantId: enrollment.tenantId },
     });
     const tenant = lead.tenant || (await this.tenantRepository.findOne({ where: { id: enrollment.tenantId } }));
+    if (/\{\{\s*bookingLink\s*\}\}/i.test(step.template)) {
+      const bookingLink = String(settings?.bookingLink || '').trim();
+      const code = !isSafeBookingUrl(bookingLink) ? 'MISSING_BOOKING_LINK' : !settings?.bookingLinkVerifiedAt ? 'UNVERIFIED_BOOKING_LINK' : null;
+      if (code) {
+        const reason = code === 'MISSING_BOOKING_LINK' ? 'The approved message requires a valid booking link' : 'The booking link must be tested and confirmed before it can be sent';
+        await this.createSkippedMessage(lead, step, enrollment, code, reason);
+        enrollment.status = 'paused';
+        enrollment.nextRunAt = undefined;
+        enrollment.lockedAt = null;
+        enrollment.lockedBy = null;
+        await this.enrollmentRepository.save(enrollment);
+        return;
+      }
+    }
     const body = renderTemplate(step.template, {
       leadName: lead.fullName || '',
       firstName: (lead.fullName || '').split(/\s+/)[0] || '',
-      bookingLink: settings?.bookingLink || tenant?.bookingLink || '',
+      bookingLink: settings?.bookingLink || '',
     });
     const scheduledAt = await this.scheduledForQuietHours(enrollment.tenantId, settings, tenant);
     const idempotencyKey = `sequence:${enrollment.id}:${stepIndex}:${step.channel}:v${step.templateVersion}`;

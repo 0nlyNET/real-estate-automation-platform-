@@ -242,7 +242,7 @@ export default function OnboardingPage() {
               {step === 2 ? (
                 <>
                   <div className="grid gap-3 md:grid-cols-3">
-                    <Choice label="Text messages" checked={data.smsEnabled} onChange={(value) => setData((current) => ({ ...current, smsEnabled: value }))} description="Uses the Twilio account you connect" />
+                    <Choice label="Text messages" checked={data.smsEnabled} onChange={(value) => setData((current) => ({ ...current, smsEnabled: value }))} description="RealtyTechAI manages delivery using your approved brokerage identity" />
                     <Choice label="Email" checked={data.emailEnabled} onChange={(value) => setData((current) => ({ ...current, emailEnabled: value }))} description="Uses the sending account you connect" />
                     <Choice label="Appointment booking" checked={data.bookingEnabled} onChange={(value) => setData((current) => ({ ...current, bookingEnabled: value }))} description="Sends leads to your calendar link" />
                   </div>
@@ -274,7 +274,7 @@ export default function OnboardingPage() {
                   </div>
                   <Card className="border-primary/30 bg-primary/5">
                     <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your accounts</div><p className="mt-1 text-sm text-muted-foreground">Connect website intake, Twilio, email, and Facebook in one guided connections page. Secrets stay encrypted.</p></div></div>
+                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources</div><p className="mt-1 text-sm text-muted-foreground">Connect your website form and supported lead sources. RealtyTechAI manages SMS and email delivery for you.</p></div></div>
                       <Button asChild type="button"><Link href="/app/integrations">Open connections</Link></Button>
                     </CardContent>
                   </Card>

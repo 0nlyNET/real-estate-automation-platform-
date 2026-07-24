@@ -9,3 +9,8 @@ export class SendMessageDto {
   @MaxLength(1600)
   body!: string;
 }
+
+export class SendBookingLinkDto {
+  @IsUUID()
+  leadId!: string;
+}

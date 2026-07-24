@@ -14,6 +14,7 @@ import { Credential } from '../settings/credential.entity';
 import { SequencesModule } from '../sequences/sequences.module';
 import { ComplianceModule } from '../compliance/compliance.module';
 import { ClientOperationsModule } from '../client-operations/client-operations.module';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { ClientOperationsModule } from '../client-operations/client-operations.m
     SequencesModule,
     ComplianceModule,
     ClientOperationsModule,
+    SettingsModule,
   ],
   controllers: [MessagingController],
   providers: [MessagingService, InboxSendService],

@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { apiFetch } from "@/lib/api"
 import { fetchMe } from "@/lib/me"
-import { CheckCircle2, Download, ShieldAlert } from "lucide-react"
+import { CheckCircle2, Download, ExternalLink, ShieldAlert } from "lucide-react"
 
 type WorkspaceSettings = {
   tenantId: string
@@ -18,6 +18,8 @@ type WorkspaceSettings = {
   quietHoursStart: string
   quietHoursEnd: string
   bookingLink: string
+  bookingLinkVerifiedAt?: string | null
+  bookingLinkStatus?: "missing" | "test_required" | "verified"
   automationsEnabled: boolean
 }
 
@@ -35,6 +37,8 @@ export default function SettingsPage() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("")
   const [deletionRequested, setDeletionRequested] = useState(false)
   const [deletionNotificationSent, setDeletionNotificationSent] = useState(false)
+  const [bookingTestOpened, setBookingTestOpened] = useState(false)
+  const [savedBookingLink, setSavedBookingLink] = useState("")
 
   useEffect(() => {
     let active = true
@@ -45,6 +49,7 @@ export default function SettingsPage() {
       .then(([workspaceSettings, me]) => {
         if (!active) return
         setSettings(workspaceSettings)
+        setSavedBookingLink(workspaceSettings.bookingLink || "")
         setCanManage(me?.role === "owner" || me?.role === "admin")
       })
       .catch((loadError: unknown) => {
@@ -73,9 +78,40 @@ export default function SettingsPage() {
         },
       })
       setSettings(updated)
+      setSavedBookingLink(updated.bookingLink || "")
       setSaved(true)
     } catch (saveError: unknown) {
       setError(message(saveError, "Settings could not be saved"))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  function openBookingTest() {
+    const value = settings?.bookingLink?.trim()
+    if (!value) return setError("Enter and save a booking link before testing it")
+    try {
+      const url = new URL(value)
+      if (url.protocol !== "https:") throw new Error("invalid")
+      window.open(url.toString(), "_blank", "noopener,noreferrer")
+      setBookingTestOpened(true)
+      setError("")
+    } catch {
+      setError("Booking link must be a full HTTPS URL")
+    }
+  }
+
+  async function confirmBookingLink() {
+    setBusy("booking")
+    setError("")
+    try {
+      const updated = await apiFetch<WorkspaceSettings>("/settings/booking-link/verify", { method: "POST" })
+      setSettings(updated)
+      setSavedBookingLink(updated.bookingLink || "")
+      setBookingTestOpened(false)
+      setSaved(true)
+    } catch (verifyError: unknown) {
+      setError(message(verifyError, "Booking link could not be confirmed"))
     } finally {
       setBusy(null)
     }
@@ -213,7 +249,7 @@ export default function SettingsPage() {
               value={settings?.bookingLink || ""}
               onChange={(event) =>
                 setSettings((current) =>
-                  current ? { ...current, bookingLink: event.target.value } : current,
+                  current ? { ...current, bookingLink: event.target.value, bookingLinkStatus: event.target.value ? "test_required" : "missing", bookingLinkVerifiedAt: null } : current,
                 )
               }
               placeholder="https://calendly.com/your-team/consultation"
@@ -222,6 +258,8 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground">
               This link can be inserted into lead follow-ups so prospects can book directly.
             </p>
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm"><div className="font-medium">Message preview</div><p className="mt-1 text-muted-foreground">Choose a convenient appointment time here: {settings?.bookingLink || "[your booking link]"}</p></div>
+            <div className="flex flex-wrap items-center gap-2"><Button type="button" variant="outline" onClick={openBookingTest} disabled={!canManage || !settings?.bookingLink}><ExternalLink /> Open test link</Button><Button type="button" onClick={() => void confirmBookingLink()} disabled={!canManage || !bookingTestOpened || settings?.bookingLink !== savedBookingLink || busy === "booking"}><CheckCircle2 />{busy === "booking" ? "Confirming..." : "I confirmed the correct calendar"}</Button><span className="text-xs text-muted-foreground">{settings?.bookingLinkStatus === "verified" ? "Verified" : settings?.bookingLink !== savedBookingLink ? "Save this link before confirming it" : settings?.bookingLink ? "Test and confirm before this link can be sent" : "Booking link not configured"}</span></div>
           </div>
           <div className="flex items-center justify-between gap-4 rounded-lg border p-4">
             <div>

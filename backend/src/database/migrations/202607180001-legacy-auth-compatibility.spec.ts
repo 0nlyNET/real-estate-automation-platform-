@@ -5,6 +5,7 @@ import { databaseEntities } from "../entities";
 import { Tenant } from "../../modules/tenants/tenant.entity";
 import { User } from "../../modules/users/user.entity";
 import { LegacyAuthCompatibility1784332800001 } from "./202607180001-legacy-auth-compatibility";
+import { ClientExperienceReadiness1784851200001 } from "./202607240001-client-experience-readiness";
 import { TenantSettingsIntakeKeys1784332800002 } from "./202607180002-tenant-settings-intake-keys";
 import { ProductionSchemaReconciliation1784332800004 } from "./202607180004-production-schema-reconciliation";
 import { ClientReadinessFoundations1784419200001 } from "./202607190001-client-readiness-foundations";
@@ -85,6 +86,7 @@ describe("legacy auth compatibility migration", () => {
       entities: [...databaseEntities],
       migrations: [
         LegacyAuthCompatibility1784332800001,
+        ClientExperienceReadiness1784851200001,
         TenantSettingsIntakeKeys1784332800002,
         ProductionSchemaReconciliation1784332800004,
         ClientReadinessFoundations1784419200001,

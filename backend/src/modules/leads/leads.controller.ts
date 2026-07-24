@@ -45,7 +45,9 @@ export class LeadsController {
       intakeKey,
     );
     if (!valid) throw new UnauthorizedException("Invalid intake key");
-    return this.leadsService.intake(tenantId, payload);
+    const lead = await this.leadsService.intake(tenantId, payload);
+    await this.settingsService.markIntakeReceived(tenantId);
+    return lead;
   }
 
   @UseGuards(JwtAuthGuard)

@@ -514,6 +514,9 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
         source,
         calendarSource: dto.calendarSource?.trim() || 'RealtyTechAI',
         confirmationStatus: 'pending',
+        confirmationTaskCreatedAt: new Date(),
+        reminderStatus: 'scheduled',
+        reminderSentAt: null,
         followUpStatus: 'not_due',
         notes: dto.notes?.trim() || null,
         externalEventId: dto.externalEventId?.trim() || null,
@@ -561,11 +564,11 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     const appointment = await query.getOne();
     if (!appointment) throw new NotFoundException('Appointment not found');
     const previousStatus = appointment.status;
+    const previousStartsAt = appointment.startsAt;
+    const previousDurationMs = Math.max(appointment.endsAt.getTime() - appointment.startsAt.getTime(), 30 * 60 * 1000);
     const startsAt = dto.startsAt ? new Date(dto.startsAt) : appointment.startsAt;
     let endsAt = dto.endsAt ? new Date(dto.endsAt) : appointment.endsAt;
-    if (dto.startsAt && !dto.endsAt && appointment.endsAt <= startsAt) {
-      endsAt = new Date(startsAt.getTime() + 30 * 60 * 1000);
-    }
+    if (dto.startsAt && !dto.endsAt) endsAt = new Date(startsAt.getTime() + previousDurationMs);
     if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || endsAt <= startsAt) {
       throw new BadRequestException('Appointment end time must be after its start time');
     }
@@ -575,6 +578,18 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     if (dto.confirmationStatus) appointment.confirmationStatus = dto.confirmationStatus;
     if (dto.followUpStatus) appointment.followUpStatus = dto.followUpStatus;
     if (dto.notes !== undefined) appointment.notes = dto.notes.trim() || null;
+    const wasRescheduled = startsAt.getTime() !== previousStartsAt.getTime();
+    if (wasRescheduled) {
+      appointment.status = 'scheduled';
+      appointment.confirmationStatus = 'pending';
+      appointment.confirmationTaskCreatedAt = new Date();
+      appointment.reminderStatus = 'scheduled';
+      appointment.reminderSentAt = null;
+    }
+    if (['completed', 'cancelled', 'no_show'].includes(appointment.status)) {
+      appointment.followUpStatus = dto.followUpStatus || (appointment.followUpStatus === 'completed' ? 'completed' : 'due');
+      appointment.reminderStatus = 'cancelled';
+    }
     const saved = await this.appointments.save(appointment);
     if (['completed', 'cancelled', 'no_show'].includes(saved.status)) {
       saved.lead.nextFollowUpAt = new Date();
@@ -591,21 +606,23 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
         metadata: { appointmentId: saved.id, status: saved.status },
       }),
     );
-    if (saved.status !== previousStatus) {
+    if (saved.status !== previousStatus || wasRescheduled) {
       const cancelled = saved.status === 'cancelled';
       await this.notifications.createForTenant({
         tenantId: saved.tenantId,
         assignedUserId: saved.assignedUserId,
-        eventType: cancelled ? 'appointment.cancelled' : 'appointment.updated',
+        eventType: cancelled ? 'appointment.cancelled' : wasRescheduled ? 'appointment.rescheduled' : 'appointment.updated',
         category: 'leads',
         severity: cancelled ? 'warning' : 'success',
         title: cancelled
           ? `Appointment with ${saved.lead.fullName} was cancelled`
+          : wasRescheduled
+            ? `Appointment with ${saved.lead.fullName} was rescheduled`
           : `Appointment with ${saved.lead.fullName} is ${saved.status}`,
         message: cancelled
           ? 'Open the lead to agree on the next step.'
           : 'The appointment record and Today view have been updated.',
-        deduplicationKey: `appointment-status:${saved.id}:${saved.status}`,
+        deduplicationKey: wasRescheduled ? `appointment-rescheduled:${saved.id}:${saved.startsAt.toISOString()}` : `appointment-status:${saved.id}:${saved.status}`,
         actionUrl: `/app/appointments?appointmentId=${saved.id}`,
         entityType: 'appointment',
         entityId: saved.id,
@@ -913,8 +930,15 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
       .leftJoinAndSelect('appointment.lead', 'lead')
       .innerJoin('appointment.tenant', 'tenant')
       .where('appointment.startsAt BETWEEN :now AND :tomorrow', { now, tomorrow })
-      .andWhere('appointment.status = :scheduled', { scheduled: 'scheduled' })
-      .andWhere('appointment.confirmationStatus = :pending', { pending: 'pending' })
+      .andWhere('appointment.status IN (:...appointmentStatuses)', {
+        appointmentStatuses: ['scheduled', 'confirmed'],
+      })
+      .andWhere('appointment.reminderStatus = :reminderStatus', {
+        reminderStatus: 'scheduled',
+      })
+      .andWhere('lead.stage NOT IN (:...finishedStages)', {
+        finishedStages: ['closed', 'lost'],
+      })
       .andWhere('tenant.lifecycleStatus = :activeLifecycle', {
         activeLifecycle: 'ACTIVE',
       })
@@ -940,16 +964,19 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
       await this.notifications.createForTenant({
         tenantId: appointment.tenantId,
         assignedUserId: appointment.assignedUserId,
-        eventType: 'appointment.confirmation_due',
+        eventType: 'appointment.reminder_due',
         category: 'tasks',
         severity: 'warning',
         title: `Confirm the appointment with ${appointment.lead.fullName}`,
         message: 'The appointment is within 24 hours and still needs confirmation.',
-        deduplicationKey: `appointment-confirmation:${appointment.id}`,
+        deduplicationKey: `appointment-reminder:${appointment.id}:${appointment.startsAt.toISOString()}`,
         actionUrl: `/app/appointments?appointmentId=${appointment.id}`,
         entityType: 'appointment',
         entityId: appointment.id,
       });
+      appointment.reminderStatus = 'sent';
+      appointment.reminderSentAt = new Date();
+      await this.appointments.save(appointment);
     }
     return { followUps: dueLeads.length, appointments: appointments.length };
   }
