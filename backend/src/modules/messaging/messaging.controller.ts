@@ -91,12 +91,46 @@ export class MessagingController {
       throw new ForbiddenException('Lead is not assigned to this user');
     }
 
-    if (lead.phone) {
-      const optedOut = await this.complianceService.isOptedOut(tenantId, 'sms', lead.phone);
-      if (optedOut) throw new ConflictException('Recipient has opted out of SMS');
+    const channel = body.channel || (lead.phone ? 'sms' : 'email');
+    const recipient = channel === 'sms' ? lead.phone : lead.email;
+    if (!recipient) {
+      throw new ConflictException(
+        channel === 'sms'
+          ? 'Lead does not have a phone number'
+          : 'Lead does not have an email address',
+      );
+    }
+    const optedOut = await this.complianceService.isOptedOut(
+      tenantId,
+      channel,
+      recipient,
+    );
+    if (optedOut) {
+      throw new ConflictException(
+        channel === 'sms'
+          ? 'Recipient has opted out of SMS'
+          : 'Recipient has unsubscribed from email',
+      );
     }
 
-    return this.inboxSendService.sendSmsToLead(tenantId, leadId, messageBody);
+    const actor = {
+      userId: req.user?.sub,
+      email: req.user?.email,
+      role,
+    };
+    return channel === 'email'
+      ? this.inboxSendService.queueEmailToLead(
+          tenantId,
+          leadId,
+          messageBody,
+          actor,
+        )
+      : this.inboxSendService.sendSmsToLead(
+          tenantId,
+          leadId,
+          messageBody,
+          actor,
+        );
   }
 
   @Post('send-booking-link')
@@ -111,7 +145,16 @@ export class MessagingController {
     if (!['owner', 'admin'].includes(role) && lead.assignedToUserId !== req.user?.sub) throw new ForbiddenException('Lead is not assigned to this user');
     const settings = await this.settingsService.getTenantSettings(tenantId);
     if (!settings || !isSafeBookingUrl(settings.bookingLink) || !settings.bookingLinkVerifiedAt) throw new ConflictException('Test and confirm the workspace booking link before sending it');
-    return this.inboxSendService.sendSmsToLead(tenantId, lead.id, `Choose a convenient appointment time here: ${settings.bookingLink}`);
+    return this.inboxSendService.sendSmsToLead(
+      tenantId,
+      lead.id,
+      `Choose a convenient appointment time here: ${settings.bookingLink}`,
+      {
+        userId: req.user?.sub,
+        email: req.user?.email,
+        role,
+      },
+    );
   }
 
 }

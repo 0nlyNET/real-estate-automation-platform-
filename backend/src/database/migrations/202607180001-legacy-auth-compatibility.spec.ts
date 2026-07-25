@@ -12,6 +12,7 @@ import { ClientReadinessFoundations1784419200001 } from "./202607190001-client-r
 import { AdminOperationsNotifications1784505600001 } from "./202607200001-admin-operations-notifications";
 import { ClientTodayWorkflow1784592000001 } from "./202607210001-client-today-workflow";
 import { ServiceSuspension1784764800001 } from "./202607230001-service-suspension";
+import { ControlledAiLeadAgent1784937600001 } from "./202607250001-controlled-ai-lead-agent";
 import { TenantSettings } from "../../modules/settings/tenant-settings.entity";
 
 function memoryDatabase() {
@@ -93,6 +94,7 @@ describe("legacy auth compatibility migration", () => {
         AdminOperationsNotifications1784505600001,
         ClientTodayWorkflow1784592000001,
         ServiceSuspension1784764800001,
+        ControlledAiLeadAgent1784937600001,
       ],
       migrationsRun: true,
       migrationsTableName: "app_migrations",

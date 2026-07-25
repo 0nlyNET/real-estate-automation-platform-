@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch"
 import { apiFetch } from "@/lib/api"
 import { fetchMe } from "@/lib/me"
 import { CheckCircle2, Download, ExternalLink, ShieldAlert } from "lucide-react"
+import { AiAssistantSettings } from "@/components/settings/ai-assistant-settings"
 
 type WorkspaceSettings = {
   tenantId: string
@@ -289,6 +290,8 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      <AiAssistantSettings canManage={canManage} />
 
       <Card>
         <CardHeader>

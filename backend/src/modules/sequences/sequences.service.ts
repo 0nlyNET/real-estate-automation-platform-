@@ -589,6 +589,7 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
           scheduledAt,
           nextAttemptAt: scheduledAt || new Date(),
           idempotencyKey,
+          authorship: 'template',
         }),
       );
     } catch (error: any) {
@@ -630,6 +631,7 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
           sanitizedErrorMessage: reason,
           lastError: reason,
           idempotencyKey: key,
+          authorship: 'template',
         }),
       );
     } catch (error: any) {

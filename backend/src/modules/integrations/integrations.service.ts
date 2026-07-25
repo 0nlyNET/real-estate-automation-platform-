@@ -318,9 +318,13 @@ export class IntegrationsService {
       } else if (provider === "sendgrid") {
         display = {
           fromEmail: parsed?.fromEmail || null,
+          inboundAddress: parsed?.inboundAddress || null,
           apiKey: parsed?.apiKey
             ? `${String(parsed.apiKey).slice(0, 6)}...`
             : null,
+          inboundWebhookUrl:
+            String(process.env.SENDGRID_INBOUND_WEBHOOK_URL || "").trim() ||
+            null,
         };
       } else if (provider === "facebook_lead_ads") {
         display = {
@@ -467,23 +471,38 @@ export class IntegrationsService {
 
   async connectSendGrid(
     tenantId: string,
-    dto: { apiKey: string; fromEmail?: string },
+    dto: { apiKey: string; fromEmail?: string; inboundAddress?: string },
   ) {
     const apiKey = dto.apiKey?.trim();
     const fromEmail = dto.fromEmail?.trim() || null;
+    const inboundAddress = String(dto.inboundAddress || "")
+      .trim()
+      .toLowerCase();
 
     if (!apiKey) {
       throw new BadRequestException("Missing SendGrid API key");
     }
+    if (
+      inboundAddress &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(inboundAddress)
+    ) {
+      throw new BadRequestException("SendGrid inbound address is invalid");
+    }
 
-    await this.upsertEncrypted(tenantId, "sendgrid", {
-      connected: false,
-      configured: true,
-      apiKey,
-      fromEmail,
-      lastSync: nowIso(),
-      error: null,
-    });
+    await this.upsertEncrypted(
+      tenantId,
+      "sendgrid",
+      {
+        connected: false,
+        configured: true,
+        apiKey,
+        fromEmail,
+        inboundAddress: inboundAddress || null,
+        lastSync: nowIso(),
+        error: null,
+      },
+      inboundAddress || null,
+    );
 
     return { ok: true };
   }

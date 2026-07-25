@@ -35,6 +35,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { ClientOperationsModule } from './modules/client-operations/client-operations.module';
 import { RealtorComModule } from './modules/realtor-com/realtor-com.module';
 import { ServiceControlModule } from './modules/service-control/service-control.module';
+import { AiModule } from './modules/ai/ai.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { ServiceControlModule } from './modules/service-control/service-control.
     OnboardingModule,
     NotificationsModule,
     ClientOperationsModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [

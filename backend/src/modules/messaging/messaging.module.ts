@@ -15,6 +15,7 @@ import { SequencesModule } from '../sequences/sequences.module';
 import { ComplianceModule } from '../compliance/compliance.module';
 import { ClientOperationsModule } from '../client-operations/client-operations.module';
 import { SettingsModule } from '../settings/settings.module';
+import { AiModule } from '../ai/ai.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { SettingsModule } from '../settings/settings.module';
     ComplianceModule,
     ClientOperationsModule,
     SettingsModule,
+    AiModule,
   ],
   controllers: [MessagingController],
   providers: [MessagingService, InboxSendService],

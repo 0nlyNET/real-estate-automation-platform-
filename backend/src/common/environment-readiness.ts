@@ -143,13 +143,27 @@ export function environmentReadiness() {
       twilioStatus: present('TWILIO_STATUS_CALLBACK_URL')
         ? 'configured'
         : 'tenant_unavailable',
+      sendgridInbound:
+        present('SENDGRID_INBOUND_WEBHOOK_URL') &&
+        present('SENDGRID_INBOUND_USERNAME') &&
+        present('SENDGRID_INBOUND_PASSWORD')
+          ? 'configured'
+          : 'tenant_unavailable',
       meta: present('FACEBOOK_WEBHOOK_URL') ? 'configured' : 'tenant_unavailable',
+    },
+    aiProvider: {
+      status: present('OPENAI_API_KEY') ? 'configured' : 'not_configured',
+      model: present('OPENAI_API_KEY')
+        ? String(process.env.OPENAI_MODEL || 'gpt-5.6')
+        : null,
+      defaultWorkspaceMode: 'human_only',
     },
     workers: {
       status: 'up',
       mode: 'in_process',
       message: { intervalMs: 5_000, claimLimit: 25, leaseSeconds: 120 },
       sequence: { intervalMs: 10_000, claimLimit: 25, leaseSeconds: 120 },
+      ai: { intervalMs: 3_000, claimLimit: 10, leaseSeconds: 120 },
       globalAutomationPaused: process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true',
     },
   };

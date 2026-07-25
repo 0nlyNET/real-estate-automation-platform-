@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { AiConversationControls } from "@/components/ai/conversation-controls"
 
 type ThreadRow = {
   leadId: string | null
@@ -23,14 +24,17 @@ type ThreadRow = {
   blocker?: string | null
   conversationSummary?: string | null
   talkingPoints?: string[]
+  channel?: "sms" | "email"
 }
 
 type Msg = {
   id: string
   direction: "inbound" | "outbound"
+  channel: "sms" | "email"
   body: string
   createdAt: string
-  status: "created" | "queued" | "sending" | "provider_accepted" | "sent" | "delivered" | "failed" | "received" | "skipped" | "canceled"
+  status: "created" | "queued" | "sending" | "provider_accepted" | "sent" | "delivered" | "failed" | "received" | "draft" | "skipped" | "canceled"
+  authorship?: "ai" | "human" | "template" | "system"
 }
 
 type Enrollment = { id: string; status: "active" | "paused" | "stopped" | "completed"; sequence?: { name: string } | null }
@@ -52,6 +56,7 @@ export default function InboxPage() {
   const [messages, setMessages] = useState<Msg[]>([])
   const [enrollments, setEnrollments] = useState<Enrollment[]>([])
   const [draft, setDraft] = useState("")
+  const [sendChannel, setSendChannel] = useState<"sms" | "email">("sms")
   const [busy, setBusy] = useState(false)
 
   const loadThreads = useCallback(async () => {
@@ -85,6 +90,10 @@ export default function InboxPage() {
         apiFetch<Enrollment[]>(`/leads/${leadId}/enrollments`),
       ])
       setMessages(Array.isArray(messageRows) ? messageRows : [])
+      const latest = Array.isArray(messageRows)
+        ? messageRows[messageRows.length - 1]
+        : null
+      setSendChannel(latest?.channel || "sms")
       setEnrollments(Array.isArray(enrollmentRows) ? enrollmentRows : [])
     } catch (cause) {
       setErr(cause instanceof Error ? cause.message : "The conversation could not be loaded")
@@ -107,8 +116,8 @@ export default function InboxPage() {
     if (!activeLeadId || !draft.trim()) return
     setBusy(true); setErr(""); setNotice("")
     try {
-      await apiFetch("/messaging/send", { method: "POST", body: { leadId: activeLeadId, body: draft.trim() } })
-      setDraft(""); setNotice("Message sent.")
+      await apiFetch("/messaging/send", { method: "POST", body: { leadId: activeLeadId, body: draft.trim(), channel: sendChannel } })
+      setDraft(""); setNotice(sendChannel === "email" ? "Email queued." : "Message sent.")
       await Promise.all([loadConversation(activeLeadId), loadThreads()])
     } catch (cause) {
       setErr(cause instanceof Error ? cause.message : "The message could not be sent")
@@ -157,15 +166,26 @@ export default function InboxPage() {
         <div className="space-y-4">
           {activeThread ? <Card><CardContent className="p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{activeThread.leadName}</h2><Badge variant="outline">{activeThread.readiness?.replaceAll("_", " ") || "qualifying"}</Badge></div><p className="mt-2 text-sm">{activeThread.conversationSummary || activeThread.temperatureReason || "Qualification is still in progress."}</p>{activeThread.blocker ? <p className="mt-1 text-sm text-muted-foreground">Current blocker: {activeThread.blocker}</p> : null}</div><div className="flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/leads/${activeThread.leadId}`}><UserRoundCheck className="mr-2 h-4 w-4" />Lead details</Link></Button><Button size="sm" variant="outline" disabled={busy} onClick={() => void requestPersonalFollowUp()}><UserRoundCheck className="mr-2 h-4 w-4" />Add to Today</Button>{currentEnrollment ? currentEnrollment.status === "active" ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void changeFollowUp("pause")}><Pause className="mr-2 h-4 w-4" />Pause follow-up</Button> : <Button size="sm" variant="outline" disabled={busy} onClick={() => void changeFollowUp("resume")}><Play className="mr-2 h-4 w-4" />Resume follow-up</Button> : null}</div></div>{activeThread.talkingPoints?.length ? <details className="mt-3 rounded-lg bg-muted p-3 text-sm"><summary className="cursor-pointer font-medium">Suggested talking points</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{activeThread.talkingPoints.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}</CardContent></Card> : null}
 
+          {activeLeadId ? (
+            <AiConversationControls
+              leadId={activeLeadId}
+              onChanged={() =>
+                Promise.all([loadConversation(activeLeadId), loadThreads()]).then(
+                  () => undefined,
+                )
+              }
+            />
+          ) : null}
+
           <Card>
             <CardHeader><CardTitle>Messages</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <div className="h-[420px] space-y-2 overflow-y-auto rounded-lg border p-3">
-                {messages.map((message) => <div key={message.id} className={`max-w-[88%] rounded-lg px-3 py-2 text-sm ${message.direction === "outbound" ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}><div>{message.body}</div><div className={`mt-1 text-[11px] ${message.direction === "outbound" ? "text-primary-foreground/75" : "text-muted-foreground"}`}>{statusLabel(message.status)} · {new Date(message.createdAt).toLocaleString()}</div>{message.status === "failed" ? <div className="mt-1 text-xs font-medium">This message did not send. Try again or contact the lead another way.</div> : null}</div>)}
+                {messages.map((message) => <div key={message.id} className={`max-w-[88%] rounded-lg px-3 py-2 text-sm ${message.direction === "outbound" ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}><div>{message.body}</div><div className={`mt-1 text-[11px] ${message.direction === "outbound" ? "text-primary-foreground/75" : "text-muted-foreground"}`}>{message.direction === "outbound" ? `${message.authorship === "ai" ? "AI-generated" : message.authorship === "template" ? "Approved automation" : "Human-written"} · ` : ""}{statusLabel(message.status)} · {new Date(message.createdAt).toLocaleString()}</div>{message.status === "failed" ? <div className="mt-1 text-xs font-medium">This message did not send. Try again or contact the lead another way.</div> : null}</div>)}
                 {!messages.length ? <div className="p-6 text-center text-sm text-muted-foreground">Choose a conversation to see its messages.</div> : null}
               </div>
-              <div className="flex gap-2"><Input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="Write a text message…" aria-label="Message" /><Button disabled={!activeLeadId || !draft.trim() || busy} onClick={() => void send()}>{busy ? "Sending…" : "Send"}</Button></div>
-              <p className="text-xs text-muted-foreground">Manual replies are sent as text messages. Email replies still appear in the same history.</p>
+              <div className="flex gap-2"><select aria-label="Reply channel" className="h-10 rounded-md border bg-background px-3 text-sm" value={sendChannel} onChange={(event) => setSendChannel(event.target.value as "sms" | "email")}><option value="sms" disabled={!activeThread?.leadPhone}>Text</option><option value="email" disabled={!activeThread?.leadEmail}>Email</option></select><Input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder={sendChannel === "email" ? "Write an email reply…" : "Write a text message…"} aria-label="Message" /><Button disabled={!activeLeadId || !draft.trim() || busy || (sendChannel === "sms" ? !activeThread?.leadPhone : !activeThread?.leadEmail)} onClick={() => void send()}>{busy ? "Sending…" : "Send"}</Button></div>
+              <p className="text-xs text-muted-foreground">Manual replies use the selected channel and switch the conversation to human handling.</p>
             </CardContent>
           </Card>
         </div>

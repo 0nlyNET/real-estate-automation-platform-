@@ -97,6 +97,7 @@ describe('Twilio inbound webhooks', () => {
       compliance as any,
       sequences as any,
       { intake: jest.fn() } as any,
+      { acceptInbound: jest.fn().mockResolvedValue({ status: 'queued' }) } as any,
     );
     const signature = validSignature(body);
 
@@ -152,6 +153,7 @@ describe('Twilio inbound webhooks', () => {
       compliance as any,
       sequences as any,
       { intake: jest.fn() } as any,
+      { acceptInbound: jest.fn().mockResolvedValue({ status: 'queued' }) } as any,
     );
 
     await expect(
@@ -278,6 +280,7 @@ describe('Facebook Lead Ads webhooks', () => {
       {} as any,
       {} as any,
       { intake } as any,
+      { acceptInbound: jest.fn() } as any,
     );
   }
 

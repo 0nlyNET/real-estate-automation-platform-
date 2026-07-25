@@ -15,6 +15,7 @@ import { OperationsTask } from '../operations/operations-task.entity';
 import { ProspectApplication } from '../public/prospect-application.entity';
 import { OperationalRemindersService } from './operational-reminders.service';
 import { ClientNotificationsController } from './client-notifications.controller';
+import { AiRun } from '../ai/ai-run.entity';
 
 @Global()
 @Module({
@@ -28,6 +29,7 @@ import { ClientNotificationsController } from './client-notifications.controller
       StripeWebhookEvent,
       OperationsTask,
       ProspectApplication,
+      AiRun,
     ]),
     CommonModule,
   ],

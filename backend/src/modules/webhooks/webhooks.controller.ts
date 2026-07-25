@@ -7,8 +7,10 @@ import {
   Query,
   Req,
   Res,
+  UseInterceptors,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { WebhooksService } from './webhooks.service';
 
 @Controller('webhooks')
@@ -35,6 +37,24 @@ export class WebhooksController {
     @Headers() headers: Record<string, string | undefined>,
   ) {
     return this.webhooks.handleTwilioStatus(body, headers);
+  }
+
+  @Post('sendgrid/inbound')
+  @UseInterceptors(
+    AnyFilesInterceptor({
+      limits: {
+        fields: 30,
+        files: 5,
+        fileSize: 2_000_000,
+        fieldSize: 1_000_000,
+      },
+    }),
+  )
+  sendGridInbound(
+    @Body() body: any,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.webhooks.handleSendGridInbound(body, authorization || '');
   }
 
   @Get('facebook/lead-ads')

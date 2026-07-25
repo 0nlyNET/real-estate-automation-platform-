@@ -8,6 +8,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Tenant } from '../modules/tenants/tenant.entity';
 import { User } from '../modules/users/user.entity';
 import { PlatformOperatorsService } from './platform-operators.service';
+import { ConversationLockService } from './conversation-lock.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Tenant, User])],
@@ -18,6 +19,7 @@ import { PlatformOperatorsService } from './platform-operators.service';
     PlatformAdminGuard,
     PlatformOperatorGuard,
     PlatformOperatorsService,
+    ConversationLockService,
   ],
   exports: [
     TypeOrmModule,
@@ -26,6 +28,7 @@ import { PlatformOperatorsService } from './platform-operators.service';
     PlatformAdminGuard,
     PlatformOperatorGuard,
     PlatformOperatorsService,
+    ConversationLockService,
   ],
 })
 export class CommonModule {}

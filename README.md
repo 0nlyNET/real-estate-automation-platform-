@@ -13,6 +13,7 @@ RealtyTechAI is a multi-tenant lead-response and follow-up platform for real est
 - Persisted public applications, structured onboarding/readiness, a platform operations queue, and protected lead intake with consent evidence
 - A role-aware owner/staff operating dashboard with real billing summaries, assignments, read-only communications, and 90-day diagnostic retention
 - In-app notifications and standards-based web push for trusted lead, client, support, billing, integration, and health events
+- A default-off controlled AI lead assistant for authenticated inbound SMS/email, draft review, guarded autopilot, persistent human takeover, verified brokerage knowledge, aggregate admin visibility, and tenant/platform emergency pauses
 
 Provider accounts and production infrastructure are not included. Results, uptime, certifications, and legal compliance depend on the deployment and operating process.
 
@@ -85,6 +86,7 @@ See `backend/.env.example` and `frontend/.env.example`. At minimum, configure:
 - backend `FRONTEND_URL` and `PUBLIC_APP_URL`, both set to the canonical frontend HTTPS origin
 - frontend server-only `BACKEND_API_URL` for the same-origin `/api/backend/*` proxy, plus `NEXT_PUBLIC_SITE_URL` for canonical metadata; do not expose the backend origin through `NEXT_PUBLIC_*`
 - exact public `TWILIO_WEBHOOK_URL=<api-origin>/webhooks/twilio/inbound` and `TWILIO_STATUS_CALLBACK_URL=<api-origin>/webhooks/twilio/status`
+- server-only OpenAI configuration plus the authenticated `SENDGRID_INBOUND_WEBHOOK_URL=<api-origin>/webhooks/sendgrid/inbound`; follow the approval and test gates in `docs/controlled-ai-lead-agent.md`
 - Meta app credentials, an active `FACEBOOK_GRAPH_API_VERSION`, and the exact
   `FACEBOOK_WEBHOOK_URL` only when Facebook Lead Ads is enabled
 - SendGrid, Twilio, Stripe, and Facebook values only for integrations you enable
@@ -100,6 +102,7 @@ Before accepting a pilot payment, complete:
 - `docs/admin-operations-release.md`
 - `docs/production-launch-owner-checklist.md`
 - `docs/database-migration-runbook.md`
+- `docs/controlled-ai-lead-agent.md`
 - all 21 journeys in `docs/first-client-uat.md`
 
 ### Facebook Lead Ads production setup

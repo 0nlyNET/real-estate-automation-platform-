@@ -10,6 +10,7 @@ function buildService(options: {
   eventRepo?: any;
   operations?: any;
   leadRepo?: any;
+  compliance?: any;
 } = {}) {
   return new MessagingService(
     options.dataSource || { transaction: jest.fn().mockResolvedValue([]) },
@@ -19,9 +20,21 @@ function buildService(options: {
     options.eventRepo || {},
     options.credentialRepo || {},
     {} as any,
-    { communicationEligibility: jest.fn().mockResolvedValue({ allowed: true }) } as any,
+    options.compliance ||
+      ({
+        communicationEligibility: jest.fn().mockResolvedValue({ allowed: true }),
+        getQuietHours: jest.fn().mockResolvedValue({ enabled: false }),
+      } as any),
     { evaluate: jest.fn().mockResolvedValue({ allowed: true, reasons: [] }) } as any,
     options.operations || ({ createTask: jest.fn() } as any),
+    {
+      runAiSendExclusive: jest.fn(
+        async (_tenantId, _leadId, _messageId, callback) => ({
+          allowed: true,
+          result: await callback(),
+        }),
+      ),
+    } as any,
   );
 }
 
@@ -30,6 +43,7 @@ describe('outbound message worker safety', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+    jest.useRealTimers();
     if (originalCallback === undefined) delete process.env.TWILIO_STATUS_CALLBACK_URL;
     else process.env.TWILIO_STATUS_CALLBACK_URL = originalCallback;
   });
@@ -152,5 +166,61 @@ describe('outbound message worker safety', () => {
       where: { id: leadB.id, tenantId: tenantA },
     });
     expect(messageRepo.find).not.toHaveBeenCalled();
+  });
+
+  it('rechecks quiet hours when an approved AI draft reaches the send worker', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-25T02:00:00.000Z'));
+    const lead = Object.assign(new Lead(), {
+      id: 'lead-quiet',
+      tenantId: 'tenant-1',
+      phone: '15555550100',
+    });
+    const message = Object.assign(new Message(), {
+      id: 'message-quiet',
+      leadId: lead.id,
+      lead,
+      channel: 'sms',
+      direction: 'outbound',
+      body: 'Lakeview virtual assistant: Hello.',
+      status: 'sending',
+      authorship: 'ai',
+      attemptCount: 0,
+      lockedBy: 'worker',
+    });
+    const messageRepo = {
+      findOne: jest.fn().mockResolvedValue(message),
+      save: jest.fn(async (value) => value),
+    };
+    const manager = {
+      query: jest.fn().mockResolvedValue([{ id: message.id }]),
+    };
+    const service = buildService({
+      dataSource: {
+        transaction: jest.fn(async (callback) => callback(manager)),
+      },
+      messageRepo,
+      compliance: {
+        communicationEligibility: jest.fn().mockResolvedValue({ allowed: true }),
+        getQuietHours: jest.fn().mockResolvedValue({
+          enabled: true,
+          timezone: 'UTC',
+          startMinute: 0,
+          endMinute: 480,
+        }),
+      },
+    });
+
+    await expect(
+      service.processPendingOutbound({ limit: 1 }),
+    ).resolves.toEqual({ claimed: 1 });
+    expect(message).toMatchObject({
+      status: 'queued',
+      attemptCount: 0,
+      lockedAt: null,
+      lockedBy: null,
+    });
+    expect(message.scheduledAt?.toISOString()).toBe(
+      '2026-07-25T08:00:00.000Z',
+    );
   });
 });

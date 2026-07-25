@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   ArrowRight,
   CalendarDays,
+  Bot,
   CheckCircle2,
   ClipboardCheck,
   CreditCard,
@@ -15,6 +16,7 @@ import {
   LifeBuoy,
   ListTodo,
   Plug,
+  PauseCircle,
   Search,
   UserPlus,
   Users,
@@ -26,7 +28,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 
-type View = "overview" | "leads" | "clients" | "handoffs" | "appointments" | "onboarding" | "tasks" | "support" | "activity" | "billing"
+type View = "overview" | "leads" | "clients" | "handoffs" | "appointments" | "onboarding" | "tasks" | "support" | "activity" | "ai" | "billing"
 type Overview = {
   totalClients: number; active: number; onboarding: number; newApplications: number
   openTasks: number; urgentTasks: number; openSupport: number
@@ -106,6 +108,29 @@ type ClientSetup = {
   tenant: Tenant; owner: { id: string; email: string; role: string; isEmailVerified: boolean }
   temporaryPassword: string; verifyLink: string; verificationEmailSent: boolean
 }
+type AiOverview = {
+  platformPaused: boolean
+  platformPauseReason?: string | null
+  aiEnabledClients: number
+  activeAiConversations: number
+  humanControlledConversations: number
+  humanTakeovers: number
+  waitingForHuman: number
+  failedRuns: number
+  blockedRuns: number
+  usageLimitViolations?: number
+  clients: Array<{
+    tenantId: string
+    tenantName: string
+    aiEnabled: boolean
+    aiPaused: boolean
+    mode: string
+    configurationApprovalStatus: string
+    usage: number
+    estimatedCostUsd: number
+    monthlyUsageLimit: number
+  }>
+}
 
 const views: Array<{ id: View; label: string; icon: typeof Users; ownerOnly?: boolean }> = [
   { id: "overview", label: "Today", icon: Activity },
@@ -117,6 +142,7 @@ const views: Array<{ id: View; label: string; icon: typeof Users; ownerOnly?: bo
   { id: "tasks", label: "Tasks", icon: ListTodo },
   { id: "support", label: "Support", icon: LifeBuoy },
   { id: "activity", label: "Activity", icon: Plug },
+  { id: "ai", label: "AI operations", icon: Bot },
   { id: "billing", label: "Billing & health", icon: CreditCard, ownerOnly: true },
 ]
 
@@ -160,6 +186,7 @@ export default function AdminDashboardPage() {
   const [connections, setConnections] = useState<Connection[]>([])
   const [handoffs, setHandoffs] = useState<ClientHandoff[]>([])
   const [appointments, setAppointments] = useState<ClientAppointment[]>([])
+  const [aiOverview, setAiOverview] = useState<AiOverview | null>(null)
   const [search, setSearch] = useState("")
   const [ownerFilter, setOwnerFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
@@ -186,7 +213,7 @@ export default function AdminDashboardPage() {
       setMe(current)
       const requested = new URLSearchParams(window.location.search).get("view") as View | null
       if (requested && views.some((item) => item.id === requested && (!item.ownerOnly || current.platformRole === "super_admin"))) setView(requested)
-      const [nextOverview, nextTenants, nextApplications, nextTasks, nextSupport, nextOperators, nextCommunications, nextConnections, nextReport, nextHandoffs, nextAppointments] = await Promise.all([
+      const [nextOverview, nextTenants, nextApplications, nextTasks, nextSupport, nextOperators, nextCommunications, nextConnections, nextReport, nextHandoffs, nextAppointments, nextAiOverview] = await Promise.all([
         apiFetch<Overview>("/admin/overview"),
         apiFetch<Tenant[]>("/admin/tenants"),
         apiFetch<ProspectApplication[]>("/admin/applications?take=100"),
@@ -198,11 +225,13 @@ export default function AdminDashboardPage() {
         apiFetch<BusinessReport>("/admin/reporting-overview"),
         apiFetch<ClientHandoff[]>("/admin/client-operations/handoffs?take=100"),
         apiFetch<ClientAppointment[]>("/admin/client-operations/appointments?take=100"),
+        apiFetch<AiOverview>("/admin/ai/overview"),
       ])
       setOverview(nextOverview); setTenants(nextTenants); setApplications(nextApplications); setTasks(nextTasks)
       setSupport(nextSupport); setOperators(nextOperators); setCommunications(nextCommunications); setConnections(nextConnections)
       setReport(nextReport)
       setHandoffs(nextHandoffs); setAppointments(nextAppointments)
+      setAiOverview(nextAiOverview)
       setNotes(Object.fromEntries(nextApplications.map((item) => [item.id, item.operatorNotes || ""])))
       const requestedTenantId = new URLSearchParams(window.location.search).get("tenantId")
       const requestedTenant = requestedTenantId
@@ -366,6 +395,36 @@ export default function AdminDashboardPage() {
     } catch (cause) { setError(messageFor(cause, "Staff access could not be changed")) }
   }
 
+  async function setPlatformAiPause(paused: boolean) {
+    if (
+      paused &&
+      !window.confirm(
+        "Pause every AI conversation on the platform and cancel queued AI replies? Manual RealtyTechAI access will remain available.",
+      )
+    ) {
+      return
+    }
+    try {
+      await apiFetch("/admin/ai/emergency-pause", {
+        method: "POST",
+        body: {
+          paused,
+          reason: paused
+            ? "Platform emergency pause activated by the platform owner."
+            : "",
+        },
+      })
+      await loadAll()
+      setNotice(
+        paused
+          ? "All AI activity paused."
+          : "Platform pause cleared. Conversations remain paused until explicitly returned to AI.",
+      )
+    } catch (cause) {
+      setError(messageFor(cause, "Platform AI pause could not be changed"))
+    }
+  }
+
   if (loading) return <div className="py-20 text-center text-sm text-muted-foreground">Loading the RealtyTechAI operations workspace…</div>
 
   const urgentTasks = tasks.filter((item) => item.status !== "resolved" && ["high", "critical"].includes(item.priority))
@@ -444,6 +503,30 @@ export default function AdminDashboardPage() {
       {view === "tasks" ? <Section title="Operations tasks" subtitle="Assign work, record evidence, and keep blocked items visible."><Filters search={search} setSearch={setSearch} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} operators={operators} statuses={["open", "in_progress", "blocked", "resolved"]} /><div className="space-y-3">{filteredTasks.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{item.title}</div><div className="text-xs text-muted-foreground">{label(item.category)} · due {item.dueAt ? new Date(item.dueAt).toLocaleString() : "not set"}</div></div><Badge variant={item.priority === "critical" ? "destructive" : "secondary"}>{item.priority}</Badge></div><p className="text-sm text-muted-foreground">{item.description}</p><div className="grid gap-3 md:grid-cols-3"><OwnerSelect value={item.assignedOperatorId || ""} operators={operators} onChange={(value) => void patchTask(item, { assignedOperatorId: value || null })} /><FieldLabel label="Due date"><Input type="datetime-local" value={item.dueAt ? item.dueAt.slice(0, 16) : ""} onChange={(event) => void patchTask(item, { dueAt: event.target.value ? new Date(event.target.value).toISOString() : null })} /></FieldLabel><FieldLabel label="Evidence / resolution"><Input value={evidence[item.id] ?? item.evidenceNote ?? ""} onChange={(event) => setEvidence((current) => ({ ...current, [item.id]: event.target.value }))} /></FieldLabel></div><div className="flex flex-wrap gap-2">{(["open", "in_progress", "blocked", "resolved"] as const).map((status) => <Button key={status} size="sm" variant={item.status === status ? "default" : "outline"} onClick={() => void patchTask(item, { status, evidenceNote: evidence[item.id] ?? item.evidenceNote ?? null })}>{label(status)}</Button>)}</div></CardContent></Card>)}{!filteredTasks.length ? <Empty text="No tasks match these filters." /> : null}</div></Section> : null}
 
       {view === "support" ? <Section title="Client support" subtitle="Acknowledge urgent requests quickly, assign an owner, and document the resolution."><div className="space-y-3">{support.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{item.subject}</div><div className="text-xs text-muted-foreground">{item.email} · due {item.dueAt ? new Date(item.dueAt).toLocaleString() : "not set"}</div></div><Badge variant={item.severity === "urgent" ? "destructive" : "secondary"}>{item.severity}</Badge></div><p className="text-sm">{item.message}</p><div className="grid gap-3 md:grid-cols-2"><OwnerSelect value={item.assignedOperatorId || ""} operators={operators} onChange={(value) => void patchSupport(item, { assignedOperatorId: value || null })} /><FieldLabel label="Resolution note"><Input value={evidence[item.id] ?? item.resolutionNote ?? ""} onChange={(event) => setEvidence((current) => ({ ...current, [item.id]: event.target.value }))} /></FieldLabel></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => void patchSupport(item, { status: "acknowledged" })}>Acknowledge</Button><Button size="sm" onClick={() => void patchSupport(item, { status: "resolved", resolutionNote: evidence[item.id] ?? item.resolutionNote ?? "Resolved by operator" })}>Resolve</Button></div></CardContent></Card>)}{!support.length ? <Empty text="No support requests." /> : null}</div></Section> : null}
+
+      {view === "ai" ? (
+        <div className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Metric label="AI-enabled clients" value={aiOverview?.aiEnabledClients || 0} detail="Approved and enabled" />
+            <Metric label="AI conversations" value={aiOverview?.activeAiConversations || 0} detail={`${aiOverview?.humanTakeovers || 0} human takeover(s) · ${aiOverview?.humanControlledConversations || 0} human-controlled`} />
+            <Metric label="Waiting for human" value={aiOverview?.waitingForHuman || 0} detail="Escalated conversations" tone={aiOverview?.waitingForHuman ? "warning" : undefined} />
+            <Metric label="Blocked or failed" value={(aiOverview?.blockedRuns || 0) + (aiOverview?.failedRuns || 0)} detail={`${aiOverview?.usageLimitViolations || 0} usage-limit block(s)`} tone={(aiOverview?.blockedRuns || 0) + (aiOverview?.failedRuns || 0) ? "warning" : undefined} />
+          </div>
+          <Card className={aiOverview?.platformPaused ? "border-red-500/40" : ""}>
+            <CardHeader><CardTitle className="flex items-center gap-2"><PauseCircle className="h-5 w-5" />Platform AI control</CardTitle><p className="text-sm text-muted-foreground">This kill switch stops AI generation and queued AI sends without disabling inboxes, manual messaging, leads, or appointments.</p></CardHeader>
+            <CardContent className="flex flex-wrap items-center justify-between gap-4"><div><Badge variant={aiOverview?.platformPaused ? "destructive" : "outline"}>{aiOverview?.platformPaused ? "All AI paused" : "AI platform available"}</Badge>{aiOverview?.platformPauseReason ? <p className="mt-2 text-sm text-muted-foreground">{aiOverview.platformPauseReason}</p> : null}</div>{isOwner ? <Button variant={aiOverview?.platformPaused ? "outline" : "destructive"} onClick={() => void setPlatformAiPause(!aiOverview?.platformPaused)}>{aiOverview?.platformPaused ? "Clear platform pause" : "Pause all AI"}</Button> : <p className="text-sm text-muted-foreground">Only the platform owner can change the global pause.</p>}</CardContent>
+          </Card>
+          <Section title="Client AI status" subtitle="Operational settings and aggregate usage only. Tenant conversation content is not exposed here.">
+            <div className="space-y-2">
+              {aiOverview?.clients.map((client) => {
+                const percent = Math.min(Math.round((client.usage / Math.max(client.monthlyUsageLimit, 1)) * 100), 100)
+                return <div key={client.tenantId} className="grid gap-3 rounded-lg border p-4 md:grid-cols-[1fr_auto_auto] md:items-center"><div><div className="font-medium">{client.tenantName}</div><div className="text-xs text-muted-foreground">{label(client.mode)} · configuration {label(client.configurationApprovalStatus)}</div></div><Badge variant={client.aiEnabled && !client.aiPaused ? "default" : "secondary"}>{client.aiEnabled && !client.aiPaused ? "Active" : "Paused"}</Badge><div className="text-sm text-muted-foreground md:text-right">{percent}% of limit{client.estimatedCostUsd ? ` · ${client.estimatedCostUsd.toLocaleString(undefined, { style: "currency", currency: "USD" })} estimated` : ""}</div></div>
+              })}
+              {!aiOverview?.clients.length ? <Empty text="No client AI configuration exists yet." /> : null}
+            </div>
+          </Section>
+        </div>
+      ) : null}
 
       {view === "activity" ? <div className="grid gap-5 xl:grid-cols-2"><Section title="Connection status" subtitle="Operational status only—credentials and secrets never reach this page."><div className="space-y-2">{connections.map((item) => <div key={`${item.tenantId}-${item.provider}`} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{item.tenantName}</div><div className="text-xs text-muted-foreground">{label(item.provider)} · updated {new Date(item.updatedAt).toLocaleString()}</div></div><Badge>{item.status}</Badge></div>)}{!connections.length ? <Empty text="No client connections have been saved yet." /> : null}</div></Section><Section title="Communications history" subtitle="Read-only delivery history. Sending and replies remain inside the client workspace."><div className="space-y-2">{communications.map((item) => <div key={item.id} className="rounded-lg border p-3"><div className="flex items-center justify-between gap-3"><div className="text-sm font-medium">{item.leadName}</div><Badge variant="secondary">{item.channel} · {item.status}</Badge></div><p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{item.body}</p><div className="mt-2 text-xs text-muted-foreground">{item.direction} · {new Date(item.createdAt).toLocaleString()}</div></div>)}{!communications.length ? <Empty text="No communications yet." /> : null}</div></Section></div> : null}
 

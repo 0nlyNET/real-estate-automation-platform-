@@ -15,6 +15,10 @@ import {
   sanitizeOperationalText,
 } from '../../common/operational-log';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  AiConversationControlService,
+  ConversationActor,
+} from '../ai/ai-conversation-control.service';
 
 function isV1Encrypted(v: string) {
   return typeof v === 'string' && v.startsWith('v1:');
@@ -80,6 +84,7 @@ export class InboxSendService {
     private readonly compliance: ComplianceService,
     private readonly entitlements: EntitlementService,
     private readonly operations: OperationsService,
+    private readonly aiControl: AiConversationControlService,
     @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
@@ -88,7 +93,12 @@ export class InboxSendService {
     return tenantId;
   }
 
-  async sendSmsToLead(tenantIdRaw: string, leadId: string, body: string) {
+  async sendSmsToLead(
+    tenantIdRaw: string,
+    leadId: string,
+    body: string,
+    actor?: ConversationActor,
+  ) {
     const tenantId = this.requireTenant(tenantIdRaw);
 
     const text = (body || '').toString().trim();
@@ -134,127 +144,219 @@ export class InboxSendService {
       throw new ForbiddenException('Twilio delivery status callback is not configured');
     }
 
-    // Create pending message row first (so UI can show failures too)
-    const priorContact = await this.messagesRepo.count({
-      where: {
-        leadId: lead.id,
-        channel: 'sms',
-        direction: 'outbound',
-        status: In(['provider_accepted', 'sent', 'delivered']),
-      } as any,
+    return this.aiControl.runHumanSendExclusive(
+      tenantId,
+      lead.id,
+      actor,
+      async () => {
+        // Create the row while holding the conversation lock so no AI message
+        // can pass its final send check concurrently.
+        const priorContact = await this.messagesRepo.count({
+          where: {
+            leadId: lead.id,
+            channel: 'sms',
+            direction: 'outbound',
+            status: In(['provider_accepted', 'sent', 'delivered']),
+          } as any,
+        });
+        const identity = String(lead.tenant?.name || 'RealtyTechAI').trim();
+        const compliantText = priorContact === 0
+          ? `${identity}: ${text}${/\bstop\b/i.test(text) ? '' : ' Reply STOP to opt out.'}`
+          : text;
+
+        const msg = new Message() as any;
+        msg.leadId = lead.id;
+        msg.channel = 'sms';
+        msg.direction = 'outbound';
+        msg.body = compliantText;
+        msg.status = 'sending';
+        msg.attemptCount = 0;
+        msg.sentAt = null;
+        msg.authorship = 'human';
+        msg.idempotencyKey = `manual:${tenantId}:${lead.id}:${crypto.randomUUID()}`;
+
+        const saved = await this.messagesRepo.save(msg as any);
+
+        try {
+          const resp = await sendTwilioSms({
+            accountSid,
+            authToken,
+            to,
+            from: fromNumber,
+            body: compliantText,
+            statusCallback,
+          });
+
+          const sid = resp.sid ? String(resp.sid) : undefined;
+
+          (saved as any).providerMessageId = sid;
+          (saved as any).status = 'provider_accepted';
+          (saved as any).providerStatus = resp.status || 'accepted';
+          (saved as any).attemptCount = ((saved as any).attemptCount || 0) + 1;
+          (saved as any).providerAcceptedAt = new Date();
+          await this.messagesRepo.save(saved as any);
+
+          (lead as any).lastActivityAt = new Date();
+          (lead as any).lastContactedAt = new Date();
+          await this.leadsRepo.save(lead as any);
+
+          this.logger.log(
+            operationalEvent('manual_sms_provider_accepted', {
+              tenantId,
+              leadId: lead.id,
+              providerMessageId: sid || null,
+            }),
+          );
+
+          return {
+            status: 'provider_accepted',
+            message: {
+              id: (saved as any).id,
+              leadId: (saved as any).leadId,
+              channel: (saved as any).channel,
+              direction: (saved as any).direction,
+              body: (saved as any).body,
+              status: (saved as any).status,
+              authorship: 'human',
+              providerMessageId: (saved as any).providerMessageId || null,
+              createdAt: (saved as any).createdAt,
+            },
+          };
+        } catch (e: any) {
+          const errMsg = sanitizeOperationalText(
+            e?.message || 'Twilio send failed',
+          );
+
+          (saved as any).status = 'failed';
+          (saved as any).failedAt = new Date();
+          (saved as any).errorCode = 'PROVIDER_SEND_FAILED';
+          (saved as any).sanitizedErrorMessage = String(errMsg).slice(0, 1000);
+          (saved as any).attemptCount = ((saved as any).attemptCount || 0) + 1;
+          (saved as any).lastError = String(errMsg);
+          await this.messagesRepo.save(saved as any);
+
+          this.logger.warn(
+            operationalEvent('provider_send_failed', {
+              provider: 'twilio',
+              tenantId,
+              leadId: lead.id,
+              messageId: saved.id,
+              error: errMsg,
+            }),
+          );
+
+          await this.operations.createTask({
+            tenantId,
+            category: 'messaging_failure',
+            title: 'Manual SMS failed',
+            description: String(errMsg).slice(0, 1000),
+            priority: 'high',
+            relatedEntityType: 'message',
+            relatedEntityId: saved.id,
+            dedupeOpen: true,
+          });
+          await this.notifications?.createForTenant({
+            tenantId,
+            assignedUserId: lead.assignedToUserId,
+            eventType: 'message.failed',
+            category: 'leads',
+            severity: 'warning',
+            title: `A message to ${lead.fullName} did not send`,
+            message:
+              'Open the conversation and try again or contact the lead another way.',
+            deduplicationKey: `message-failed:${saved.id}`,
+            actionUrl: `/app/inbox?leadId=${lead.id}`,
+            entityType: 'message',
+            entityId: saved.id,
+          });
+          throw new BadGatewayException({
+            code: 'PROVIDER_SEND_FAILED',
+            message: 'Twilio did not accept the message',
+            messageId: saved.id,
+          });
+        }
+      },
+    );
+  }
+
+  async queueEmailToLead(
+    tenantIdRaw: string,
+    leadId: string,
+    body: string,
+    actor?: ConversationActor,
+  ) {
+    const tenantId = this.requireTenant(tenantIdRaw);
+    const text = String(body || '').trim();
+    if (!text) throw new ForbiddenException('Message body is required');
+    if (text.length > 1_600) {
+      throw new ForbiddenException('Message body exceeds 1,600 characters');
+    }
+    const lead = await this.leadsRepo.findOne({
+      where: { id: leadId, tenantId } as any,
+      relations: ['tenant'],
     });
-    const identity = String(lead.tenant?.name || 'RealtyTechAI').trim();
-    const compliantText = priorContact === 0
-      ? `${identity}: ${text}${/\bstop\b/i.test(text) ? '' : ' Reply STOP to opt out.'}`
-      : text;
-
-    const msg = new Message() as any;
-    msg.leadId = lead.id;
-    msg.channel = 'sms';
-    msg.direction = 'outbound';
-    msg.body = compliantText;
-    msg.status = 'sending';
-    msg.attemptCount = 0;
-    msg.sentAt = null;
-    msg.idempotencyKey = `manual:${tenantId}:${lead.id}:${crypto.randomUUID()}`;
-
-    const saved = await this.messagesRepo.save(msg as any);
-
-    try {
-      const resp = await sendTwilioSms({
-        accountSid,
-        authToken,
-        to,
-        from: fromNumber,
-        body: compliantText,
-        statusCallback,
-      });
-
-      const sid = resp.sid ? String(resp.sid) : undefined;
-
-      (saved as any).providerMessageId = sid;
-      (saved as any).status = 'provider_accepted';
-      (saved as any).providerStatus = resp.status || 'accepted';
-      (saved as any).attemptCount = ((saved as any).attemptCount || 0) + 1;
-      (saved as any).providerAcceptedAt = new Date();
-      await this.messagesRepo.save(saved as any);
-
-      (lead as any).lastActivityAt = new Date();
-      (lead as any).lastContactedAt = new Date();
-      await this.leadsRepo.save(lead as any);
-
-      this.logger.log(
-        operationalEvent('manual_sms_provider_accepted', {
-          tenantId,
-          leadId: lead.id,
-          providerMessageId: sid || null,
-        }),
-      );
-
-      return {
-        status: 'provider_accepted',
-        message: {
-          id: (saved as any).id,
-          leadId: (saved as any).leadId,
-          channel: (saved as any).channel,
-          direction: (saved as any).direction,
-          body: (saved as any).body,
-          status: (saved as any).status,
-          providerMessageId: (saved as any).providerMessageId || null,
-          createdAt: (saved as any).createdAt,
-        },
-      };
-    } catch (e: any) {
-      const errMsg = sanitizeOperationalText(
-        e?.message || 'Twilio send failed',
-      );
-
-      (saved as any).status = 'failed';
-      (saved as any).failedAt = new Date();
-      (saved as any).errorCode = 'PROVIDER_SEND_FAILED';
-      (saved as any).sanitizedErrorMessage = String(errMsg).slice(0, 1000);
-      (saved as any).attemptCount = ((saved as any).attemptCount || 0) + 1;
-      (saved as any).lastError = String(errMsg);
-      await this.messagesRepo.save(saved as any);
-
-      this.logger.warn(
-        operationalEvent('provider_send_failed', {
-          provider: 'twilio',
-          tenantId,
-          leadId: lead.id,
-          messageId: saved.id,
-          error: errMsg,
-        }),
-      );
-
-      await this.operations.createTask({
-        tenantId,
-        category: 'messaging_failure',
-        title: 'Manual SMS failed',
-        description: String(errMsg).slice(0, 1000),
-        priority: 'high',
-        relatedEntityType: 'message',
-        relatedEntityId: saved.id,
-        dedupeOpen: true,
-      });
-      await this.notifications?.createForTenant({
-        tenantId,
-        assignedUserId: lead.assignedToUserId,
-        eventType: 'message.failed',
-        category: 'leads',
-        severity: 'warning',
-        title: `A message to ${lead.fullName} did not send`,
-        message: 'Open the conversation and try again or contact the lead another way.',
-        deduplicationKey: `message-failed:${saved.id}`,
-        actionUrl: `/app/inbox?leadId=${lead.id}`,
-        entityType: 'message',
-        entityId: saved.id,
-      });
-      throw new BadGatewayException({
-        code: 'PROVIDER_SEND_FAILED',
-        message: 'Twilio did not accept the message',
-        messageId: saved.id,
+    if (!lead) throw new ForbiddenException('Lead not found');
+    if (!lead.email) throw new ForbiddenException('Lead email is missing');
+    await this.entitlements.assertAllowed(tenantId, 'send_manual_email');
+    const consent = await this.compliance.communicationEligibility(
+      tenantId,
+      lead,
+      'email',
+    );
+    if (!consent.allowed) {
+      throw new ConflictException({
+        code: consent.code,
+        message: consent.reason,
       });
     }
+    const credential = await this.credentialsRepo.findOne({
+      where: {
+        provider: 'sendgrid' as any,
+        tenant: { id: tenantId } as any,
+      },
+      relations: ['tenant'],
+    });
+    const payload = decryptToJson(credential?.encryptedValue);
+    if (
+      !credential ||
+      !payload?.connected ||
+      payload?.error ||
+      !String(payload?.apiKey || '').trim() ||
+      !String(payload?.fromEmail || '').trim()
+    ) {
+      throw new ForbiddenException('SendGrid is not connected for this tenant');
+    }
+    return this.aiControl.runHumanSendExclusive(
+      tenantId,
+      lead.id,
+      actor,
+      async () => {
+        const message = await this.messagesRepo.save(
+          this.messagesRepo.create({
+            leadId: lead.id,
+            channel: 'email',
+            direction: 'outbound',
+            body: `${text}\n\nUnsubscribe: {{unsubscribeUrl}}`,
+            status: 'queued',
+            attemptCount: 0,
+            idempotencyKey: `manual-email:${tenantId}:${lead.id}:${crypto.randomUUID()}`,
+            authorship: 'human',
+          }),
+        );
+        return {
+          status: 'queued',
+          message: {
+            id: message.id,
+            leadId: message.leadId,
+            channel: message.channel,
+            direction: message.direction,
+            body: text,
+            status: message.status,
+            authorship: message.authorship,
+            createdAt: message.createdAt,
+          },
+        };
+      },
+    );
   }
 }

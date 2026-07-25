@@ -1,4 +1,11 @@
-import { IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import {
+  IsIn,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class SendMessageDto {
   @IsUUID()
@@ -8,6 +15,10 @@ export class SendMessageDto {
   @MinLength(1)
   @MaxLength(1600)
   body!: string;
+
+  @IsOptional()
+  @IsIn(['sms', 'email'])
+  channel?: 'sms' | 'email';
 }
 
 export class SendBookingLinkDto {

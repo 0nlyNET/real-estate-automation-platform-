@@ -39,6 +39,7 @@ describe('Twilio delivery status callbacks', () => {
       {} as any,
       {} as any,
       {} as any,
+      { acceptInbound: jest.fn() } as any,
       messages as any,
       operations as any,
     );

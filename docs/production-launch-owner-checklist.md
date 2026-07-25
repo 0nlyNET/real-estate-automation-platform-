@@ -112,6 +112,9 @@ Do not accept payment until every applicable item below has a dated evidence lin
 | Required integrations connected, masked, routed, and tested | [ ] |
 | Client-approved/versioned SMS and email templates | [ ] |
 | All 21 tests in `docs/first-client-uat.md` pass on the release commit | [ ] |
+| If AI is enabled: `ControlledAiLeadAgent1784937600001` is reviewed/applied, AI variables and authenticated SendGrid inbound routing are verified, and settings/knowledge are separately approved | [ ] / [ ] N/A |
+| If AI is enabled: all 19 controlled journeys in `docs/controlled-ai-lead-agent.md` pass with retained provider, audit, usage, notification, Today, and tenant-isolation evidence | [ ] / [ ] N/A |
+| If AI is enabled: workspace and platform AI pauses cancel pending AI work while login, inbox, manual messaging, lead intake, and appointments remain functional | [ ] / [ ] N/A |
 | Two-tenant direct-ID isolation tests and production-like isolation matrix pass | [ ] |
 | Backup/PITR configured and nonproduction restore drill passes | [ ] |
 | Railway, Vercel, Stripe, Twilio, SendGrid, database, and mailbox alerts/reviews have owners | [ ] |

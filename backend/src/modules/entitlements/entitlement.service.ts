@@ -11,6 +11,7 @@ export type ProtectedServiceAction =
   | 'send_automated_sms'
   | 'send_automated_email'
   | 'send_manual_sms'
+  | 'send_manual_email'
   | 'trigger_service_from_intake'
   | 'trigger_service_from_manual_lead'
   | 'enable_automation'

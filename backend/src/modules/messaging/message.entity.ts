@@ -13,6 +13,7 @@ export type MessageStatus =
   | 'delivered'
   | 'failed'
   | 'received'
+  | 'draft'
   | 'skipped'
   | 'canceled'
   // Legacy values remain readable while the readiness migration normalizes them.
@@ -100,4 +101,19 @@ export class Message extends BaseEntity {
 
   @Column({ name: 'next_attempt_at', type: 'timestamptz', nullable: true })
   nextAttemptAt?: Date | null;
+
+  @Column({ name: 'authorship', type: 'varchar', length: 20, default: 'system' })
+  authorship!: 'ai' | 'human' | 'template' | 'system';
+
+  @Column({ name: 'ai_run_id', type: 'uuid', nullable: true })
+  aiRunId?: string | null;
+
+  @Column({ name: 'approved_by_user_id', type: 'uuid', nullable: true })
+  approvedByUserId?: string | null;
+
+  @Column({ name: 'approved_at', type: 'timestamptz', nullable: true })
+  approvedAt?: Date | null;
+
+  @Column({ name: 'edited_at', type: 'timestamptz', nullable: true })
+  editedAt?: Date | null;
 }

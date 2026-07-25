@@ -28,6 +28,10 @@ export class UpsertSendGridDto {
   @IsOptional()
   @IsString()
   fromEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  inboundAddress?: string;
 }
 
 export class TestSendGridDto {

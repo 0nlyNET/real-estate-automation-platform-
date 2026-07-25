@@ -11,6 +11,7 @@ import { WebhooksService } from './webhooks.service';
 import { ComplianceModule } from '../compliance/compliance.module';
 import { SequencesModule } from '../sequences/sequences.module';
 import { LeadsModule } from '../leads/leads.module';
+import { AiModule } from '../ai/ai.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { LeadsModule } from '../leads/leads.module';
     ComplianceModule,
     SequencesModule,
     LeadsModule,
+    AiModule,
   ],
   controllers: [WebhooksController],
   providers: [WebhooksService],

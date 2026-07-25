@@ -150,6 +150,7 @@ export default function IntegrationsPage() {
   const [sendgrid, setSendgrid] = useState({
     apiKey: "",
     fromEmail: "",
+    inboundAddress: "",
     toEmail: "",
   })
   const [facebookPages, setFacebookPages] = useState<FacebookPage[]>([])
@@ -420,7 +421,11 @@ export default function IntegrationsPage() {
     try {
       await apiFetch("/integrations/sendgrid", {
         method: "PUT",
-        body: { apiKey: sendgrid.apiKey, fromEmail: sendgrid.fromEmail },
+        body: {
+          apiKey: sendgrid.apiKey,
+          fromEmail: sendgrid.fromEmail,
+          inboundAddress: sendgrid.inboundAddress || undefined,
+        },
       })
       setSendgrid((current) => ({ ...current, apiKey: "" }))
       await load()
@@ -1068,6 +1073,11 @@ export default function IntegrationsPage() {
                 From: {sendgridStatus.display.fromEmail}
               </p>
             ) : null}
+            {sendgridStatus?.display?.inboundAddress ? (
+              <p className="text-sm text-muted-foreground">
+                Inbound replies: {sendgridStatus.display.inboundAddress}
+              </p>
+            ) : null}
             {canManage ? (
               <>
                 <div className="space-y-2">
@@ -1094,6 +1104,27 @@ export default function IntegrationsPage() {
                     }
                     placeholder="agent@yourbrokerage.com"
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sendgridInbound">
+                    Inbound reply address
+                  </Label>
+                  <Input
+                    id="sendgridInbound"
+                    type="email"
+                    value={sendgrid.inboundAddress}
+                    onChange={(event) =>
+                      setSendgrid({
+                        ...sendgrid,
+                        inboundAddress: event.target.value,
+                      })
+                    }
+                    placeholder="replies@reply.yourbrokerage.com"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Match the recipient configured in SendGrid Inbound Parse.
+                    Incoming email is routed by this exact address.
+                  </p>
                 </div>
                 <Button
                   onClick={saveSendGrid}

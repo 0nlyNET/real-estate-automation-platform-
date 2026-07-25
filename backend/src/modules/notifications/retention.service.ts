@@ -5,6 +5,7 @@ import { operationalEvent } from '../../common/operational-log';
 import { AuditLog } from '../audit/audit-log.entity';
 import { StripeWebhookEvent } from '../billing/stripe-webhook-event.entity';
 import { AdminNotification } from './notification.entity';
+import { AiRun } from '../ai/ai-run.entity';
 
 @Injectable()
 export class RetentionService implements OnModuleInit, OnModuleDestroy {
@@ -17,6 +18,8 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
     private readonly webhookLogs: Repository<StripeWebhookEvent>,
     @InjectRepository(AdminNotification)
     private readonly notifications: Repository<AdminNotification>,
+    @InjectRepository(AiRun)
+    private readonly aiRuns: Repository<AiRun>,
   ) {}
 
   onModuleInit() {
@@ -57,6 +60,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
       const audit = await safely('audit events', this.auditLogs);
       const webhook = await safely('webhook logs', this.webhookLogs);
       const notification = await safely('notifications', this.notifications);
+      const aiRun = await safely('AI operational records', this.aiRuns);
       const result = {
         ok: errors.length === 0,
         cutoff: cutoff.toISOString(),
@@ -64,6 +68,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
           auditEvents: audit,
           webhookProcessingLogs: webhook,
           notifications: notification,
+          aiRuns: aiRun,
         },
         errors,
         durationMs: Date.now() - startedAt,

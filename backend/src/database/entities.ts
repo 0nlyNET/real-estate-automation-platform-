@@ -30,6 +30,11 @@ import { AdminPushSubscription } from '../modules/notifications/push-subscriptio
 import { BillingEvent } from '../modules/billing/billing-event.entity';
 import { LeadHandoff } from '../modules/client-operations/lead-handoff.entity';
 import { Appointment } from '../modules/client-operations/appointment.entity';
+import { WorkspaceAiSettings } from '../modules/ai/workspace-ai-settings.entity';
+import { BrokerageKnowledge } from '../modules/ai/brokerage-knowledge.entity';
+import { ConversationAiState } from '../modules/ai/conversation-ai-state.entity';
+import { AiRun } from '../modules/ai/ai-run.entity';
+import { PlatformAiControl } from '../modules/ai/platform-ai-control.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -64,4 +69,9 @@ export const databaseEntities = [
   BillingEvent,
   LeadHandoff,
   Appointment,
+  WorkspaceAiSettings,
+  BrokerageKnowledge,
+  ConversationAiState,
+  AiRun,
+  PlatformAiControl,
 ] as const;

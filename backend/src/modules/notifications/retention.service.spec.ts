@@ -33,11 +33,13 @@ describe('operational retention cleanup', () => {
     const auditLogs = repo('audit', 2);
     const webhookLogs = repo('webhook', 3);
     const notifications = repo('notification', 4);
+    const aiRuns = repo('ai-run', 2);
     const permanentBillingEvents = { delete: jest.fn() };
     const service = new RetentionService(
       auditLogs as any,
       webhookLogs as any,
       notifications as any,
+      aiRuns as any,
     );
     const now = new Date('2026-07-20T12:00:00.000Z');
     await expect(service.run(now)).resolves.toMatchObject({
@@ -45,7 +47,7 @@ describe('operational retention cleanup', () => {
       cutoff: '2026-04-21T12:00:00.000Z',
       deleted: { auditEvents: 2, webhookProcessingLogs: 3, notifications: 4 },
     });
-    for (const repository of [auditLogs, webhookLogs, notifications]) {
+    for (const repository of [auditLogs, webhookLogs, notifications, aiRuns]) {
       expect(repository.find).toHaveBeenCalledWith(expect.objectContaining({
         where: { createdAt: LessThan(new Date('2026-04-21T12:00:00.000Z')) },
         take: 1_000,
@@ -63,7 +65,12 @@ describe('operational retention cleanup', () => {
 
   it('falls back to 90 days when the configured value is unsafe', () => {
     process.env.OPERATIONAL_RETENTION_DAYS = '2';
-    const service = new RetentionService({} as any, {} as any, {} as any);
+    const service = new RetentionService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
     expect(service.retentionDays()).toBe(90);
   });
 });

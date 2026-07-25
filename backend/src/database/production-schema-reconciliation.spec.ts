@@ -11,6 +11,7 @@ import { AdminOperationsNotifications1784505600001 } from "./migrations/20260720
 import { ClientTodayWorkflow1784592000001 } from "./migrations/202607210001-client-today-workflow";
 import { ServiceSuspension1784764800001 } from "./migrations/202607230001-service-suspension";
 import { ClientExperienceReadiness1784851200001 } from "./migrations/202607240001-client-experience-readiness";
+import { ControlledAiLeadAgent1784937600001 } from "./migrations/202607250001-controlled-ai-lead-agent";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -115,22 +116,26 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 32,
+      expectedTables: 37,
       actualTables: 12,
       missingTables: [
         "admin_notification_preferences",
         "admin_notifications",
         "admin_push_subscriptions",
         "agent_presence",
+        "ai_runs",
         "appointments",
         "billing_events",
+        "brokerage_ai_knowledge",
         "compliance_events",
         "compliance_optouts",
+        "conversation_ai_states",
         "lead_consent_records",
         "lead_handoffs",
         "lead_stage_events",
         "onboarding_records",
         "operations_tasks",
+        "platform_ai_controls",
         "prospect_applications",
         "routing_assignment_logs",
         "routing_rules",
@@ -138,6 +143,7 @@ describe("deployed legacy schema reproduction", () => {
         "support_tickets",
         "teams",
         "tenant_quiet_hours",
+        "workspace_ai_settings",
       ],
     });
 
@@ -149,12 +155,13 @@ describe("deployed legacy schema reproduction", () => {
     await new ClientTodayWorkflow1784592000001().up(queryRunner);
     await new ServiceSuspension1784764800001().up(queryRunner);
     await new ClientExperienceReadiness1784851200001().up(queryRunner);
+    await new ControlledAiLeadAgent1784937600001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 32,
-      actualTables: 32,
+      expectedTables: 37,
+      actualTables: 37,
       missingTables: [],
       missingColumns: [],
     });
@@ -211,12 +218,13 @@ describe("deployed legacy schema reproduction", () => {
     await new ClientTodayWorkflow1784592000001().up(queryRunner);
     await new ServiceSuspension1784764800001().up(queryRunner);
     await new ClientExperienceReadiness1784851200001().up(queryRunner);
+    await new ControlledAiLeadAgent1784937600001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 32,
-      actualTables: 32,
+      expectedTables: 37,
+      actualTables: 37,
       missingTables: [],
       missingColumns: [],
     });

@@ -8,6 +8,7 @@ import { PageShell } from "@/app/app/_components/PageShell"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
+import { AiConversationControls } from "@/components/ai/conversation-controls"
 
 type Lead = {
   id: string
@@ -77,6 +78,9 @@ export default function LeadDetailPage() {
       {!lead && !error ? <div className="text-sm text-muted-foreground">Loading...</div> : null}
       {lead ? (
         <div className="grid gap-4 md:grid-cols-2">
+          <div className="md:col-span-2">
+            <AiConversationControls leadId={lead.id} />
+          </div>
           <Card>
             <CardHeader><CardTitle>Contact</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">

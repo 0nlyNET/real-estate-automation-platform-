@@ -24,6 +24,8 @@ import { OperationsService } from '../operations/operations.service';
 import { operationalEvent } from '../../common/operational-log';
 import { ClientOperationsService } from '../client-operations/client-operations.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { AiConversationControlService } from '../ai/ai-conversation-control.service';
+import { nextAllowedSendTime } from '../../common/time';
 
 type ProviderConfig = {
   sendgrid?: { apiKey?: string; fromEmail?: string; fromName?: string };
@@ -60,6 +62,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     private readonly complianceService: ComplianceService,
     private readonly entitlements: EntitlementService,
     private readonly operations: OperationsService,
+    private readonly aiControl: AiConversationControlService,
     @Optional() private readonly clientOperations?: ClientOperationsService,
     @Optional() private readonly notifications?: NotificationsService,
   ) {}
@@ -195,6 +198,10 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       providerStatus: message.providerStatus || null,
       errorCode: message.errorCode || null,
       errorMessage: message.sanitizedErrorMessage || null,
+      authorship: message.authorship || 'system',
+      aiRunId: message.aiRunId || null,
+      approvedAt: message.approvedAt || null,
+      editedAt: message.editedAt || null,
       createdAt: message.createdAt,
       updatedAt: message.updatedAt,
     }));
@@ -257,7 +264,14 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       await this.failPermanently(message, 'MISSING_LEAD', 'Message has no lead');
       return;
     }
-    const action = message.channel === 'sms' ? 'send_automated_sms' : 'send_automated_email';
+    const automated = message.authorship === 'ai' || message.authorship === 'template';
+    const action = automated
+      ? message.channel === 'sms'
+        ? 'send_automated_sms'
+        : 'send_automated_email'
+      : message.channel === 'sms'
+        ? 'send_manual_sms'
+        : 'send_manual_email';
     const entitlement = await this.entitlements.evaluate(lead.tenantId, action);
     if (!entitlement.allowed) {
       await this.skipMessage(message, 'SERVICE_NOT_ENTITLED', entitlement.reasons.join('; '));
@@ -276,28 +290,74 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       );
       return;
     }
+    if (message.authorship === 'ai') {
+      const quiet = await this.complianceService.getQuietHours(lead.tenantId);
+      if (quiet.enabled) {
+        const now = new Date();
+        const next = nextAllowedSendTime({
+          now,
+          timeZone: quiet.timezone,
+          quietStart: `${String(Math.floor(quiet.startMinute / 60)).padStart(2, '0')}:${String(quiet.startMinute % 60).padStart(2, '0')}`,
+          quietEnd: `${String(Math.floor(quiet.endMinute / 60)).padStart(2, '0')}:${String(quiet.endMinute % 60).padStart(2, '0')}`,
+        });
+        if (next > now) {
+          message.status = 'queued';
+          message.scheduledAt = next;
+          message.lockedAt = null;
+          message.lockedBy = null;
+          await this.messageRepository.save(message);
+          return;
+        }
+      }
+    }
 
     message.attemptCount = (message.attemptCount || 0) + 1;
     message.lastAttemptedAt = new Date();
     message.lastError = null as any;
     try {
-      const result: { providerMessageId?: string; providerStatus: string } =
+      const send = (): Promise<{
+        providerMessageId?: string;
+        providerStatus: string;
+      }> =>
         message.channel === 'email'
-          ? await this.sendEmail(message)
-          : await this.sendSms(message);
-      const acceptedAt = new Date();
-      message.providerMessageId = result.providerMessageId || message.providerMessageId;
-      message.providerStatus = result.providerStatus || 'accepted';
-      message.status = 'provider_accepted';
-      message.providerAcceptedAt = acceptedAt;
-      message.lockedAt = null;
-      message.lockedBy = null;
-      message.nextAttemptAt = null;
-      await this.messageRepository.save(message);
-      lead.lastContactedAt = acceptedAt;
-      lead.lastActivityAt = acceptedAt;
-      if (!lead.firstContactSentAt) lead.firstContactSentAt = acceptedAt;
-      await this.leadRepository.save(lead);
+          ? this.sendEmail(message)
+          : this.sendSms(message);
+      const sendAndPersistAcceptance = async () => {
+        const result = await send();
+        const acceptedAt = new Date();
+        message.providerMessageId =
+          result.providerMessageId || message.providerMessageId;
+        message.providerStatus = result.providerStatus || 'accepted';
+        message.status = 'provider_accepted';
+        message.providerAcceptedAt = acceptedAt;
+        message.lockedAt = null;
+        message.lockedBy = null;
+        message.nextAttemptAt = null;
+        await this.messageRepository.save(message);
+        lead.lastContactedAt = acceptedAt;
+        lead.lastActivityAt = acceptedAt;
+        if (!lead.firstContactSentAt) lead.firstContactSentAt = acceptedAt;
+        await this.leadRepository.save(lead);
+        return result;
+      };
+      if (message.authorship === 'ai') {
+        const exclusive = await this.aiControl.runAiSendExclusive(
+          lead.tenantId,
+          lead.id,
+          message.id,
+          sendAndPersistAcceptance,
+        );
+        if (!exclusive.allowed) {
+          await this.skipMessage(
+            message,
+            'AI_CONTROL_CHANGED',
+            exclusive.reason,
+          );
+          return;
+        }
+      } else {
+        await sendAndPersistAcceptance();
+      }
       await this.logLeadEvent(lead, 'message_provider_accepted', {
         channel: message.channel,
         messageId: message.id,
@@ -306,6 +366,20 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     } catch (error: any) {
       const raw = String(error?.message || error || 'Provider request failed');
       const sanitized = sanitizeProviderError(raw);
+      if (message.authorship === 'ai') {
+        await this.failPermanently(
+          message,
+          'AI_PROVIDER_SEND_FAILED',
+          sanitized,
+        );
+        await this.aiControl.markWaitingForHuman(
+          lead.tenantId,
+          lead.id,
+          'The AI response provider failed. Review the inbound message and respond personally.',
+          'high',
+        );
+        return;
+      }
       if (isTransientProviderError(error, raw) && message.attemptCount < MAX_SEND_ATTEMPTS) {
         const delayMinutes = [1, 5, 15][message.attemptCount - 1] || 15;
         message.status = 'queued';

@@ -23,6 +23,7 @@ import {
   operationalEvent,
   sanitizeOperationalText,
 } from '../../common/operational-log';
+import { AiConversationService } from '../ai/ai-conversation.service';
 
 export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
@@ -69,6 +70,8 @@ type PersistedInbound = {
   duplicate: boolean;
   tenantId?: string;
   leadId?: string;
+  messageId?: string;
+  channel?: 'sms' | 'email';
   stopKeyword?: boolean;
 };
 
@@ -83,6 +86,7 @@ export class WebhooksService {
     private readonly compliance: ComplianceService,
     private readonly sequences: SequencesService,
     private readonly leads: LeadsService,
+    private readonly aiConversations: AiConversationService,
     @Optional()
     @InjectRepository(Message)
     private readonly messagesRepo?: Repository<Message>,
@@ -455,9 +459,95 @@ export class WebhooksService {
       persisted.leadId,
       stopKeyword ? 'opt_out' : 'reply',
     );
+    if (!persisted.duplicate && persisted.messageId) {
+      await this.queueAiSafely({
+        tenantId,
+        leadId: persisted.leadId,
+        messageId: persisted.messageId,
+        channel: 'sms',
+      });
+    }
 
     this.logger.log(
       operationalEvent('twilio_inbound_saved', {
+        tenantId,
+        leadId: persisted.leadId,
+        providerMessageId,
+        stopKeyword,
+        duplicate: persisted.duplicate,
+      }),
+    );
+    return {
+      status: persisted.duplicate ? 'duplicate' : 'ok',
+    } as const;
+  }
+
+  async handleSendGridInbound(body: Record<string, unknown>, authorization: string) {
+    this.verifySendGridAuthorization(authorization);
+    const from = extractEmailAddress(body.from);
+    const to = extractSendGridRecipient(body);
+    const rawMessageId = extractEmailMessageId(body);
+    const text = String(body.text || '').trim();
+    const subject = String(body.subject || '').trim().slice(0, 500);
+    if (!from || !to || !rawMessageId) {
+      throw new BadRequestException(
+        'Missing required SendGrid inbound message fields',
+      );
+    }
+    const credential = await this.findSendGridCredential(to);
+    if (!credential?.tenant?.id) {
+      this.logger.warn(
+        operationalEvent('sendgrid_inbound_unrouted', {
+          providerMessageId: rawMessageId,
+        }),
+      );
+      return { status: 'ignored' } as const;
+    }
+    const integration = decryptIntegrationPayload(credential.encryptedValue);
+    if (!integration?.connected || integration?.error) {
+      throw new UnauthorizedException('SendGrid integration is not ready');
+    }
+    const tenantId = credential.tenant.id;
+    const stopKeyword =
+      this.compliance.isStopKeyword(text) ||
+      /^\s*(?:unsubscribe|remove me|opt out)\s*[.!]?\s*$/i.test(text);
+    const providerMessageId = `sendgrid:${rawMessageId}`.slice(0, 500);
+    const persisted = await this.dataSource.transaction((manager) =>
+      this.persistEmailInbound(manager, {
+        tenantId,
+        from,
+        text: [subject ? `Subject: ${subject}` : '', text]
+          .filter(Boolean)
+          .join('\n\n')
+          .slice(0, 100_000),
+        providerMessageId,
+        stopKeyword,
+      }),
+    );
+    if (!persisted.leadId) return { status: 'ignored' } as const;
+    if (stopKeyword) {
+      await this.compliance.addOptOut(
+        tenantId,
+        'email',
+        from,
+        'unsubscribe_request',
+        'sendgrid_inbound_webhook',
+      );
+    }
+    await this.sequences.stopForLead(
+      persisted.leadId,
+      stopKeyword ? 'opt_out' : 'reply',
+    );
+    if (!persisted.duplicate && persisted.messageId) {
+      await this.queueAiSafely({
+        tenantId,
+        leadId: persisted.leadId,
+        messageId: persisted.messageId,
+        channel: 'email',
+      });
+    }
+    this.logger.log(
+      operationalEvent('sendgrid_inbound_saved', {
         tenantId,
         leadId: persisted.leadId,
         providerMessageId,
@@ -496,6 +586,8 @@ export class WebhooksService {
         duplicate: true,
         tenantId: input.tenantId,
         leadId: duplicate.leadId || duplicate.lead?.id,
+        messageId: duplicate.id,
+        channel: 'sms',
         stopKeyword: input.stopKeyword,
       };
     }
@@ -566,8 +658,210 @@ export class WebhooksService {
       duplicate: false,
       tenantId: input.tenantId,
       leadId: lead.id,
+      messageId: message.id,
+      channel: 'sms',
       stopKeyword: input.stopKeyword,
     };
+  }
+
+  private async findSendGridCredential(
+    routingKey: string,
+  ): Promise<Credential | null> {
+    const direct = await this.credentialsRepo.findOne({
+      where: { provider: 'sendgrid', routingKey },
+      relations: ['tenant'],
+    });
+    if (direct) return direct;
+    const legacy = await this.credentialsRepo.find({
+      where: { provider: 'sendgrid', routingKey: IsNull() },
+      relations: ['tenant'],
+    });
+    const matches = legacy.filter((row) => {
+      const payload = decryptIntegrationPayload(row.encryptedValue);
+      return (
+        Boolean(payload?.connected) &&
+        extractEmailAddress(payload?.inboundAddress) === routingKey
+      );
+    });
+    if (matches.length !== 1) return null;
+    matches[0].routingKey = routingKey;
+    try {
+      return await this.credentialsRepo.save(matches[0]);
+    } catch (error: any) {
+      if (String(error?.code || '') !== '23505') throw error;
+      return this.credentialsRepo.findOne({
+        where: { provider: 'sendgrid', routingKey },
+        relations: ['tenant'],
+      });
+    }
+  }
+
+  private verifySendGridAuthorization(authorization: string) {
+    const expectedUser = String(
+      process.env.SENDGRID_INBOUND_USERNAME || '',
+    ).trim();
+    const expectedPassword = String(
+      process.env.SENDGRID_INBOUND_PASSWORD || '',
+    );
+    const encoded = authorization.startsWith('Basic ')
+      ? authorization.slice(6).trim()
+      : '';
+    let supplied = '';
+    try {
+      supplied = Buffer.from(encoded, 'base64').toString('utf8');
+    } catch {
+      supplied = '';
+    }
+    const expected = `${expectedUser}:${expectedPassword}`;
+    if (
+      !expectedUser ||
+      !expectedPassword ||
+      !encoded ||
+      !safeEqual(expected, supplied)
+    ) {
+      this.logger.warn(
+        operationalEvent('invalid_webhook_signature', {
+          provider: 'sendgrid',
+          webhook: 'inbound',
+        }),
+      );
+      throw new UnauthorizedException('Invalid SendGrid webhook authorization');
+    }
+  }
+
+  private async persistEmailInbound(
+    manager: EntityManager,
+    input: {
+      tenantId: string;
+      from: string;
+      text: string;
+      providerMessageId: string;
+      stopKeyword: boolean;
+    },
+  ): Promise<PersistedInbound> {
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      input.providerMessageId,
+    ]);
+    const messageRepository = manager.getRepository(Message);
+    const leadRepository = manager.getRepository(Lead);
+    const leadEventRepository = manager.getRepository(LeadEvent);
+    const duplicate = await messageRepository.findOne({
+      where: { providerMessageId: input.providerMessageId },
+      relations: ['lead'],
+    });
+    if (duplicate) {
+      return {
+        duplicate: true,
+        tenantId: input.tenantId,
+        leadId: duplicate.leadId || duplicate.lead?.id,
+        messageId: duplicate.id,
+        channel: 'email',
+        stopKeyword: input.stopKeyword,
+      };
+    }
+    let lead = await leadRepository.findOne({
+      where: { tenantId: input.tenantId, email: input.from },
+    });
+    if (!lead) {
+      lead = await leadRepository.save(
+        leadRepository.create({
+          tenantId: input.tenantId,
+          fullName: input.from,
+          email: input.from,
+          source: 'sendgrid',
+          stage: 'new',
+          score: 50,
+          leadType: 'buyer',
+          temperature: 'warm',
+          sequenceStatus: 'idle',
+        }),
+      );
+    }
+    const receivedAt = new Date();
+    const message = await messageRepository.save(
+      messageRepository.create({
+        lead,
+        leadId: lead.id,
+        channel: 'email',
+        direction: 'inbound',
+        body: input.text || '(No plain-text message body)',
+        providerMessageId: input.providerMessageId,
+        status: 'received',
+        providerStatus: 'received',
+        sentAt: receivedAt,
+        attemptCount: 0,
+      }),
+    );
+    if (!lead.firstResponseReceivedAt) {
+      lead.firstResponseReceivedAt = receivedAt;
+      if (lead.firstContactSentAt) {
+        lead.firstResponseTimeSec = Math.max(
+          0,
+          Math.floor(
+            (receivedAt.getTime() - lead.firstContactSentAt.getTime()) / 1_000,
+          ),
+        );
+      }
+    }
+    lead.lastActivityAt = receivedAt;
+    lead.nextFollowUpAt = undefined;
+    lead.sequenceStatus = 'stopped';
+    await leadRepository.save(lead);
+    await leadEventRepository.save(
+      leadEventRepository.create({
+        lead,
+        eventType: input.stopKeyword
+          ? 'email_opt_out_received'
+          : 'lead_replied',
+        metadata: {
+          channel: 'email',
+          messageId: message.id,
+          providerMessageId: input.providerMessageId,
+        },
+      }),
+    );
+    return {
+      duplicate: false,
+      tenantId: input.tenantId,
+      leadId: lead.id,
+      messageId: message.id,
+      channel: 'email',
+      stopKeyword: input.stopKeyword,
+    };
+  }
+
+  private async queueAiSafely(event: {
+    tenantId: string;
+    leadId: string;
+    messageId: string;
+    channel: 'sms' | 'email';
+  }) {
+    try {
+      await this.aiConversations.acceptInbound(event);
+    } catch (error: unknown) {
+      const reason = sanitizeOperationalText(
+        error instanceof Error ? error.message : String(error),
+      ).slice(0, 500);
+      this.logger.error(
+        operationalEvent('ai_inbound_queue_failed', {
+          tenantId: event.tenantId,
+          leadId: event.leadId,
+          messageId: event.messageId,
+          error: reason,
+        }),
+      );
+      await this.operations?.createTask({
+        tenantId: event.tenantId,
+        category: 'ai_provider_failure',
+        title: 'Inbound reply needs human follow-up',
+        description:
+          'The inbound message was stored, but AI processing could not be queued.',
+        priority: 'high',
+        relatedEntityType: 'message',
+        relatedEntityId: event.messageId,
+        dedupeOpen: true,
+      });
+    }
   }
 }
 
@@ -575,6 +869,44 @@ function safeEqual(expected: string, supplied: string) {
   const left = Buffer.from(expected);
   const right = Buffer.from(supplied);
   return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function extractEmailAddress(value: unknown) {
+  const text = String(value || '').trim().toLowerCase();
+  const bracketed = text.match(/<([^<>@\s]+@[^<>@\s]+)>/);
+  const candidate = (bracketed?.[1] || text).replace(/^mailto:/, '').trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate) ? candidate : '';
+}
+
+function extractSendGridRecipient(body: Record<string, unknown>) {
+  try {
+    const envelope =
+      typeof body.envelope === 'string'
+        ? JSON.parse(body.envelope)
+        : body.envelope;
+    if (Array.isArray(envelope?.to)) {
+      const first = envelope.to
+        .map((item: unknown) => extractEmailAddress(item))
+        .find(Boolean);
+      if (first) return first;
+    }
+  } catch {
+    // Fall through to SendGrid's top-level `to` field.
+  }
+  return extractEmailAddress(body.to);
+}
+
+function extractEmailMessageId(body: Record<string, unknown>) {
+  const direct = String(
+    body['message-id'] || body.messageId || body.MessageId || '',
+  ).trim();
+  if (direct) return direct.replace(/[<>\s]/g, '').slice(0, 450);
+  const headers = String(body.headers || '');
+  const match = headers.match(/^message-id:\s*(.+)$/im);
+  return String(match?.[1] || '')
+    .trim()
+    .replace(/[<>\s]/g, '')
+    .slice(0, 450);
 }
 
 function twilioMessageState(status: string): { status: Message['status']; rank: number } | null {
