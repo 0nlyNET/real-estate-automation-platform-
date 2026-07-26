@@ -161,11 +161,6 @@ function currency(cents: number | string, code = "usd") {
 export default function AdminDashboardPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const fullOperations = searchParams.get("full") === "1"
-
-  useEffect(() => {
-    if (!fullOperations) router.replace("/admin/overview")
-  }, [fullOperations, router])
 
   const [me, setMe] = useState<Me | null>(null)
   const [view, setView] = useState<View>("overview")
@@ -266,9 +261,17 @@ export default function AdminDashboardPage() {
     return () => window.clearTimeout(initialLoad)
   }, [loadAll])
 
-  if (!fullOperations) {
-    return <div className="min-h-screen" aria-label="Opening admin operating center" />
-  }
+  useEffect(() => {
+    if (!me) return
+    const syncView = window.setTimeout(() => {
+      const requested = searchParams.get("view") as View | null
+      const permitted = requested && views.some(
+        (item) => item.id === requested && (!item.ownerOnly || me.platformRole === "super_admin"),
+      )
+      setView(permitted ? requested : "overview")
+    }, 0)
+    return () => window.clearTimeout(syncView)
+  }, [me, searchParams])
 
   const operatorName = (id?: string | null) => operators.find((operator) => operator.id === id)?.email || "Unassigned"
   const normalizedSearch = search.trim().toLowerCase()
@@ -280,9 +283,11 @@ export default function AdminDashboardPage() {
   const filteredHandoffs = handoffs.filter((item) => matches(`${item.tenant.name} ${item.lead.fullName} ${item.reason}`) && (statusFilter === "all" || item.status === statusFilter))
   const filteredAppointments = appointments.filter((item) => matches(`${item.tenant.name} ${item.lead.fullName}`) && (statusFilter === "all" || item.status === statusFilter))
 
-  function switchView(next: View) {
+  function switchView(next: View, tenantId?: string) {
     setView(next); setStatusFilter("all"); setSearch(""); setOwnerFilter("all")
-    window.history.replaceState(null, "", `/admin/dashboard?view=${next}`)
+    const query = new URLSearchParams({ view: next })
+    if (tenantId) query.set("tenantId", tenantId)
+    router.push(`/admin/dashboard?${query.toString()}`, { scroll: false })
   }
 
   async function patchApplication(item: ProspectApplication, patch: Record<string, unknown>) {
@@ -379,6 +384,21 @@ export default function AdminDashboardPage() {
       await apiFetch(`/admin/tenants/${selectedTenant.id}/${action}`, { method: "POST" })
       await Promise.all([refreshReadiness(), loadAll()]); setNotice(action === "activate" ? "Client service activated." : "Client automations paused.")
     } catch (cause) { setError(messageFor(cause, `Client service could not be ${action}d`)); await refreshReadiness() }
+  }
+
+  async function setServiceSuspended(suspended: boolean) {
+    if (!selectedTenant || !isOwner) return
+    if (suspended && !window.confirm(`Stop all automated services for ${selectedTenant.name}? Leads and history will be preserved.`)) return
+    try {
+      await apiFetch(`/admin/tenants/${selectedTenant.id}/${suspended ? "suspend" : "restore"}`, {
+        method: "POST",
+        ...(suspended ? { body: { reason: "Services manually suspended by the RealtyTechAI platform owner." } } : {}),
+      })
+      await Promise.all([refreshReadiness(), loadAll()])
+      setNotice(suspended ? "All client services stopped." : "Client services restored.")
+    } catch (cause) {
+      setError(messageFor(cause, suspended ? "Client services could not be stopped" : "Client services could not be restored"))
+    }
   }
 
   async function impersonate(userId: string) {
@@ -485,7 +505,7 @@ export default function AdminDashboardPage() {
         <div className="space-y-6">
           {isOwner ? <Card className={sourceApplicationId ? "border-primary/40" : ""}><CardHeader><CardTitle>{sourceApplicationId ? "Turn this closed lead into a client" : "Add a client after you close them"}</CardTitle><p className="text-sm text-muted-foreground">This creates a private, inactive workspace. The client completes intake and connects their own accounts before you activate service.</p></CardHeader><CardContent><form className="grid gap-3 md:grid-cols-[1fr_1fr_220px_auto] md:items-end" onSubmit={createClient}><FieldLabel label="Business name"><Input required minLength={2} maxLength={120} value={businessName} onChange={(event) => setBusinessName(event.target.value)} /></FieldLabel><FieldLabel label="Owner email"><Input required type="email" value={ownerEmail} onChange={(event) => setOwnerEmail(event.target.value)} /></FieldLabel><OwnerSelect value={newClientOwner} operators={operators} onChange={setNewClientOwner} /><Button disabled={creatingClient}>{creatingClient ? "Creating…" : "Create client"}</Button></form></CardContent></Card> : null}
           {clientSetup ? <Card className="border-emerald-500/40"><CardHeader><CardTitle>Client handoff is ready</CardTitle><p className="text-sm text-muted-foreground">Do these three things: send the verification link, send the temporary password through a different channel, then ask the client to complete Get started and Connections.</p></CardHeader><CardContent className="space-y-3"><CopyRow label="Owner email" value={clientSetup.owner.email} /><CopyRow label="Temporary password" value={clientSetup.temporaryPassword} /><CopyRow label="Verification link" value={clientSetup.verifyLink} /><p className="rounded-md bg-muted p-3 text-sm">{clientSetup.verificationEmailSent ? "Verification email sent successfully." : "System email is not connected, so send the verification link manually."}</p><Button variant="outline" onClick={() => setClientSetup(null)}>I saved the handoff</Button></CardContent></Card> : null}
-          <Section title="Clients" subtitle="Service status and ownership at a glance."><Filters search={search} setSearch={setSearch} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} operators={operators} statuses={["ONBOARDING", "READY_FOR_UAT", "UAT_FAILED", "READY_FOR_ACTIVATION", "ACTIVE", "PAUSED", "SUSPENDED", "CANCELED"]} /><div className="grid gap-3 md:grid-cols-2">{filteredTenants.map((tenant) => <Card key={tenant.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{tenant.name}</div><div className="text-sm text-muted-foreground">{label(tenant.lifecycleStatus)}</div></div><Badge variant={tenant.lifecycleStatus === "ACTIVE" ? "default" : "secondary"}>{label(tenant.lifecycleStatus)}</Badge></div><div className="text-xs text-muted-foreground">Owner: {operatorName(tenant.assignedOperatorId)}</div>{isOwner ? <OwnerSelect value={tenant.assignedOperatorId || ""} operators={operators} onChange={(value) => void assignClient(tenant, value)} /> : null}<Button variant="outline" className="w-full" onClick={() => { void openClient(tenant); switchView("onboarding") }}>Open client workspace</Button></CardContent></Card>)}{!filteredTenants.length ? <Empty text="No clients match these filters." /> : null}</div></Section>
+          <Section title="Clients" subtitle="Service status and ownership at a glance."><Filters search={search} setSearch={setSearch} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} operators={operators} statuses={["ONBOARDING", "READY_FOR_UAT", "UAT_FAILED", "READY_FOR_ACTIVATION", "ACTIVE", "PAUSED", "SUSPENDED", "CANCELED"]} /><div className="grid gap-3 md:grid-cols-2">{filteredTenants.map((tenant) => <Card key={tenant.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{tenant.name}</div><div className="text-sm text-muted-foreground">{label(tenant.lifecycleStatus)}</div></div><Badge variant={tenant.lifecycleStatus === "ACTIVE" ? "default" : "secondary"}>{label(tenant.lifecycleStatus)}</Badge></div><div className="text-xs text-muted-foreground">Owner: {operatorName(tenant.assignedOperatorId)}</div>{isOwner ? <OwnerSelect value={tenant.assignedOperatorId || ""} operators={operators} onChange={(value) => void assignClient(tenant, value)} /> : null}<Button variant="outline" className="w-full" onClick={() => { void openClient(tenant); switchView("onboarding", tenant.id) }}>Open client workspace</Button></CardContent></Card>)}{!filteredTenants.length ? <Empty text="No clients match these filters." /> : null}</div></Section>
         </div>
       ) : null}
 
@@ -496,7 +516,7 @@ export default function AdminDashboardPage() {
       {view === "onboarding" ? (
         <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
           <Card><CardHeader><CardTitle>Clients onboarding</CardTitle><p className="text-sm text-muted-foreground">Choose a client to see exactly what remains.</p></CardHeader><CardContent className="space-y-2">{tenants.filter((tenant) => tenant.lifecycleStatus !== "CANCELED").map((tenant) => <button type="button" key={tenant.id} onClick={() => void openClient(tenant)} className={`w-full rounded-lg border p-3 text-left hover:bg-muted/50 ${selectedTenant?.id === tenant.id ? "border-primary bg-primary/5" : ""}`}><div className="font-medium">{tenant.name}</div><div className="mt-1 text-xs text-muted-foreground">{label(tenant.lifecycleStatus)} · {operatorName(tenant.assignedOperatorId)}</div></button>)}</CardContent></Card>
-          <Card><CardHeader><CardTitle>{selectedTenant?.name || "Select a client"}</CardTitle>{selectedTenant ? <p className="text-sm text-muted-foreground">{readiness?.ready ? "All required checks pass. The owner can activate service." : `${readiness?.blockers.length || 0} required check(s) remain.`}</p> : null}</CardHeader><CardContent className="space-y-5">{selectedTenant ? <><div className="grid gap-2 sm:grid-cols-2">{readiness?.required.map((item) => <div key={item.key} className="flex gap-2 rounded-lg border p-3 text-sm">{item.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />}<span>{item.label}</span></div>)}</div><div className="rounded-lg border p-4"><div className="font-medium">Record your review</div><p className="mt-1 text-sm text-muted-foreground">Run the real controlled lead journey before marking the test complete.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><Button variant="outline" onClick={() => void recordEvidence({ providerRejectionTestedAt: new Date().toISOString() })}>Failure visibility tested</Button><Button variant="outline" onClick={() => void recordEvidence({ billingVerifiedAt: new Date().toISOString() })} disabled={!isOwner}>Billing verified</Button><Button variant="outline" onClick={() => void recordEvidence({ operatorApproved: true })}>Operator review approved</Button></div><div className="mt-3 flex gap-2"><Input placeholder="Reference the client's written launch approval" value={evidence[selectedTenant.id] || ""} onChange={(event) => setEvidence((current) => ({ ...current, [selectedTenant.id]: event.target.value }))} /><Button variant="outline" disabled={!evidence[selectedTenant.id]?.trim()} onClick={() => void recordEvidence({ clientApprovedAt: new Date().toISOString(), clientApprovalEvidence: evidence[selectedTenant.id].trim() })}>Save approval</Button></div></div>{isOwner ? <div className="flex flex-wrap gap-2"><Button disabled={!readiness?.ready} onClick={() => void changeService("activate")}>Activate service</Button><Button variant="outline" onClick={() => void changeService("pause")}>Pause automations</Button></div> : null}<div><div className="mb-2 font-medium">Client users</div><div className="space-y-2">{tenantUsers.map((user) => <div key={user.id} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{user.email}</div><div className="text-xs text-muted-foreground">{user.role} · {user.isActive ? "active" : "inactive"}</div></div>{isOwner ? <Button size="sm" variant="outline" disabled={!user.isActive} onClick={() => void impersonate(user.id)}>View as client</Button> : null}</div>)}</div></div></> : <Empty text="Choose a client from the list to manage onboarding." />}</CardContent></Card>
+          <Card><CardHeader><CardTitle>{selectedTenant?.name || "Select a client"}</CardTitle>{selectedTenant ? <p className="text-sm text-muted-foreground">{readiness?.ready ? "All required checks pass. The owner can activate service." : `${readiness?.blockers.length || 0} required check(s) remain.`}</p> : null}</CardHeader><CardContent className="space-y-5">{selectedTenant ? <><div className="grid gap-2 sm:grid-cols-2">{readiness?.required.map((item) => <div key={item.key} className="flex gap-2 rounded-lg border p-3 text-sm">{item.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />}<span>{item.label}</span></div>)}</div><div className="rounded-lg border p-4"><div className="font-medium">Record your review</div><p className="mt-1 text-sm text-muted-foreground">Run the real controlled lead journey before marking the test complete.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><Button variant="outline" onClick={() => void recordEvidence({ providerRejectionTestedAt: new Date().toISOString() })}>Failure visibility tested</Button><Button variant="outline" onClick={() => void recordEvidence({ billingVerifiedAt: new Date().toISOString() })} disabled={!isOwner}>Billing verified</Button><Button variant="outline" onClick={() => void recordEvidence({ operatorApproved: true })}>Operator review approved</Button></div><div className="mt-3 flex gap-2"><Input placeholder="Reference the client's written launch approval" value={evidence[selectedTenant.id] || ""} onChange={(event) => setEvidence((current) => ({ ...current, [selectedTenant.id]: event.target.value }))} /><Button variant="outline" disabled={!evidence[selectedTenant.id]?.trim()} onClick={() => void recordEvidence({ clientApprovedAt: new Date().toISOString(), clientApprovalEvidence: evidence[selectedTenant.id].trim() })}>Save approval</Button></div></div>{isOwner ? <div className="flex flex-wrap gap-2"><Button disabled={!readiness?.ready} onClick={() => void changeService("activate")}>Activate service</Button><Button variant="outline" onClick={() => void changeService("pause")}>Pause automations</Button>{selectedTenant.serviceState?.state === "suspended" ? <Button variant="outline" onClick={() => void setServiceSuspended(false)}>Restore all services</Button> : <Button variant="destructive" onClick={() => void setServiceSuspended(true)}>Stop all services</Button>}</div> : null}<div><div className="mb-2 font-medium">Client users</div><div className="space-y-2">{tenantUsers.map((user) => <div key={user.id} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{user.email}</div><div className="text-xs text-muted-foreground">{user.role} · {user.isActive ? "active" : "inactive"}</div></div>{isOwner ? <Button size="sm" variant="outline" disabled={!user.isActive} onClick={() => void impersonate(user.id)}>View as client</Button> : null}</div>)}</div></div></> : <Empty text="Choose a client from the list to manage onboarding." />}</CardContent></Card>
         </div>
       ) : null}
 
