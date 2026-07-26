@@ -156,6 +156,72 @@ const views: Array<{ id: View; label: string; icon: typeof Users; ownerOnly?: bo
   { id: "billing", label: "Billing & health", icon: CreditCard, ownerOnly: true },
 ]
 
+type DataSection =
+  | "overview"
+  | "clients"
+  | "applications"
+  | "tasks"
+  | "support"
+  | "operators"
+  | "communications"
+  | "leadAttention"
+  | "integrations"
+  | "reporting"
+  | "handoffs"
+  | "appointments"
+  | "ai"
+  | "billing"
+  | "health"
+  | "access"
+
+const sharedDataSections: DataSection[] = [
+  "overview",
+  "clients",
+  "applications",
+  "tasks",
+  "support",
+  "operators",
+  "communications",
+  "leadAttention",
+  "integrations",
+  "reporting",
+  "handoffs",
+  "appointments",
+  "ai",
+]
+const ownerDataSections: DataSection[] = ["billing", "health", "access"]
+const dataSectionLabels: Record<DataSection, string> = {
+  overview: "business summary",
+  clients: "clients",
+  applications: "applications",
+  tasks: "operations tasks",
+  support: "support requests",
+  operators: "staff assignments",
+  communications: "communications history",
+  leadAttention: "client lead attention",
+  integrations: "integration readiness",
+  reporting: "business reporting",
+  handoffs: "client handoffs",
+  appointments: "appointments",
+  ai: "AI operations",
+  billing: "billing",
+  health: "system health",
+  access: "staff access",
+}
+const viewDataSections: Record<View, DataSection[]> = {
+  overview: ["overview", "clients", "applications", "tasks", "support", "leadAttention", "reporting", "handoffs", "appointments"],
+  leads: ["applications", "leadAttention", "operators"],
+  clients: ["clients", "operators"],
+  handoffs: ["handoffs"],
+  appointments: ["appointments"],
+  onboarding: ["clients", "operators"],
+  tasks: ["tasks", "operators"],
+  support: ["support", "operators"],
+  activity: ["integrations", "communications"],
+  ai: ["ai"],
+  billing: ["billing", "health", "access"],
+}
+
 function messageFor(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback
 }
@@ -175,8 +241,11 @@ export default function AdminDashboardPage() {
   const [me, setMe] = useState<Me | null>(null)
   const [view, setView] = useState<View>("overview")
   const [loading, setLoading] = useState(true)
+  const [accessError, setAccessError] = useState("")
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
+  const [sectionErrors, setSectionErrors] = useState<Partial<Record<DataSection, string>>>({})
+  const [sectionLoading, setSectionLoading] = useState<Partial<Record<DataSection, boolean>>>({})
   const [overview, setOverview] = useState<Overview | null>(null)
   const [billing, setBilling] = useState<BillingOverview | null>(null)
   const [health, setHealth] = useState<SystemHealth | null>(null)
@@ -210,50 +279,65 @@ export default function AdminDashboardPage() {
 
   const isOwner = me?.platformRole === "super_admin"
 
+  const loadDataSection = useCallback(async (section: DataSection) => {
+    setSectionLoading((current) => ({ ...current, [section]: true }))
+    try {
+      if (section === "overview") setOverview(await apiFetch<Overview>("/admin/overview"))
+      if (section === "clients") setTenants(await apiFetch<Tenant[]>("/admin/tenants"))
+      if (section === "applications") {
+        const nextApplications = await apiFetch<ProspectApplication[]>("/admin/applications?take=100")
+        setApplications(nextApplications)
+        setNotes(Object.fromEntries(nextApplications.map((item) => [item.id, item.operatorNotes || ""])))
+      }
+      if (section === "tasks") setTasks(await apiFetch<OperationsTask[]>("/admin/operations?take=100"))
+      if (section === "support") setSupport(await apiFetch<SupportTicket[]>("/support/admin/tickets"))
+      if (section === "operators") setOperators(await apiFetch<Operator[]>("/admin/operators"))
+      if (section === "communications") setCommunications(await apiFetch<Communication[]>("/admin/communications?take=50"))
+      if (section === "leadAttention") setLeadAttention(await apiFetch<LeadAttention[]>("/admin/lead-attention?take=50"))
+      if (section === "integrations") setConnections(await apiFetch<Connection[]>("/admin/integrations-overview"))
+      if (section === "reporting") setReport(await apiFetch<BusinessReport>("/admin/reporting-overview"))
+      if (section === "handoffs") setHandoffs(await apiFetch<ClientHandoff[]>("/admin/client-operations/handoffs?take=100"))
+      if (section === "appointments") setAppointments(await apiFetch<ClientAppointment[]>("/admin/client-operations/appointments?take=100"))
+      if (section === "ai") setAiOverview(await apiFetch<AiOverview>("/admin/ai/overview"))
+      if (section === "billing") setBilling(await apiFetch<BillingOverview>("/admin/billing-overview"))
+      if (section === "health") setHealth(await apiFetch<SystemHealth>("/admin/system-health"))
+      if (section === "access") setPlatformUsers(await apiFetch<PlatformAccessUser[]>("/admin/platform-access"))
+      setSectionErrors((current) => {
+        const next = { ...current }
+        delete next[section]
+        return next
+      })
+    } catch (cause) {
+      setSectionErrors((current) => ({
+        ...current,
+        [section]: messageFor(cause, `${dataSectionLabels[section]} could not be loaded`),
+      }))
+      throw cause
+    } finally {
+      setSectionLoading((current) => ({ ...current, [section]: false }))
+    }
+  }, [])
+
   const loadAll = useCallback(async () => {
     setLoading(true)
-    setError("")
+    setAccessError("")
     try {
       const current = await fetchMe()
       if (!current?.platformRole) throw new Error("Platform access is required")
       setMe(current)
       const requested = new URLSearchParams(window.location.search).get("view") as View | null
       if (requested && views.some((item) => item.id === requested && (!item.ownerOnly || current.platformRole === "super_admin"))) setView(requested)
-      const [nextOverview, nextTenants, nextApplications, nextTasks, nextSupport, nextOperators, nextCommunications, nextLeadAttention, nextConnections, nextReport, nextHandoffs, nextAppointments, nextAiOverview] = await Promise.all([
-        apiFetch<Overview>("/admin/overview"),
-        apiFetch<Tenant[]>("/admin/tenants"),
-        apiFetch<ProspectApplication[]>("/admin/applications?take=100"),
-        apiFetch<OperationsTask[]>("/admin/operations?take=100"),
-        apiFetch<SupportTicket[]>("/support/admin/tickets"),
-        apiFetch<Operator[]>("/admin/operators"),
-        apiFetch<Communication[]>("/admin/communications?take=50"),
-        apiFetch<LeadAttention[]>("/admin/lead-attention?take=50"),
-        apiFetch<Connection[]>("/admin/integrations-overview"),
-        apiFetch<BusinessReport>("/admin/reporting-overview"),
-        apiFetch<ClientHandoff[]>("/admin/client-operations/handoffs?take=100"),
-        apiFetch<ClientAppointment[]>("/admin/client-operations/appointments?take=100"),
-        apiFetch<AiOverview>("/admin/ai/overview"),
-      ])
-      setOverview(nextOverview); setTenants(nextTenants); setApplications(nextApplications); setTasks(nextTasks)
-      setSupport(nextSupport); setOperators(nextOperators); setCommunications(nextCommunications); setLeadAttention(nextLeadAttention); setConnections(nextConnections)
-      setReport(nextReport)
-      setHandoffs(nextHandoffs); setAppointments(nextAppointments)
-      setAiOverview(nextAiOverview)
-      setNotes(Object.fromEntries(nextApplications.map((item) => [item.id, item.operatorNotes || ""])))
-      if (current.platformRole === "super_admin") {
-        const [nextBilling, nextHealth, nextPlatformUsers] = await Promise.all([
-          apiFetch<BillingOverview>("/admin/billing-overview"),
-          apiFetch<SystemHealth>("/admin/system-health"),
-          apiFetch<PlatformAccessUser[]>("/admin/platform-access"),
-        ])
-        setBilling(nextBilling); setHealth(nextHealth); setPlatformUsers(nextPlatformUsers)
-      }
+      const sections = current.platformRole === "super_admin"
+        ? [...sharedDataSections, ...ownerDataSections]
+        : sharedDataSections
+      await Promise.allSettled(sections.map((section) => loadDataSection(section)))
     } catch (cause) {
-      setError(messageFor(cause, "The admin workspace could not be loaded"))
+      setMe(null)
+      setAccessError(messageFor(cause, "The admin workspace could not be accessed"))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [loadDataSection])
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void loadAll(), 0)
@@ -477,6 +561,15 @@ export default function AdminDashboardPage() {
   }
 
   if (loading) return <div className="py-20 text-center text-sm text-muted-foreground">Loading the RealtyTechAI operations workspace…</div>
+  if (!me) {
+    return (
+      <div className="mx-auto max-w-xl py-20 text-center" role="alert">
+        <h1 className="text-xl font-semibold">Admin access unavailable</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{accessError || "Platform owner or staff access is required."}</p>
+        <Button className="mt-4" onClick={() => void loadAll()}>Try again</Button>
+      </div>
+    )
+  }
 
   const urgentTasks = tasks.filter((item) => item.status !== "resolved" && ["high", "critical"].includes(item.priority))
   const urgentSupport = support.filter((item) => item.status !== "resolved" && ["high", "urgent"].includes(item.severity))
@@ -484,6 +577,7 @@ export default function AdminDashboardPage() {
   const urgentClientLeads = leadAttention.filter((item) => item.readinessLevel === "urgent" || item.temperature === "hot")
   const canSuspendSelectedTenant = Boolean(selectedTenant && selectedTenant.lifecycleStatus === "ACTIVE" && selectedTenant.serviceState?.state !== "suspended")
   const canRestoreSelectedTenant = Boolean(selectedTenant && selectedTenant.lifecycleStatus !== "CANCELED" && selectedTenant.serviceState?.state === "suspended")
+  const currentSectionFailures = viewDataSections[view].filter((section) => sectionErrors[section])
 
   return (
     <div className="space-y-6">
@@ -502,30 +596,39 @@ export default function AdminDashboardPage() {
         })}
       </div>
 
+      {currentSectionFailures.length ? (
+        <SectionFailures
+          sections={currentSectionFailures}
+          errors={sectionErrors}
+          loading={sectionLoading}
+          onRetry={(section) => void loadDataSection(section).catch(() => undefined)}
+        />
+      ) : null}
+
       {view === "overview" ? (
         <div className="space-y-6">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Metric label="Active clients" value={overview?.active} detail={`${overview?.onboarding || 0} onboarding`} />
-            <Metric label="New leads" value={overview?.newApplications} detail="Awaiting review" tone={overview?.newApplications ? "warning" : undefined} />
-            <Metric label="Open tasks" value={overview?.openTasks} detail={`${overview?.urgentTasks || 0} high priority`} tone={overview?.urgentTasks ? "warning" : undefined} />
-            <Metric label="Open support" value={overview?.openSupport} detail="Client requests" tone={urgentSupport.length ? "warning" : undefined} />
+            <Metric label="Active clients" value={sectionErrors.overview ? null : overview?.active} detail={sectionErrors.overview ? "Summary unavailable" : `${overview?.onboarding ?? "—"} onboarding`} />
+            <Metric label="New leads" value={sectionErrors.overview ? null : overview?.newApplications} detail={sectionErrors.overview ? "Summary unavailable" : "Awaiting review"} tone={overview?.newApplications ? "warning" : undefined} />
+            <Metric label="Open tasks" value={sectionErrors.overview ? null : overview?.openTasks} detail={sectionErrors.overview ? "Summary unavailable" : `${overview?.urgentTasks ?? "—"} high priority`} tone={overview?.urgentTasks ? "warning" : undefined} />
+            <Metric label="Open support" value={sectionErrors.overview ? null : overview?.openSupport} detail={sectionErrors.overview ? "Summary unavailable" : "Client requests"} tone={urgentSupport.length ? "warning" : undefined} />
           </div>
           <Card>
             <CardHeader><CardTitle>Action center</CardTitle><p className="text-sm text-muted-foreground">Start here. These are the items most likely to need you today.</p></CardHeader>
             <CardContent className="grid gap-3 lg:grid-cols-2">
-              <Action title={`${applications.filter((item) => item.status === "new").length} new application(s)`} detail="Review, qualify, book the call, then start client setup after close." button="Review leads" onClick={() => switchView("leads")} urgent={applications.some((item) => item.status === "new")} />
-              <Action title={`${urgentClientLeads.length} urgent client lead(s)`} detail="Hot or urgent leads from active client workspaces that need human attention." button="Review client leads" onClick={() => switchView("leads")} urgent={urgentClientLeads.length > 0} />
-              <Action title={`${unassignedLeads.length} unassigned lead(s)`} detail="Assign an owner so important follow-up does not sit in the shared queue." button="Assign leads" onClick={() => { switchView("leads"); setOwnerFilter("unassigned") }} urgent={unassignedLeads.length > 0} />
-              <Action title={`${urgentTasks.length} high-priority task(s)`} detail="Includes onboarding blocks, failed payments, provider issues, and follow-up." button="Open tasks" onClick={() => switchView("tasks")} urgent={urgentTasks.length > 0} />
-              <Action title={`${urgentSupport.length} urgent support request(s)`} detail="Acknowledge, assign, and resolve client issues before their due time." button="Review support" onClick={() => switchView("support")} urgent={urgentSupport.length > 0} />
-              <Action title={`${handoffs.filter((item) => item.status !== "completed").length} open client handoff(s)`} detail="See the same personal follow-ups currently shown to clients." button="Review handoffs" onClick={() => switchView("handoffs")} urgent={handoffs.some((item) => item.priority === "urgent" && item.status !== "completed")} />
-              <Action title={`${appointments.filter((item) => ["scheduled", "confirmed"].includes(item.status)).length} upcoming appointment(s)`} detail="Confirm, reschedule, or close the loop for any client." button="Review appointments" onClick={() => switchView("appointments")} />
-              <Action title={`${tenants.filter((item) => item.lifecycleStatus === "ONBOARDING").length} client(s) onboarding`} detail="See exactly what is missing and record launch evidence in one place." button="Review onboarding" onClick={() => switchView("onboarding")} />
-              {isOwner ? <Action title={`${overview?.pastDue || 0} client(s) past due`} detail="Payment status is visible only to the owner." button="Review billing" onClick={() => switchView("billing")} urgent={Boolean(overview?.pastDue)} /> : null}
+              <Action title={sectionErrors.applications ? "Applications unavailable" : `${applications.filter((item) => item.status === "new").length} new application(s)`} detail="Review, qualify, book the call, then start client setup after close." button="Review leads" onClick={() => switchView("leads")} urgent={!sectionErrors.applications && applications.some((item) => item.status === "new")} />
+              <Action title={sectionErrors.leadAttention ? "Client lead attention unavailable" : `${urgentClientLeads.length} urgent client lead(s)`} detail="Hot or urgent leads from active client workspaces that need human attention." button="Review client leads" onClick={() => switchView("leads")} urgent={!sectionErrors.leadAttention && urgentClientLeads.length > 0} />
+              <Action title={sectionErrors.applications ? "Assignment queue unavailable" : `${unassignedLeads.length} unassigned lead(s)`} detail="Assign an owner so important follow-up does not sit in the shared queue." button="Assign leads" onClick={() => { switchView("leads"); setOwnerFilter("unassigned") }} urgent={!sectionErrors.applications && unassignedLeads.length > 0} />
+              <Action title={sectionErrors.tasks ? "Operations tasks unavailable" : `${urgentTasks.length} high-priority task(s)`} detail="Includes onboarding blocks, failed payments, provider issues, and follow-up." button="Open tasks" onClick={() => switchView("tasks")} urgent={!sectionErrors.tasks && urgentTasks.length > 0} />
+              <Action title={sectionErrors.support ? "Support queue unavailable" : `${urgentSupport.length} urgent support request(s)`} detail="Acknowledge, assign, and resolve client issues before their due time." button="Review support" onClick={() => switchView("support")} urgent={!sectionErrors.support && urgentSupport.length > 0} />
+              <Action title={sectionErrors.handoffs ? "Client handoffs unavailable" : `${handoffs.filter((item) => item.status !== "completed").length} open client handoff(s)`} detail="See the same personal follow-ups currently shown to clients." button="Review handoffs" onClick={() => switchView("handoffs")} urgent={!sectionErrors.handoffs && handoffs.some((item) => item.priority === "urgent" && item.status !== "completed")} />
+              <Action title={sectionErrors.appointments ? "Appointments unavailable" : `${appointments.filter((item) => ["scheduled", "confirmed"].includes(item.status)).length} upcoming appointment(s)`} detail="Confirm, reschedule, or close the loop for any client." button="Review appointments" onClick={() => switchView("appointments")} />
+              <Action title={sectionErrors.clients ? "Client onboarding unavailable" : `${tenants.filter((item) => item.lifecycleStatus === "ONBOARDING").length} client(s) onboarding`} detail="See exactly what is missing and record launch evidence in one place." button="Review onboarding" onClick={() => switchView("onboarding")} />
+              {isOwner ? <Action title={sectionErrors.overview ? "Past-due summary unavailable" : `${overview?.pastDue ?? 0} client(s) past due`} detail="Payment status is visible only to the owner." button="Review billing" onClick={() => switchView("billing")} urgent={!sectionErrors.overview && Boolean(overview?.pastDue)} /> : null}
             </CardContent>
           </Card>
           <Card><CardHeader><CardTitle>Business flow</CardTitle></CardHeader><CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">{["Lead received", "Call booked", "Client created", "Setup & testing", "Live & supported"].map((item, index) => <div key={item} className="flex items-center gap-2 rounded-lg border p-3 text-sm"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">{index + 1}</span>{item}{index < 4 ? <ArrowRight className="ml-auto hidden h-4 w-4 text-muted-foreground lg:block" /> : null}</div>)}</CardContent></Card>
-          <Card><CardHeader><CardTitle>Last 30 days</CardTitle><p className="text-sm text-muted-foreground">Real application, client, launch, and support records—no estimated data.</p></CardHeader><CardContent className="space-y-5"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><ReportValue label="Applications" value={report?.last30Days.applications} /><ReportValue label="Calls booked" value={report?.last30Days.consultations} /><ReportValue label="New clients" value={report?.last30Days.newClients} /><ReportValue label="Lead-to-client" value={report?.last30Days.conversionRate == null ? "Not enough data" : `${report.last30Days.conversionRate}%`} /><ReportValue label="Avg. time to launch" value={report?.last30Days.averageHoursToLaunch == null ? "Not enough data" : `${report.last30Days.averageHoursToLaunch} hours`} /></div><div><div className="mb-2 text-sm font-medium">Eight-week pipeline trend</div><div className="grid grid-cols-4 gap-2 sm:grid-cols-8">{report?.weekly.map((week) => <div key={week.start} className="rounded-lg border p-2 text-center"><div className="text-lg font-semibold">{week.applications}</div><div className="text-[10px] text-muted-foreground">leads</div><div className="mt-1 text-xs">{week.clients} client{week.clients === 1 ? "" : "s"}</div><div className="mt-1 text-[10px] text-muted-foreground">{new Date(week.start).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div></div>)}</div></div></CardContent></Card>
+          <Card><CardHeader><CardTitle>Last 30 days</CardTitle><p className="text-sm text-muted-foreground">Real application, client, launch, and support records—no estimated data.</p></CardHeader><CardContent className="space-y-5"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><ReportValue label="Applications" value={sectionErrors.reporting ? null : report?.last30Days.applications} /><ReportValue label="Calls booked" value={sectionErrors.reporting ? null : report?.last30Days.consultations} /><ReportValue label="New clients" value={sectionErrors.reporting ? null : report?.last30Days.newClients} /><ReportValue label="Lead-to-client" value={sectionErrors.reporting ? null : report?.last30Days.conversionRate == null ? "Not enough data" : `${report.last30Days.conversionRate}%`} /><ReportValue label="Avg. time to launch" value={sectionErrors.reporting ? null : report?.last30Days.averageHoursToLaunch == null ? "Not enough data" : `${report.last30Days.averageHoursToLaunch} hours`} /></div>{sectionErrors.reporting ? <Empty text="Business reporting is unavailable. Retry it above." /> : <div><div className="mb-2 text-sm font-medium">Eight-week pipeline trend</div><div className="grid grid-cols-4 gap-2 sm:grid-cols-8">{report?.weekly.map((week) => <div key={week.start} className="rounded-lg border p-2 text-center"><div className="text-lg font-semibold">{week.applications}</div><div className="text-[10px] text-muted-foreground">leads</div><div className="mt-1 text-xs">{week.clients} client{week.clients === 1 ? "" : "s"}</div><div className="mt-1 text-[10px] text-muted-foreground">{new Date(week.start).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div></div>)}</div></div>}</CardContent></Card>
         </div>
       ) : null}
 
@@ -535,7 +638,7 @@ export default function AdminDashboardPage() {
           <div className="space-y-3">
             {filteredLeadAttention.map((item) => <Card key={item.id} className={item.readinessLevel === "urgent" || item.temperature === "hot" ? "border-amber-500/40" : ""}><CardContent className="space-y-3 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-lg font-medium">{item.fullName}</div><div className="text-sm text-muted-foreground">{item.tenant.name} · {label(item.stage)}</div></div><div className="flex gap-2"><Badge variant={item.readinessLevel === "urgent" ? "destructive" : "secondary"}>{label(item.readinessLevel)}</Badge><Badge variant={item.temperature === "hot" ? "destructive" : "outline"}>{item.temperature}</Badge></div></div><p className="text-sm">{item.recommendedNextAction || "Review this client lead and decide the next follow-up."}</p><Button size="sm" variant="outline" onClick={() => switchView("onboarding", item.tenant.id)}>Open client workspace</Button></CardContent></Card>)}
           </div>
-          <div className="space-y-3">{filteredApplications.map((item) => <Card key={item.id}><CardContent className="space-y-4 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-lg font-medium">{item.company || item.name}</div><div className="text-sm text-muted-foreground">{item.email} · {item.phone || "No phone"} · {label(item.status)}</div></div><Badge variant={item.notificationStatus === "failed" ? "destructive" : "secondary"}>{item.notificationStatus === "failed" ? "Saved—email alert failed" : `Alert ${item.notificationStatus}`}</Badge></div><p className="text-sm">{item.message}</p><div className="grid gap-3 md:grid-cols-3"><label className="space-y-1 text-xs font-medium">Stage<select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={item.status} onChange={(event) => void patchApplication(item, { status: event.target.value, operatorNotes: notes[item.id] || "", assignedOperatorId: item.assignedOperatorId || null })}>{["new", "reviewing", "qualified", "consultation_booked", "accepted", "declined"].map((status) => <option key={status} value={status}>{label(status)}</option>)}</select></label><OwnerSelect value={item.assignedOperatorId || ""} operators={operators} onChange={(value) => void patchApplication(item, { assignedOperatorId: value || null, operatorNotes: notes[item.id] || "" })} /><label className="space-y-1 text-xs font-medium">Internal notes<Input value={notes[item.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [item.id]: event.target.value }))} onBlur={() => { if ((notes[item.id] || "") !== (item.operatorNotes || "")) void patchApplication(item, { operatorNotes: notes[item.id] || "" }) }} /></label></div><div className="flex flex-wrap gap-2"><Button size="sm" onClick={() => prepareClient(item)} disabled={!isOwner || item.status === "declined"}><UserPlus className="mr-2 h-4 w-4" />Start client setup</Button><Button size="sm" variant="outline" onClick={() => void apiFetch(`/admin/applications/${item.id}/onboarding-task`, { method: "POST" }).then(loadAll)}>Create follow-up task</Button></div></CardContent></Card>)}{!filteredApplications.length ? <Empty text="No leads match these filters." /> : null}</div>
+          <div className="space-y-3">{filteredApplications.map((item) => <Card key={item.id}><CardContent className="space-y-4 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-lg font-medium">{item.company || item.name}</div><div className="text-sm text-muted-foreground">{item.email} · {item.phone || "No phone"} · {label(item.status)}</div></div><Badge variant={item.notificationStatus === "failed" ? "destructive" : "secondary"}>{item.notificationStatus === "failed" ? "Saved—email alert failed" : `Alert ${item.notificationStatus}`}</Badge></div><p className="text-sm">{item.message}</p><div className="grid gap-3 md:grid-cols-3"><label className="space-y-1 text-xs font-medium">Stage<select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={item.status} onChange={(event) => void patchApplication(item, { status: event.target.value, operatorNotes: notes[item.id] || "", assignedOperatorId: item.assignedOperatorId || null })}>{["new", "reviewing", "qualified", "consultation_booked", "accepted", "declined"].map((status) => <option key={status} value={status}>{label(status)}</option>)}</select></label><OwnerSelect value={item.assignedOperatorId || ""} operators={operators} onChange={(value) => void patchApplication(item, { assignedOperatorId: value || null, operatorNotes: notes[item.id] || "" })} /><label className="space-y-1 text-xs font-medium">Internal notes<Input value={notes[item.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [item.id]: event.target.value }))} onBlur={() => { if ((notes[item.id] || "") !== (item.operatorNotes || "")) void patchApplication(item, { operatorNotes: notes[item.id] || "" }) }} /></label></div><div className="flex flex-wrap gap-2"><Button size="sm" onClick={() => prepareClient(item)} disabled={!isOwner || item.status === "declined"}><UserPlus className="mr-2 h-4 w-4" />Start client setup</Button><Button size="sm" variant="outline" onClick={() => void apiFetch(`/admin/applications/${item.id}/onboarding-task`, { method: "POST" }).then(loadAll)}>Create follow-up task</Button></div></CardContent></Card>)}{!sectionErrors.applications && !filteredApplications.length ? <Empty text="No leads match these filters." /> : null}</div>
         </Section>
       ) : null}
 
@@ -543,13 +646,13 @@ export default function AdminDashboardPage() {
         <div className="space-y-6">
           {isOwner ? <Card className={sourceApplicationId ? "border-primary/40" : ""}><CardHeader><CardTitle>{sourceApplicationId ? "Turn this closed lead into a client" : "Add a client after you close them"}</CardTitle><p className="text-sm text-muted-foreground">This creates a private, inactive workspace. The client completes intake and connects their own accounts before you activate service.</p></CardHeader><CardContent><form className="grid gap-3 md:grid-cols-[1fr_1fr_220px_auto] md:items-end" onSubmit={createClient}><FieldLabel label="Business name"><Input required minLength={2} maxLength={120} value={businessName} onChange={(event) => setBusinessName(event.target.value)} /></FieldLabel><FieldLabel label="Owner email"><Input required type="email" value={ownerEmail} onChange={(event) => setOwnerEmail(event.target.value)} /></FieldLabel><OwnerSelect value={newClientOwner} operators={operators} onChange={setNewClientOwner} /><Button disabled={creatingClient}>{creatingClient ? "Creating…" : "Create client"}</Button></form></CardContent></Card> : null}
           {clientSetup ? <Card className="border-emerald-500/40"><CardHeader><CardTitle>Client handoff is ready</CardTitle><p className="text-sm text-muted-foreground">Do these three things: send the verification link, send the temporary password through a different channel, then ask the client to complete Get started and Connections.</p></CardHeader><CardContent className="space-y-3"><CopyRow label="Owner email" value={clientSetup.owner.email} /><CopyRow label="Temporary password" value={clientSetup.temporaryPassword} /><CopyRow label="Verification link" value={clientSetup.verifyLink} /><p className="rounded-md bg-muted p-3 text-sm">{clientSetup.verificationEmailSent ? "Verification email sent successfully." : "System email is not connected, so send the verification link manually."}</p><Button variant="outline" onClick={() => setClientSetup(null)}>I saved the handoff</Button></CardContent></Card> : null}
-          <Section title="Clients" subtitle="Service status and ownership at a glance."><Filters search={search} setSearch={setSearch} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} operators={operators} statuses={["ONBOARDING", "READY_FOR_UAT", "UAT_FAILED", "READY_FOR_ACTIVATION", "ACTIVE", "PAUSED", "SUSPENDED", "CANCELED"]} /><div className="grid gap-3 md:grid-cols-2">{filteredTenants.map((tenant) => <Card key={tenant.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{tenant.name}</div><div className="text-sm text-muted-foreground">{label(tenant.lifecycleStatus)}</div></div><Badge variant={tenant.lifecycleStatus === "ACTIVE" ? "default" : "secondary"}>{label(tenant.lifecycleStatus)}</Badge></div><div className="text-xs text-muted-foreground">Owner: {operatorName(tenant.assignedOperatorId)}</div>{isOwner ? <OwnerSelect value={tenant.assignedOperatorId || ""} operators={operators} onChange={(value) => void assignClient(tenant, value)} /> : null}<Button variant="outline" className="w-full" onClick={() => { void openClient(tenant); switchView("onboarding", tenant.id) }}>Open client workspace</Button></CardContent></Card>)}{!filteredTenants.length ? <Empty text="No clients match these filters." /> : null}</div></Section>
+          <Section title="Clients" subtitle="Service status and ownership at a glance."><Filters search={search} setSearch={setSearch} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} operators={operators} statuses={["ONBOARDING", "READY_FOR_UAT", "UAT_FAILED", "READY_FOR_ACTIVATION", "ACTIVE", "PAUSED", "SUSPENDED", "CANCELED"]} /><div className="grid gap-3 md:grid-cols-2">{filteredTenants.map((tenant) => <Card key={tenant.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{tenant.name}</div><div className="text-sm text-muted-foreground">{label(tenant.lifecycleStatus)}</div></div><Badge variant={tenant.lifecycleStatus === "ACTIVE" ? "default" : "secondary"}>{label(tenant.lifecycleStatus)}</Badge></div><div className="text-xs text-muted-foreground">Owner: {operatorName(tenant.assignedOperatorId)}</div>{isOwner ? <OwnerSelect value={tenant.assignedOperatorId || ""} operators={operators} onChange={(value) => void assignClient(tenant, value)} /> : null}<Button variant="outline" className="w-full" onClick={() => { void openClient(tenant); switchView("onboarding", tenant.id) }}>Open client workspace</Button></CardContent></Card>)}{!sectionErrors.clients && !filteredTenants.length ? <Empty text="No clients match these filters." /> : null}</div></Section>
         </div>
       ) : null}
 
-      {view === "handoffs" ? <Section title="Client handoffs" subtitle="The same human follow-ups clients see on Today, with operator oversight and completion state."><div className="grid gap-2 md:grid-cols-[1fr_240px]"><Input placeholder="Search client, lead, or reason" value={search} onChange={(event) => setSearch(event.target.value)} /><select className="h-10 rounded-md border bg-background px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option>{["open", "opened", "snoozed", "completed"].map((status) => <option key={status} value={status}>{label(status)}</option>)}</select></div><div className="space-y-3">{filteredHandoffs.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{item.lead.fullName} · {item.tenant.name}</div><div className="text-xs text-muted-foreground">{label(item.lead.leadType)} · {label(item.lead.temperature)} · due {item.dueAt ? new Date(item.dueAt).toLocaleString() : "not set"}</div></div><div className="flex gap-2"><Badge variant={item.priority === "urgent" ? "destructive" : "secondary"}>{item.priority}</Badge><Badge variant="outline">{label(item.status)}</Badge></div></div><p className="text-sm">{item.summary}</p><div className="rounded-md bg-muted p-3 text-sm"><span className="font-medium">Why:</span> {item.reason}<br /><span className="font-medium">Next:</span> {item.recommendedAction}</div>{item.status !== "completed" ? <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => void patchHandoff(item, { action: "opened" })}>Mark opened</Button><Button size="sm" onClick={() => void patchHandoff(item, { action: "completed", note: "Completed with operator assistance" })}>Mark completed</Button><Button size="sm" variant="ghost" onClick={() => void patchHandoff(item, { action: "snoozed", snoozedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), note: "Snoozed by operator" })}>Snooze one day</Button></div> : null}</CardContent></Card>)}{!filteredHandoffs.length ? <Empty text="No handoffs match these filters." /> : null}</div></Section> : null}
+      {view === "handoffs" ? <Section title="Client handoffs" subtitle="The same human follow-ups clients see on Today, with operator oversight and completion state."><div className="grid gap-2 md:grid-cols-[1fr_240px]"><Input placeholder="Search client, lead, or reason" value={search} onChange={(event) => setSearch(event.target.value)} /><select className="h-10 rounded-md border bg-background px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option>{["open", "opened", "snoozed", "completed"].map((status) => <option key={status} value={status}>{label(status)}</option>)}</select></div><div className="space-y-3">{filteredHandoffs.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{item.lead.fullName} · {item.tenant.name}</div><div className="text-xs text-muted-foreground">{label(item.lead.leadType)} · {label(item.lead.temperature)} · due {item.dueAt ? new Date(item.dueAt).toLocaleString() : "not set"}</div></div><div className="flex gap-2"><Badge variant={item.priority === "urgent" ? "destructive" : "secondary"}>{item.priority}</Badge><Badge variant="outline">{label(item.status)}</Badge></div></div><p className="text-sm">{item.summary}</p><div className="rounded-md bg-muted p-3 text-sm"><span className="font-medium">Why:</span> {item.reason}<br /><span className="font-medium">Next:</span> {item.recommendedAction}</div>{item.status !== "completed" ? <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => void patchHandoff(item, { action: "opened" })}>Mark opened</Button><Button size="sm" onClick={() => void patchHandoff(item, { action: "completed", note: "Completed with operator assistance" })}>Mark completed</Button><Button size="sm" variant="ghost" onClick={() => void patchHandoff(item, { action: "snoozed", snoozedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), note: "Snoozed by operator" })}>Snooze one day</Button></div> : null}</CardContent></Card>)}{!sectionErrors.handoffs && !filteredHandoffs.length ? <Empty text="No handoffs match these filters." /> : null}</div></Section> : null}
 
-      {view === "appointments" ? <Section title="Client appointments" subtitle="One appointment record powers both the client workspace and this operational view."><div className="grid gap-2 md:grid-cols-[1fr_240px]"><Input placeholder="Search client or lead" value={search} onChange={(event) => setSearch(event.target.value)} /><select className="h-10 rounded-md border bg-background px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option>{["scheduled", "confirmed", "completed", "cancelled", "no_show"].map((status) => <option key={status} value={status}>{label(status)}</option>)}</select></div><div className="space-y-3">{filteredAppointments.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{item.lead.fullName} · {item.tenant.name}</div><div className="text-sm text-muted-foreground">{new Date(item.startsAt).toLocaleString()} · {item.calendarSource}</div></div><div className="flex gap-2"><Badge variant={item.confirmationStatus === "confirmed" ? "default" : "secondary"}>{label(item.confirmationStatus)}</Badge><Badge variant="outline">{label(item.status)}</Badge></div></div>{item.notes ? <p className="text-sm">{item.notes}</p> : null}<div className="flex flex-wrap gap-2">{item.status === "scheduled" ? <Button size="sm" onClick={() => void patchAppointment(item, { status: "confirmed", confirmationStatus: "confirmed" })}>Confirm</Button> : null}{["scheduled", "confirmed"].includes(item.status) ? <Button size="sm" variant="outline" onClick={() => void patchAppointment(item, { status: "completed", followUpStatus: "due" })}>Mark completed</Button> : null}{["scheduled", "confirmed"].includes(item.status) ? <Button size="sm" variant="ghost" onClick={() => void patchAppointment(item, { status: "cancelled" })}>Cancel</Button> : null}</div></CardContent></Card>)}{!filteredAppointments.length ? <Empty text="No appointments match these filters." /> : null}</div></Section> : null}
+      {view === "appointments" ? <Section title="Client appointments" subtitle="One appointment record powers both the client workspace and this operational view."><div className="grid gap-2 md:grid-cols-[1fr_240px]"><Input placeholder="Search client or lead" value={search} onChange={(event) => setSearch(event.target.value)} /><select className="h-10 rounded-md border bg-background px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option>{["scheduled", "confirmed", "completed", "cancelled", "no_show"].map((status) => <option key={status} value={status}>{label(status)}</option>)}</select></div><div className="space-y-3">{filteredAppointments.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{item.lead.fullName} · {item.tenant.name}</div><div className="text-sm text-muted-foreground">{new Date(item.startsAt).toLocaleString()} · {item.calendarSource}</div></div><div className="flex gap-2"><Badge variant={item.confirmationStatus === "confirmed" ? "default" : "secondary"}>{label(item.confirmationStatus)}</Badge><Badge variant="outline">{label(item.status)}</Badge></div></div>{item.notes ? <p className="text-sm">{item.notes}</p> : null}<div className="flex flex-wrap gap-2">{item.status === "scheduled" ? <Button size="sm" onClick={() => void patchAppointment(item, { status: "confirmed", confirmationStatus: "confirmed" })}>Confirm</Button> : null}{["scheduled", "confirmed"].includes(item.status) ? <Button size="sm" variant="outline" onClick={() => void patchAppointment(item, { status: "completed", followUpStatus: "due" })}>Mark completed</Button> : null}{["scheduled", "confirmed"].includes(item.status) ? <Button size="sm" variant="ghost" onClick={() => void patchAppointment(item, { status: "cancelled" })}>Cancel</Button> : null}</div></CardContent></Card>)}{!sectionErrors.appointments && !filteredAppointments.length ? <Empty text="No appointments match these filters." /> : null}</div></Section> : null}
 
       {view === "onboarding" ? (
         <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
@@ -558,21 +661,21 @@ export default function AdminDashboardPage() {
         </div>
       ) : null}
 
-      {view === "tasks" ? <Section title="Operations tasks" subtitle="Assign work, record evidence, and keep blocked items visible."><Filters search={search} setSearch={setSearch} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} operators={operators} statuses={["open", "in_progress", "blocked", "resolved"]} /><div className="space-y-3">{filteredTasks.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{item.title}</div><div className="text-xs text-muted-foreground">{label(item.category)} · due {item.dueAt ? new Date(item.dueAt).toLocaleString() : "not set"}</div></div><Badge variant={item.priority === "critical" ? "destructive" : "secondary"}>{item.priority}</Badge></div><p className="text-sm text-muted-foreground">{item.description}</p><div className="grid gap-3 md:grid-cols-3"><OwnerSelect value={item.assignedOperatorId || ""} operators={operators} onChange={(value) => void patchTask(item, { assignedOperatorId: value || null })} /><FieldLabel label="Due date"><Input type="datetime-local" value={item.dueAt ? item.dueAt.slice(0, 16) : ""} onChange={(event) => void patchTask(item, { dueAt: event.target.value ? new Date(event.target.value).toISOString() : null })} /></FieldLabel><FieldLabel label="Evidence / resolution"><Input value={evidence[item.id] ?? item.evidenceNote ?? ""} onChange={(event) => setEvidence((current) => ({ ...current, [item.id]: event.target.value }))} /></FieldLabel></div><div className="flex flex-wrap gap-2">{(["open", "in_progress", "blocked", "resolved"] as const).map((status) => <Button key={status} size="sm" variant={item.status === status ? "default" : "outline"} onClick={() => void patchTask(item, { status, evidenceNote: evidence[item.id] ?? item.evidenceNote ?? null })}>{label(status)}</Button>)}</div></CardContent></Card>)}{!filteredTasks.length ? <Empty text="No tasks match these filters." /> : null}</div></Section> : null}
+      {view === "tasks" ? <Section title="Operations tasks" subtitle="Assign work, record evidence, and keep blocked items visible."><Filters search={search} setSearch={setSearch} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} operators={operators} statuses={["open", "in_progress", "blocked", "resolved"]} /><div className="space-y-3">{filteredTasks.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{item.title}</div><div className="text-xs text-muted-foreground">{label(item.category)} · due {item.dueAt ? new Date(item.dueAt).toLocaleString() : "not set"}</div></div><Badge variant={item.priority === "critical" ? "destructive" : "secondary"}>{item.priority}</Badge></div><p className="text-sm text-muted-foreground">{item.description}</p><div className="grid gap-3 md:grid-cols-3"><OwnerSelect value={item.assignedOperatorId || ""} operators={operators} onChange={(value) => void patchTask(item, { assignedOperatorId: value || null })} /><FieldLabel label="Due date"><Input type="datetime-local" value={item.dueAt ? item.dueAt.slice(0, 16) : ""} onChange={(event) => void patchTask(item, { dueAt: event.target.value ? new Date(event.target.value).toISOString() : null })} /></FieldLabel><FieldLabel label="Evidence / resolution"><Input value={evidence[item.id] ?? item.evidenceNote ?? ""} onChange={(event) => setEvidence((current) => ({ ...current, [item.id]: event.target.value }))} /></FieldLabel></div><div className="flex flex-wrap gap-2">{(["open", "in_progress", "blocked", "resolved"] as const).map((status) => <Button key={status} size="sm" variant={item.status === status ? "default" : "outline"} onClick={() => void patchTask(item, { status, evidenceNote: evidence[item.id] ?? item.evidenceNote ?? null })}>{label(status)}</Button>)}</div></CardContent></Card>)}{!sectionErrors.tasks && !filteredTasks.length ? <Empty text="No tasks match these filters." /> : null}</div></Section> : null}
 
-      {view === "support" ? <Section title="Client support" subtitle="Acknowledge urgent requests quickly, assign an owner, and document the resolution."><div className="space-y-3">{support.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{item.subject}</div><div className="text-xs text-muted-foreground">{item.email} · due {item.dueAt ? new Date(item.dueAt).toLocaleString() : "not set"}</div></div><Badge variant={item.severity === "urgent" ? "destructive" : "secondary"}>{item.severity}</Badge></div><p className="text-sm">{item.message}</p><div className="grid gap-3 md:grid-cols-2"><OwnerSelect value={item.assignedOperatorId || ""} operators={operators} onChange={(value) => void patchSupport(item, { assignedOperatorId: value || null })} /><FieldLabel label="Resolution note"><Input value={evidence[item.id] ?? item.resolutionNote ?? ""} onChange={(event) => setEvidence((current) => ({ ...current, [item.id]: event.target.value }))} /></FieldLabel></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => void patchSupport(item, { status: "acknowledged" })}>Acknowledge</Button><Button size="sm" onClick={() => void patchSupport(item, { status: "resolved", resolutionNote: evidence[item.id] ?? item.resolutionNote ?? "Resolved by operator" })}>Resolve</Button></div></CardContent></Card>)}{!support.length ? <Empty text="No support requests." /> : null}</div></Section> : null}
+      {view === "support" ? <Section title="Client support" subtitle="Acknowledge urgent requests quickly, assign an owner, and document the resolution."><div className="space-y-3">{support.map((item) => <Card key={item.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-medium">{item.subject}</div><div className="text-xs text-muted-foreground">{item.email} · due {item.dueAt ? new Date(item.dueAt).toLocaleString() : "not set"}</div></div><Badge variant={item.severity === "urgent" ? "destructive" : "secondary"}>{item.severity}</Badge></div><p className="text-sm">{item.message}</p><div className="grid gap-3 md:grid-cols-2"><OwnerSelect value={item.assignedOperatorId || ""} operators={operators} onChange={(value) => void patchSupport(item, { assignedOperatorId: value || null })} /><FieldLabel label="Resolution note"><Input value={evidence[item.id] ?? item.resolutionNote ?? ""} onChange={(event) => setEvidence((current) => ({ ...current, [item.id]: event.target.value }))} /></FieldLabel></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => void patchSupport(item, { status: "acknowledged" })}>Acknowledge</Button><Button size="sm" onClick={() => void patchSupport(item, { status: "resolved", resolutionNote: evidence[item.id] ?? item.resolutionNote ?? "Resolved by operator" })}>Resolve</Button></div></CardContent></Card>)}{!sectionErrors.support && !support.length ? <Empty text="No support requests." /> : null}</div></Section> : null}
 
       {view === "ai" ? (
         <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Metric label="AI-enabled clients" value={aiOverview?.aiEnabledClients || 0} detail="Approved and enabled" />
-            <Metric label="AI conversations" value={aiOverview?.activeAiConversations || 0} detail={`${aiOverview?.humanTakeovers || 0} human takeover(s) · ${aiOverview?.humanControlledConversations || 0} human-controlled`} />
-            <Metric label="Waiting for human" value={aiOverview?.waitingForHuman || 0} detail="Escalated conversations" tone={aiOverview?.waitingForHuman ? "warning" : undefined} />
-            <Metric label="Blocked or failed" value={(aiOverview?.blockedRuns || 0) + (aiOverview?.failedRuns || 0)} detail={`${aiOverview?.usageLimitViolations || 0} usage-limit block(s)`} tone={(aiOverview?.blockedRuns || 0) + (aiOverview?.failedRuns || 0) ? "warning" : undefined} />
+            <Metric label="AI-enabled clients" value={sectionErrors.ai ? null : aiOverview?.aiEnabledClients} detail={sectionErrors.ai ? "AI data unavailable" : "Approved and enabled"} />
+            <Metric label="AI conversations" value={sectionErrors.ai ? null : aiOverview?.activeAiConversations} detail={sectionErrors.ai ? "AI data unavailable" : `${aiOverview?.humanTakeovers ?? "—"} human takeover(s) · ${aiOverview?.humanControlledConversations ?? "—"} human-controlled`} />
+            <Metric label="Waiting for human" value={sectionErrors.ai ? null : aiOverview?.waitingForHuman} detail={sectionErrors.ai ? "AI data unavailable" : "Escalated conversations"} tone={aiOverview?.waitingForHuman ? "warning" : undefined} />
+            <Metric label="Blocked or failed" value={sectionErrors.ai || !aiOverview ? null : aiOverview.blockedRuns + aiOverview.failedRuns} detail={sectionErrors.ai ? "AI data unavailable" : `${aiOverview?.usageLimitViolations ?? "—"} usage-limit block(s)`} tone={aiOverview && aiOverview.blockedRuns + aiOverview.failedRuns ? "warning" : undefined} />
           </div>
           <Card className={aiOverview?.platformPaused ? "border-red-500/40" : ""}>
             <CardHeader><CardTitle className="flex items-center gap-2"><PauseCircle className="h-5 w-5" />Platform AI control</CardTitle><p className="text-sm text-muted-foreground">This kill switch stops AI generation and queued AI sends without disabling inboxes, manual messaging, leads, or appointments.</p></CardHeader>
-            <CardContent className="flex flex-wrap items-center justify-between gap-4"><div><Badge variant={aiOverview?.platformPaused ? "destructive" : "outline"}>{aiOverview?.platformPaused ? "All AI paused" : "AI platform available"}</Badge>{aiOverview?.platformPauseReason ? <p className="mt-2 text-sm text-muted-foreground">{aiOverview.platformPauseReason}</p> : null}</div>{isOwner ? <Button variant={aiOverview?.platformPaused ? "outline" : "destructive"} onClick={() => void setPlatformAiPause(!aiOverview?.platformPaused)}>{aiOverview?.platformPaused ? "Clear platform pause" : "Pause all AI"}</Button> : <p className="text-sm text-muted-foreground">Only the platform owner can change the global pause.</p>}</CardContent>
+            <CardContent className="flex flex-wrap items-center justify-between gap-4"><div><Badge variant={aiOverview?.platformPaused ? "destructive" : "outline"}>{sectionErrors.ai || !aiOverview ? "AI status unavailable" : aiOverview.platformPaused ? "All AI paused" : "AI platform available"}</Badge>{aiOverview?.platformPauseReason ? <p className="mt-2 text-sm text-muted-foreground">{aiOverview.platformPauseReason}</p> : null}</div>{isOwner && aiOverview && !sectionErrors.ai ? <Button variant={aiOverview.platformPaused ? "outline" : "destructive"} onClick={() => void setPlatformAiPause(!aiOverview.platformPaused)}>{aiOverview.platformPaused ? "Clear platform pause" : "Pause all AI"}</Button> : !isOwner ? <p className="text-sm text-muted-foreground">Only the platform owner can change the global pause.</p> : null}</CardContent>
           </Card>
           <Section title="Client AI status" subtitle="Operational settings and aggregate usage only. Tenant conversation content is not exposed here.">
             <div className="space-y-2">
@@ -580,16 +683,16 @@ export default function AdminDashboardPage() {
                 const percent = Math.min(Math.round((client.usage / Math.max(client.monthlyUsageLimit, 1)) * 100), 100)
                 return <div key={client.tenantId} className="grid gap-3 rounded-lg border p-4 md:grid-cols-[1fr_auto_auto] md:items-center"><div><div className="font-medium">{client.tenantName}</div><div className="text-xs text-muted-foreground">{label(client.mode)} · configuration {label(client.configurationApprovalStatus)}</div></div><Badge variant={client.aiEnabled && !client.aiPaused ? "default" : "secondary"}>{client.aiEnabled && !client.aiPaused ? "Active" : "Paused"}</Badge><div className="text-sm text-muted-foreground md:text-right">{percent}% of limit{client.estimatedCostUsd ? ` · ${client.estimatedCostUsd.toLocaleString(undefined, { style: "currency", currency: "USD" })} estimated` : ""}</div></div>
               })}
-              {!aiOverview?.clients.length ? <Empty text="No client AI configuration exists yet." /> : null}
+              {!sectionErrors.ai && !aiOverview?.clients.length ? <Empty text="No client AI configuration exists yet." /> : null}
             </div>
           </Section>
         </div>
       ) : null}
 
-      {view === "activity" ? <div className="grid gap-5 xl:grid-cols-2"><Section title="Connection status" subtitle="Operational status only—credentials and secrets never reach this page."><div className="space-y-2">{connections.map((item) => <div key={`${item.tenantId}-${item.provider}`} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{item.tenantName}</div><div className="text-xs text-muted-foreground">{label(item.provider)} · updated {new Date(item.updatedAt).toLocaleString()}</div></div><Badge>{item.status}</Badge></div>)}{!connections.length ? <Empty text="No client connections have been saved yet." /> : null}</div></Section><Section title="Communications history" subtitle="Read-only delivery history. Sending and replies remain inside the client workspace."><div className="space-y-2">{communications.map((item) => <div key={item.id} className="rounded-lg border p-3"><div className="flex items-center justify-between gap-3"><div className="text-sm font-medium">{item.leadName}</div><Badge variant="secondary">{item.channel} · {item.status}</Badge></div><p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{item.body}</p><div className="mt-2 text-xs text-muted-foreground">{item.direction} · {new Date(item.createdAt).toLocaleString()}</div></div>)}{!communications.length ? <Empty text="No communications yet." /> : null}</div></Section></div> : null}
+      {view === "activity" ? <div className="grid gap-5 xl:grid-cols-2"><Section title="Connection status" subtitle="Operational status only—credentials and secrets never reach this page."><div className="space-y-2">{connections.map((item) => <div key={`${item.tenantId}-${item.provider}`} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{item.tenantName}</div><div className="text-xs text-muted-foreground">{label(item.provider)} · updated {new Date(item.updatedAt).toLocaleString()}</div></div><Badge>{item.status}</Badge></div>)}{!sectionErrors.integrations && !connections.length ? <Empty text="No client connections have been saved yet." /> : null}</div></Section><Section title="Communications history" subtitle="Read-only delivery history. Sending and replies remain inside the client workspace."><div className="space-y-2">{communications.map((item) => <div key={item.id} className="rounded-lg border p-3"><div className="flex items-center justify-between gap-3"><div className="text-sm font-medium">{item.leadName}</div><Badge variant="secondary">{item.channel} · {item.status}</Badge></div><p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{item.body}</p><div className="mt-2 text-xs text-muted-foreground">{item.direction} · {new Date(item.createdAt).toLocaleString()}</div></div>)}{!sectionErrors.communications && !communications.length ? <Empty text="No communications yet." /> : null}</div></Section></div> : null}
 
-      {view === "billing" && isOwner ? <div className="space-y-6"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="Monthly recurring revenue" value={currency(billing?.mrrByCurrency?.usd || 0)} detail="Live active subscriptions" /><Metric label="Collected this month" value={currency(billing?.live.collectedThisMonth.find((row) => row.currency === "usd")?.amountCents || 0)} detail="Live payments minus refunds" /><Metric label="Collected this year" value={currency(billing?.live.collectedThisYear.find((row) => row.currency === "usd")?.amountCents || 0)} detail="Live payments minus refunds" /><Metric label="Past due clients" value={billing?.pastDueClients || 0} detail="Needs billing follow-up" tone={billing?.pastDueClients ? "warning" : undefined} /></div><Card><CardHeader><CardTitle>System and provider readiness</CardTitle><p className="text-sm text-muted-foreground">No secrets are shown. Test Stripe data is kept separate from live revenue.</p></CardHeader><CardContent className="grid gap-3 md:grid-cols-2 lg:grid-cols-4"><Health label="Database" value={health?.dbConnected ? "Healthy" : "Unavailable"} good={Boolean(health?.dbConnected)} /><Health label="Messages (24h)" value={`${health?.failedMessages24h || 0} failed / ${health?.totalMessages24h || 0} total`} good={!health?.failedMessages24h} /><Health label="Phone push" value={label(health?.environment?.devicePush?.status)} good={health?.environment?.devicePush?.status === "up"} /><Health label="System email" value={label(health?.environment?.systemEmail?.status)} good={health?.environment?.systemEmail?.status === "up"} /><Health label="Stripe" value={label(health?.environment?.billing?.status)} good={health?.environment?.billing?.status === "up"} /><Health label="Retention" value={`${health?.environment?.retention?.days || 90} days · daily`} good /></CardContent></Card><Card><CardHeader><CardTitle>Admin access</CardTitle><p className="text-sm text-muted-foreground">Staff can work leads, clients, onboarding, tasks, support, and read-only activity. They cannot see revenue, system health, raw webhooks, activation, impersonation, or access controls.</p></CardHeader><CardContent className="space-y-2">{platformUsers.map((user) => <div key={user.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"><div><div className="text-sm font-medium">{user.email}</div><div className="text-xs text-muted-foreground">{user.platformRole ? label(user.platformRole) : "Client workspace user"} · {user.isEmailVerified ? "verified" : "not verified"}</div></div>{user.platformRole === "super_admin" ? <Badge>Owner</Badge> : user.accessManagedByEnvironment ? <Badge variant="secondary">Environment staff</Badge> : <Button size="sm" variant={user.platformRole === "staff" ? "outline" : "default"} disabled={!user.isActive || !user.isEmailVerified} onClick={() => void setStaffAccess(user, user.platformRole !== "staff")}>{user.platformRole === "staff" ? "Remove staff access" : "Make staff"}</Button>}</div>)}</CardContent></Card>{billing?.test.collectedThisMonth.length ? <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">Stripe test-mode activity this month: {billing.test.collectedThisMonth.map((row) => `${currency(row.amountCents, row.currency)} ${row.currency.toUpperCase()}`).join(", ")}. It is not included in live revenue.</div> : null}</div> : null}
-      {view === "billing" && isOwner && billing ? <BillingActivity billing={billing} /> : null}
+      {view === "billing" && isOwner ? <div className="space-y-6"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="Monthly recurring revenue" value={!sectionErrors.billing && billing ? currency(billing.mrrByCurrency?.usd ?? 0) : null} detail={sectionErrors.billing ? "Billing data unavailable" : "Live active subscriptions"} /><Metric label="Collected this month" value={!sectionErrors.billing && billing ? currency(billing.live.collectedThisMonth.find((row) => row.currency === "usd")?.amountCents ?? 0) : null} detail={sectionErrors.billing ? "Billing data unavailable" : "Live payments minus refunds"} /><Metric label="Collected this year" value={!sectionErrors.billing && billing ? currency(billing.live.collectedThisYear.find((row) => row.currency === "usd")?.amountCents ?? 0) : null} detail={sectionErrors.billing ? "Billing data unavailable" : "Live payments minus refunds"} /><Metric label="Past due clients" value={!sectionErrors.billing ? billing?.pastDueClients ?? null : null} detail={sectionErrors.billing ? "Billing data unavailable" : "Needs billing follow-up"} tone={!sectionErrors.billing && billing?.pastDueClients ? "warning" : undefined} /></div><Card><CardHeader><CardTitle>System and provider readiness</CardTitle><p className="text-sm text-muted-foreground">No secrets are shown. Test Stripe data is kept separate from live revenue.</p></CardHeader><CardContent className="grid gap-3 md:grid-cols-2 lg:grid-cols-4"><Health label="Database" value={sectionErrors.health || !health ? "Unavailable" : health.dbConnected ? "Healthy" : "Unavailable"} good={Boolean(!sectionErrors.health && health?.dbConnected)} /><Health label="Messages (24h)" value={!sectionErrors.health && health ? `${health.failedMessages24h} failed / ${health.totalMessages24h} total` : "Unavailable"} good={Boolean(!sectionErrors.health && health && !health.failedMessages24h)} /><Health label="Phone push" value={!sectionErrors.health && health ? label(health.environment?.devicePush?.status) : "Unavailable"} good={!sectionErrors.health && health?.environment?.devicePush?.status === "up"} /><Health label="System email" value={!sectionErrors.health && health ? label(health.environment?.systemEmail?.status) : "Unavailable"} good={!sectionErrors.health && health?.environment?.systemEmail?.status === "up"} /><Health label="Stripe" value={!sectionErrors.health && health ? label(health.environment?.billing?.status) : "Unavailable"} good={!sectionErrors.health && health?.environment?.billing?.status === "up"} /><Health label="Retention" value={!sectionErrors.health && health?.environment?.retention?.days != null ? `${health.environment.retention.days} days · daily` : "Unavailable"} good={Boolean(!sectionErrors.health && health?.environment?.retention?.days)} /></CardContent></Card><Card><CardHeader><CardTitle>Admin access</CardTitle><p className="text-sm text-muted-foreground">Staff can work leads, clients, onboarding, tasks, support, and read-only activity. They cannot see revenue, system health, raw webhooks, activation, impersonation, or access controls.</p></CardHeader><CardContent className="space-y-2">{!sectionErrors.access ? platformUsers.map((user) => <div key={user.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"><div><div className="text-sm font-medium">{user.email}</div><div className="text-xs text-muted-foreground">{user.platformRole ? label(user.platformRole) : "Client workspace user"} · {user.isEmailVerified ? "verified" : "not verified"}</div></div>{user.platformRole === "super_admin" ? <Badge>Owner</Badge> : user.accessManagedByEnvironment ? <Badge variant="secondary">Environment staff</Badge> : <Button size="sm" variant={user.platformRole === "staff" ? "outline" : "default"} disabled={!user.isActive || !user.isEmailVerified} onClick={() => void setStaffAccess(user, user.platformRole !== "staff")}>{user.platformRole === "staff" ? "Remove staff access" : "Make staff"}</Button>}</div>) : null}</CardContent></Card>{!sectionErrors.billing && billing?.test.collectedThisMonth.length ? <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">Stripe test-mode activity this month: {billing.test.collectedThisMonth.map((row) => `${currency(row.amountCents, row.currency)} ${row.currency.toUpperCase()}`).join(", ")}. It is not included in live revenue.</div> : null}</div> : null}
+      {view === "billing" && isOwner && billing && !sectionErrors.billing ? <BillingActivity billing={billing} /> : null}
     </div>
   )
 }
@@ -660,6 +763,39 @@ function BillingActivity({ billing }: { billing: BillingOverview }) {
           </div>
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+function SectionFailures({
+  sections,
+  errors,
+  loading,
+  onRetry,
+}: {
+  sections: DataSection[]
+  errors: Partial<Record<DataSection, string>>
+  loading: Partial<Record<DataSection, boolean>>
+  onRetry: (section: DataSection) => void
+}) {
+  return (
+    <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4" role="alert">
+      <div className="font-medium">Some live data is temporarily unavailable.</div>
+      <p className="text-sm text-muted-foreground">Available sections remain usable. Retry only the affected data below.</p>
+      <div className="flex flex-wrap gap-2">
+        {sections.map((section) => (
+          <Button
+            key={section}
+            size="sm"
+            variant="outline"
+            disabled={Boolean(loading[section])}
+            title={errors[section]}
+            onClick={() => onRetry(section)}
+          >
+            {loading[section] ? "Retrying…" : `Retry ${dataSectionLabels[section]}`}
+          </Button>
+        ))}
+      </div>
     </div>
   )
 }

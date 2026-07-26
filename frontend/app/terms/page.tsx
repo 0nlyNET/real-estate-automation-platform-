@@ -46,8 +46,8 @@ export default function TermsPage() {
             <section>
               <h2 className="text-xl font-semibold text-foreground">Fees, billing, and refunds</h2>
               <p className="mt-4">
-                Package, billing interval, start date, and fees are confirmed in the applicable order or checkout before
-                payment. Subscription charges renew for the stated interval until canceled. Billing-error and refund
+                The managed-service scope, monthly billing start date, and fees are confirmed in the applicable order
+                or checkout before payment. Subscription charges renew monthly until canceled. Billing-error and refund
                 requests are reviewed under the <Link className="text-primary hover:underline" href="/refund">refund policy</Link>
                 and any applicable law; these terms do not make a conflicting blanket promise.
               </p>

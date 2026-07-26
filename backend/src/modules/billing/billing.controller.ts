@@ -16,8 +16,6 @@ export class BillingController {
     return this.billing.createCheckoutSession({
       tenantId,
       userEmail: req.user?.email,
-      plan: 'teams',
-      interval: 'month',
       successUrl: `${frontend}/app/billing?checkout=success`,
       cancelUrl: `${frontend}/app/billing?checkout=cancelled`,
     });

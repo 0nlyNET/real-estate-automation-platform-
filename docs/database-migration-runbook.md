@@ -1,6 +1,6 @@
-# Client-readiness database migration runbook
+# RealtyTechAI database migration runbook
 
-This runbook applies `ClientReadinessFoundations1784419200001` through TypeORM with `TYPEORM_SYNC=false`. The migration is additive and runs in the configured `all` transaction. Its `down()` is intentionally non-destructive because dropping consent, Stripe ledger, onboarding, stage-history, and operations evidence is not an acceptable rollback.
+This runbook applies every migration registered in `backend/src/database/database-options.ts`, including legacy-schema reconciliation, client-readiness foundations, admin operations, client workflow, service suspension, client experience, Realtor.com support, and controlled AI. Production uses `TYPEORM_SYNC=false`, and TypeORM runs the registered set in the configured `all` transaction. Evidence-bearing migrations use intentionally non-destructive rollback behavior because dropping consent, billing, onboarding, communication, AI, or operations history is not acceptable.
 
 ## Before the release
 
@@ -127,8 +127,8 @@ npm run migration:show
 
 Expected result:
 
-- The first `migration:show` lists `ClientReadinessFoundations1784419200001` as pending.
-- `migration:run` completes once. If its integrity guard finds dirty data, the transaction fails and reports counts without deleting rows.
+- The first `migration:show` lists only migrations not yet recorded in `app_migrations`.
+- `migration:run` completes each pending migration once in registration order. If an integrity guard finds ambiguous or invalid data, the transaction fails without deleting rows.
 - The second `migration:show` has no pending migration.
 - `GET <api-origin>/health/readiness` returns HTTP 200 and `status: ready` only after configuration, schema, migrations, system email, billing, and legacy-credential checks pass.
 

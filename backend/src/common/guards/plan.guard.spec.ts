@@ -1,5 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
-import { TeamsPlanGuard } from './plan.guard';
+import { ServiceAccessGuard } from './plan.guard';
 
 const context = {
   getHandler: () => function handler() {},
@@ -7,17 +7,17 @@ const context = {
   switchToHttp: () => ({ getRequest: () => ({ user: { tenantId: 'tenant-1' } }) }),
 } as any;
 
-describe('TeamsPlanGuard', () => {
+describe('ServiceAccessGuard', () => {
   it('uses the current tenant record instead of trusting JWT plan claims', async () => {
     const reflector = { getAllAndOverride: jest.fn().mockReturnValue(true) } as any;
-    const repo = { findOne: jest.fn().mockResolvedValue({ id: 'tenant-1', plan: 'teams', status: 'active' }) } as any;
-    await expect(new TeamsPlanGuard(reflector, repo).canActivate(context)).resolves.toBe(true);
+    const repo = { findOne: jest.fn().mockResolvedValue({ id: 'tenant-1', plan: 'service', status: 'active' }) } as any;
+    await expect(new ServiceAccessGuard(reflector, repo).canActivate(context)).resolves.toBe(true);
     expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 'tenant-1' } });
   });
 
   it('does not create plan tiers but still denies a canceled workspace', async () => {
     const reflector = { getAllAndOverride: jest.fn().mockReturnValue(true) } as any;
-    const repo = { findOne: jest.fn().mockResolvedValue({ id: 'tenant-1', plan: 'pro', status: 'canceled' }) } as any;
-    await expect(new TeamsPlanGuard(reflector, repo).canActivate(context)).rejects.toBeInstanceOf(ForbiddenException);
+    const repo = { findOne: jest.fn().mockResolvedValue({ id: 'tenant-1', plan: 'service', status: 'canceled' }) } as any;
+    await expect(new ServiceAccessGuard(reflector, repo).canActivate(context)).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

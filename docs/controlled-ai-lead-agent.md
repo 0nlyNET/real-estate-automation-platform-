@@ -199,12 +199,6 @@ npm run lint
 npm test
 npm run build
 npm audit --omit=dev --audit-level=high
-
-cd ../admin-ui
-npm ci
-npm run lint
-npm run build
-npm audit --omit=dev --audit-level=high
 ```
 
 ## Controlled end-to-end launch gate
@@ -292,17 +286,3 @@ reviewed database/URL/security/provider variables from `.env.example`, and the
 AI variables above in the hosting platform. Deploy frontend and backend health
 checks separately and verify `/health/live`, `/health/readiness`, login,
 manual messaging, and both AI pause controls before removing launch pauses.
-
-## Inbound voice readiness
-
-A future inbound phone receptionist should translate call audio into the same
-tenant-scoped conversation event contract and reuse `WorkspaceAiSettings`,
-approved brokerage knowledge, bounded lead context, the exact tool allowlist,
-policy validation, ownership/handoff state, appointment idempotency, usage
-limits, summaries, and audit records. A voice adapter must add call consent and
-recording policy, real-time interruption, low-latency disclosure, transfer and
-hang-up controls, telephony provider idempotency, audio retention, and a
-separate production test/compliance review.
-
-Autonomous outbound AI calls remain prohibited until text and inbound voice
-have each passed their own production and compliance gates.

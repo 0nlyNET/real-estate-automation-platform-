@@ -1,18 +1,22 @@
 import { ConflictException } from '@nestjs/common';
 import { BillingService } from './billing.service';
-import { configuredPriceId, planForStripePrice } from './stripe-plan-config';
+import {
+  planForStripePrice,
+  requireConfiguredServicePriceId,
+} from './stripe-plan-config';
 
 describe('Stripe billing safety controls', () => {
   const original = { ...process.env };
 
   beforeEach(() => {
+    delete process.env.STRIPE_PRICE_PRO_MONTH;
+    delete process.env.STRIPE_PRICE_PRO_YEAR;
+    delete process.env.STRIPE_PRICE_TEAMS_MONTH;
+    delete process.env.STRIPE_PRICE_TEAMS_YEAR;
     Object.assign(process.env, {
       STRIPE_SECRET_KEY: 'sk_test_configured',
       STRIPE_WEBHOOK_SECRET: 'whsec_test',
-      STRIPE_PRICE_PRO_MONTH: 'price_pro_month',
-      STRIPE_PRICE_PRO_YEAR: 'price_pro_year',
-      STRIPE_PRICE_TEAMS_MONTH: 'price_teams_month',
-      STRIPE_PRICE_TEAMS_YEAR: 'price_teams_year',
+      STRIPE_PRICE_SERVICE_MONTH: 'price_service_month',
     });
   });
 
@@ -48,14 +52,19 @@ describe('Stripe billing safety controls', () => {
     return { service, tenant, tenants, settings, operations };
   }
 
-  it('uses one central server-side price map and rejects unconfigured selections', () => {
-    expect(configuredPriceId('pro', 'month')).toBe('price_pro_month');
-    expect(planForStripePrice('price_teams_year')).toEqual({
-      plan: 'teams',
-      interval: 'year',
-      priceId: 'price_teams_year',
+  it('uses only the canonical server-side service price', () => {
+    expect(requireConfiguredServicePriceId()).toBe('price_service_month');
+    expect(planForStripePrice('price_service_month')).toEqual({
+      plan: 'service',
+      interval: 'month',
+      priceId: 'price_service_month',
+      compatibility: false,
     });
     expect(planForStripePrice('price_unknown')).toBeNull();
+    delete process.env.STRIPE_PRICE_SERVICE_MONTH;
+    expect(() => requireConfiguredServicePriceId()).toThrow(
+      'STRIPE_PRICE_SERVICE_MONTH is missing',
+    );
   });
 
   it('blocks duplicate checkout before creating a Stripe session', async () => {
@@ -75,8 +84,6 @@ describe('Stripe billing safety controls', () => {
       service.createCheckoutSession({
         tenantId: 'tenant-1',
         userEmail: 'owner@example.com',
-        plan: 'pro',
-        interval: 'month',
         successUrl: 'https://app.example.com/success',
         cancelUrl: 'https://app.example.com/cancel',
       }),
@@ -156,7 +163,7 @@ describe('Stripe billing safety controls', () => {
     });
     const constructEvent = jest
       .fn()
-      .mockReturnValueOnce(eventFor('evt_known', 'price_pro_month'))
+      .mockReturnValueOnce(eventFor('evt_known', 'price_service_month'))
       .mockReturnValueOnce(eventFor('evt_unknown', 'price_unknown'));
     (service as any).stripe = { webhooks: { constructEvent } };
 
@@ -164,10 +171,10 @@ describe('Stripe billing safety controls', () => {
     expect(tenants.updateBilling).toHaveBeenCalledWith(
       'tenant-1',
       expect.objectContaining({
-        plan: 'pro',
+        plan: 'service',
         billingInterval: 'month',
         status: 'active',
-        stripePriceId: 'price_pro_month',
+        stripePriceId: 'price_service_month',
       }),
     );
 
@@ -223,7 +230,7 @@ describe('Stripe billing safety controls', () => {
       cancel_at_period_end: false, cancel_at: null, canceled_at: null, ended_at: null,
       trial_start: null, trial_end: null, latest_invoice: 'in_1', currency: 'usd',
       items: { data: [{ current_period_start: 1_784_419_200, current_period_end: 1_787_011_200,
-        price: { id: 'price_teams_month', product: 'prod_1', unit_amount: 150000, currency: 'usd', recurring: { interval: 'month' } } }] },
+        price: { id: 'price_service_month', product: 'prod_1', unit_amount: 150000, currency: 'usd', recurring: { interval: 'month' } } }] },
     };
     const event = {
       id: 'evt_invoice_paid', type: 'invoice.payment_succeeded', created: 1_784_419_200,
@@ -271,7 +278,7 @@ describe('Stripe billing safety controls', () => {
             current_period_start: 1_784_419_200,
             current_period_end: 1_787_011_200,
             price: {
-              id: 'price_pro_month',
+              id: 'price_service_month',
               product: 'prod_1',
               unit_amount: 29900,
               currency: 'usd',
@@ -310,5 +317,67 @@ describe('Stripe billing safety controls', () => {
       reason:
         'Stripe confirmed a failed payment and no billing grace period is configured.',
     });
+  });
+
+  it('keeps a previously stored legacy subscription working without legacy price variables', async () => {
+    const tenant = {
+      id: 'tenant-1',
+      plan: 'teams',
+      status: 'active',
+      stripeCustomerId: 'cus_1',
+      stripeSubscriptionId: 'sub_legacy',
+      stripePriceId: 'price_legacy_year',
+    };
+    const { service, tenants } = setup({ tenant });
+    const subscription = {
+      id: 'sub_legacy',
+      status: 'active',
+      customer: 'cus_1',
+      metadata: { tenantId: 'tenant-1' },
+      cancel_at_period_end: false,
+      cancel_at: null,
+      canceled_at: null,
+      ended_at: null,
+      trial_start: null,
+      trial_end: null,
+      latest_invoice: 'in_legacy',
+      items: {
+        data: [
+          {
+            current_period_start: 1_784_419_200,
+            current_period_end: 1_815_955_200,
+            price: {
+              id: 'price_legacy_year',
+              product: 'prod_legacy',
+              unit_amount: 1200000,
+              currency: 'usd',
+              recurring: { interval: 'year' },
+            },
+          },
+        ],
+      },
+    };
+    (service as any).stripe = {
+      webhooks: {
+        constructEvent: jest.fn().mockReturnValue({
+          id: 'evt_legacy',
+          type: 'customer.subscription.updated',
+          created: 1_784_419_200,
+          data: { object: subscription },
+        }),
+      },
+    };
+
+    await expect(
+      service.handleWebhook(Buffer.from('{}'), 'valid'),
+    ).resolves.toEqual({ received: true });
+    expect(tenants.updateBilling).toHaveBeenCalledWith(
+      'tenant-1',
+      expect.objectContaining({
+        plan: 'service',
+        billingInterval: 'year',
+        stripePriceId: 'price_legacy_year',
+      }),
+    );
   });
 });

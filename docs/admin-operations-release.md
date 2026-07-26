@@ -16,6 +16,7 @@ RealtyTechAI now has one client-facing managed service and two deliberately diff
 The repository already had real tenant-scoped leads, messaging, Twilio/SendGrid/Facebook credential storage, Stripe checkout/webhooks, onboarding records, operations tasks, support, audit logs, and client pages. The main gaps were operational rather than cosmetic:
 
 - The admin page did not present the existing data as one understandable sales-to-launch workflow.
+- A failure in one noncritical admin endpoint could previously hide the entire workspace instead of isolating the affected section.
 - Platform access was an all-or-nothing environment allow-list; there was no Staff role with server-enforced financial restrictions.
 - Assignments were inconsistent and invalid operator IDs were not centrally rejected.
 - Billing state existed, but live/test revenue, refunds, disputes, subscription amounts, renewals, and recent verified activity were not presented as an owner operating view.
@@ -46,8 +47,12 @@ The repository already had real tenant-scoped leads, messaging, Twilio/SendGrid/
 - **Onboarding:** readiness blockers, provider-test evidence, launch approval evidence, operator approval, owner-only billing verification, activation, and pause.
 - **Tasks:** priority, due date, status, assignment, evidence, overdue reminders, and direct related-record context.
 - **Support:** severity, due date, assignment, acknowledgment, resolution, and notification/task creation.
+- **Handoffs and Appointments:** the same durable client follow-up and appointment records, with operator actions.
 - **Activity:** connection health without credentials and read-only message delivery history.
+- **AI operations:** aggregate approval, usage, takeover, failure, and owner-only platform pause controls.
 - **Billing & health:** owner-only MRR, net collected revenue, live/test separation, recent verified Stripe events, subscription counts, upcoming renewals, provider readiness, retention status, and Staff access.
+
+Each data area loads independently. Authentication or platform-access failure blocks the page; a reporting, billing, AI, integration, health, or other section failure leaves successful workflows available, shows the unavailable area explicitly, and provides a focused retry without displaying fabricated zero values.
 
 ### Client experience
 

@@ -157,7 +157,6 @@ export default function IntegrationsPage() {
   const [facebookPageId, setFacebookPageId] = useState("")
 
   const canManage = role === "owner" || role === "admin"
-  const platformProviderSetupEnabled = false
   const byProvider = useMemo(
     () => new Map(integrations.map((item) => [item.provider, item])),
     [integrations],
@@ -584,19 +583,19 @@ export default function IntegrationsPage() {
     >
       <Alert>
         <ShieldCheck />
-        <AlertTitle>Messaging is managed by RealtyTechAI</AlertTitle>
+        <AlertTitle>Your brokerage controls its provider accounts</AlertTitle>
         <AlertDescription>
-          You do not need to connect Twilio or SendGrid. RealtyTechAI applies your approved brokerage identity, sender details, consent rules, and message history automatically.
+          Provider credentials are encrypted and kept inside this workspace.
+          A connection is not marked ready until its real provider test succeeds.
         </AlertDescription>
       </Alert>
       {!canManage ? (
         <Alert>
           <ShieldCheck />
-          <AlertTitle>Messaging is managed by RealtyTechAI</AlertTitle>
+          <AlertTitle>View only</AlertTitle>
           <AlertDescription>
-            RealtyTechAI controls the Twilio and SendGrid accounts. Your
-            brokerage name, approved sender identity, reply-to details, and
-            consent rules are applied automatically to your messages.
+            An owner or admin must change credentials. You can still review
+            connection health.
           </AlertDescription>
         </Alert>
       ) : null}
@@ -907,8 +906,6 @@ export default function IntegrationsPage() {
           </CardContent>
         </Card>
 
-        {platformProviderSetupEnabled ? (
-          <>
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div className="space-y-1">
@@ -1171,25 +1168,6 @@ export default function IntegrationsPage() {
             ) : null}
           </CardContent>
         </Card>
-          </>
-        ) : (
-          <Card className="xl:col-span-2">
-            <CardHeader>
-              <CardTitle>Messaging managed by RealtyTechAI</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                You do not need to connect Twilio or SendGrid. RealtyTechAI
-                securely manages SMS and email delivery for this workspace
-                using your approved brokerage branding and contact information.
-              </p>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Replies, consent, opt-outs, delivery status, and message
-                history remain connected to your leads and conversations here.
-              </p>
-            </CardContent>
-          </Card>
-        )}
 
         <Card className="xl:col-span-2">
           <CardHeader className="flex flex-row items-start justify-between gap-4">

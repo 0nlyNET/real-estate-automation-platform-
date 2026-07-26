@@ -19,6 +19,13 @@ assert.match(dashboard, /apiFetch<LeadAttention\[]>\("\/admin\/lead-attention\?t
 assert.match(dashboard, /urgentClientLeads\.length/, "the action center must surface urgent client leads")
 assert.match(dashboard, /canSuspendSelectedTenant[\s\S]*lifecycleStatus === "ACTIVE"/, "stop-services controls must only appear for active serviceable clients")
 assert.match(dashboard, /canRestoreSelectedTenant[\s\S]*lifecycleStatus !== "CANCELED"/, "restore controls must not revive canceled clients")
+assert.match(dashboard, /Promise\.allSettled\(sections\.map\(\(section\) => loadDataSection\(section\)\)\)/, "independent admin data failures must not block the entire workspace")
+assert.match(dashboard, /SectionFailures/, "affected admin sections must show retryable failure states")
+assert.match(dashboard, /Retry \$\{dataSectionLabels\[section\]\}/, "each failed admin data section must support a focused retry")
+assert.match(dashboard, /sectionErrors\.billing \? "Billing data unavailable"/, "unavailable billing data must not be displayed as fabricated zero revenue")
+assert.match(dashboard, /Business reporting is unavailable/, "reporting failures must not look like an empty reporting period")
+assert.match(dashboard, /AI status unavailable/, "an unavailable AI endpoint must not appear healthy")
+assert.match(dashboard, /ownerDataSections/, "owner-only data requests must remain separated from staff requests")
 assert.doesNotMatch(layout, /\/admin\/overview|full=1/, "admin navigation must only link to the canonical workspace")
 assert.match(layout, /href="\/admin\/dashboard"/, "admin navigation must expose the canonical workspace")
 

@@ -15,9 +15,8 @@ import { TenantSettings } from '../settings/tenant-settings.entity';
 import { mapStripeStatusToTenantStatus } from '../tenants/stripe-billing-update';
 import { StripeWebhookEvent } from './stripe-webhook-event.entity';
 import {
-  BillablePlan,
-  BillingInterval,
-  configuredPriceId,
+  ServiceBillingInterval,
+  requireConfiguredServicePriceId,
   planForStripePrice,
 } from './stripe-plan-config';
 import { OperationsService } from '../operations/operations.service';
@@ -129,8 +128,6 @@ export class BillingService {
   async createCheckoutSession(params: {
     tenantId: string;
     userEmail: string;
-    plan: BillablePlan;
-    interval: BillingInterval;
     successUrl: string;
     cancelUrl: string;
   }) {
@@ -195,7 +192,7 @@ export class BillingService {
         tenant = (await this.tenants.findById(tenant.id)) || tenant;
       }
 
-      const priceId = configuredPriceId(params.plan, params.interval);
+      const priceId = requireConfiguredServicePriceId();
       await this.tenants.updateBilling(tenant.id, {
         stripeCheckoutSessionId: 'creating',
         stripeCheckoutStartedAt: new Date(),
@@ -622,7 +619,41 @@ export class BillingService {
     latestInvoiceId?: string,
   ) {
     const { priceId, productId, unitAmount, currency, interval } = this.subscriptionPrice(subscription);
-    const mapped = planForStripePrice(priceId);
+    let mapped:
+      | {
+          plan: 'service';
+          interval: ServiceBillingInterval;
+          priceId: string;
+          compatibility: boolean;
+        }
+      | null = planForStripePrice(priceId);
+    if (!mapped && priceId) {
+      const existing = await this.tenants.findById(tenantId);
+      const sameStoredSubscription =
+        existing?.stripeSubscriptionId === subscription.id &&
+        existing?.stripePriceId === priceId;
+      const recognizedStoredService = [
+        'service',
+        'pro',
+        'teams',
+        'enterprise',
+      ].includes(String(existing?.plan || ''));
+      if (sameStoredSubscription && recognizedStoredService) {
+        mapped = {
+          plan: 'service',
+          interval,
+          priceId,
+          compatibility: true,
+        };
+        this.logger.warn(
+          operationalEvent('legacy_stripe_price_accepted', {
+            tenantId,
+            subscriptionId: subscription.id,
+            priceId,
+          }),
+        );
+      }
+    }
     if (!mapped) {
       this.logger.error(
         operationalEvent('unknown_stripe_price', {

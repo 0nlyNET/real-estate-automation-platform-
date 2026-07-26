@@ -1,6 +1,6 @@
 import { apiFetch } from "@/lib/api"
 
-export type PlanName = "trial" | "free" | "pro" | "teams" | "enterprise"
+export type PlanName = "trial" | "free" | "service" | "pro" | "teams" | "enterprise"
 export type PlanStatus =
   | "active"
   | "trialing"

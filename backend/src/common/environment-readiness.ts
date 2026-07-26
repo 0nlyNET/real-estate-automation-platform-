@@ -88,11 +88,7 @@ export function environmentReadiness() {
   const stripeMissing: string[] = stripeEnabled
     ? STRIPE_VALUES.filter((name) => !present(name))
     : [];
-  if (
-    stripeEnabled &&
-    !present('STRIPE_PRICE_SERVICE_MONTH') &&
-    !present('STRIPE_PRICE_TEAMS_MONTH')
-  ) {
+  if (stripeEnabled && !present('STRIPE_PRICE_SERVICE_MONTH')) {
     stripeMissing.push('STRIPE_PRICE_SERVICE_MONTH');
   }
 

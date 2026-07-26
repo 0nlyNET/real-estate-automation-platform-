@@ -98,7 +98,6 @@ export class Lead extends BaseEntity {
   @Column({ name: 'last_contacted_at', type: 'timestamptz', nullable: true })
   lastContactedAt?: Date;
 
-  // Placeholder for “Follow-ups due” in the UI. Later: derive from sequences.
   @Column({ name: 'next_follow_up_at', type: 'timestamptz', nullable: true })
   nextFollowUpAt?: Date;
 
