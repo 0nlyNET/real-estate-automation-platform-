@@ -5,11 +5,17 @@ import { IntegrationsController } from './integrations.controller';
 import { IntegrationsService } from './integrations.service';
 import { CommonModule } from '../../common/common.module';
 import { OperationsModule } from '../operations/operations.module';
+import { PlatformCredential } from './platform-credential.entity';
+import { PlatformIntegrationsService } from './platform-integrations.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Credential]), CommonModule, OperationsModule],
+  imports: [
+    TypeOrmModule.forFeature([Credential, PlatformCredential]),
+    CommonModule,
+    OperationsModule,
+  ],
   controllers: [IntegrationsController],
-  providers: [IntegrationsService],
-  exports: [IntegrationsService],
+  providers: [IntegrationsService, PlatformIntegrationsService],
+  exports: [IntegrationsService, PlatformIntegrationsService],
 })
 export class IntegrationsModule {}

@@ -23,4 +23,12 @@ module.exports = {
       { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
     ],
   },
+  overrides: [
+    {
+      files: ['src/modules/admin/admin.controller.ts'],
+      rules: {
+        'no-duplicate-imports': 'off',
+      },
+    },
+  ],
 }

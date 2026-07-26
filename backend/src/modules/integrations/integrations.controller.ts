@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Post,
@@ -38,39 +39,37 @@ export class IntegrationsController {
   @Put("twilio")
   @UseGuards(JwtAuthGuard, RolesGuard)
   @RequireRole("admin")
-  async connectTwilio(@Req() req: any, @Body() dto: UpsertTwilioDto) {
-    // your service does NOT have saveTwilio; it has connectTwilio
-    return this.integrationsService.connectTwilio(
-      req.user?.tenantId,
-      dto as any,
+  async connectTwilio(@Body() _dto: UpsertTwilioDto) {
+    throw new ForbiddenException(
+      "Twilio credentials are managed by RealtyTechAI operations. Contact support to change the assigned number.",
     );
   }
 
   @Post("twilio/test")
   @UseGuards(JwtAuthGuard, RolesGuard)
   @RequireRole("admin")
-  async testTwilio(@Req() req: any, @Body() dto: TestTwilioDto) {
-    // your service signature requires dto
-    return this.integrationsService.testTwilio(req.user?.tenantId, dto);
+  async testTwilio(@Body() _dto: TestTwilioDto) {
+    throw new ForbiddenException(
+      "Twilio testing is managed by RealtyTechAI operations.",
+    );
   }
 
   @Put("sendgrid")
   @UseGuards(JwtAuthGuard, RolesGuard)
   @RequireRole("admin")
-  async connectSendGrid(@Req() req: any, @Body() dto: UpsertSendGridDto) {
-    // your service does NOT have saveSendGrid; it has connectSendGrid
-    return this.integrationsService.connectSendGrid(
-      req.user?.tenantId,
-      dto as any,
+  async connectSendGrid(@Body() _dto: UpsertSendGridDto) {
+    throw new ForbiddenException(
+      "SendGrid credentials are managed by RealtyTechAI operations. Contact support to change the assigned sender.",
     );
   }
 
   @Post("sendgrid/test")
   @UseGuards(JwtAuthGuard, RolesGuard)
   @RequireRole("admin")
-  async testSendGrid(@Req() req: any, @Body() dto: TestSendGridDto) {
-    // your service signature requires dto
-    return this.integrationsService.testSendGrid(req.user?.tenantId, dto);
+  async testSendGrid(@Body() _dto: TestSendGridDto) {
+    throw new ForbiddenException(
+      "SendGrid testing is managed by RealtyTechAI operations.",
+    );
   }
 
   @Delete(":provider")
@@ -79,6 +78,11 @@ export class IntegrationsController {
   async disconnect(@Req() req: any, @Param("provider") provider: string) {
     if (!["twilio", "sendgrid", "facebook_lead_ads"].includes(provider)) {
       throw new BadRequestException("Unsupported integration provider");
+    }
+    if (provider === "twilio" || provider === "sendgrid") {
+      throw new ForbiddenException(
+        "Messaging providers are managed by RealtyTechAI operations.",
+      );
     }
     return this.integrationsService.disconnect(
       req.user?.tenantId,
