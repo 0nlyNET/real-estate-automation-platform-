@@ -13,14 +13,24 @@ describe('AdminController role-sensitive onboarding evidence', () => {
       suspend: jest.fn().mockResolvedValue({ changed: true }),
       restore: jest.fn().mockResolvedValue({ changed: true }),
     };
+    const platformIntegrations = {
+      assignTwilio: jest.fn().mockResolvedValue({ twilio: { configured: true } }),
+    };
     const controller = new AdminController(
       admin as any,
       {} as any,
       {} as any,
       onboarding as any,
       serviceControl as any,
+      platformIntegrations as any,
     );
-    return { controller, admin, onboarding, serviceControl };
+    return {
+      controller,
+      admin,
+      onboarding,
+      serviceControl,
+      platformIntegrations,
+    };
   }
 
   it('rejects a staff attempt to verify billing even through a direct API call', () => {
@@ -104,5 +114,15 @@ describe('AdminController role-sensitive onboarding evidence', () => {
     expect(tenant).not.toHaveProperty('status');
     expect(tenant).not.toHaveProperty('serviceSuspensionReason');
     expect(tenant.serviceState.reason).not.toContain('Card');
+  });
+
+  it('delegates client Twilio assignments to platform-managed operations', async () => {
+    const { controller, platformIntegrations } = setup();
+    await expect(
+      controller.assignTenantTwilio('tenant-1', { fromNumber: '+19296395472' }),
+    ).resolves.toEqual({ twilio: { configured: true } });
+    expect(platformIntegrations.assignTwilio).toHaveBeenCalledWith('tenant-1', {
+      fromNumber: '+19296395472',
+    });
   });
 });
