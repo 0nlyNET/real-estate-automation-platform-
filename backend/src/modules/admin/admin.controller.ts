@@ -2,12 +2,14 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   NotFoundException,
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -36,6 +38,18 @@ import {
   setSessionCookie,
 } from '../auth/session-cookie';
 import { describeServiceState, ServiceControlService } from '../service-control/service-control.service';
+import { PlatformIntegrationsService } from '../integrations/platform-integrations.service';
+import {
+  AssignManagedSendGridDto,
+  AssignManagedTwilioDto,
+  PlatformSendGridDto,
+  PlatformTwilioDto,
+  TestPlatformSendGridDto,
+  TestPlatformTwilioDto,
+  TestSendGridDto,
+  TestTwilioDto,
+} from '../integrations/integrations.dto';
+import type { ManagedMessagingProvider } from '../integrations/platform-integrations.service';
 
 @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 @Controller('admin')
@@ -46,6 +60,7 @@ export class AdminController {
     private readonly audit: AuditService,
     private readonly onboarding: OnboardingService,
     private readonly serviceControl: ServiceControlService,
+    private readonly platformIntegrations: PlatformIntegrationsService,
   ) {}
 
   @Get('overview')
@@ -260,6 +275,103 @@ export class AdminController {
   @Get('integrations-overview')
   integrationsOverview() {
     return this.admin.integrationOverview();
+  }
+
+  @Get('platform-integrations')
+  @UseGuards(PlatformAdminGuard)
+  platformIntegrationSummary() {
+    return this.platformIntegrations.platformSummary();
+  }
+
+  @Put('platform-integrations/twilio')
+  @UseGuards(PlatformAdminGuard)
+  savePlatformTwilio(@Body() body: PlatformTwilioDto) {
+    return this.platformIntegrations.savePlatformTwilio(body);
+  }
+
+  @Post('platform-integrations/twilio/test')
+  @UseGuards(PlatformAdminGuard)
+  testPlatformTwilio(@Body() body: TestPlatformTwilioDto) {
+    return this.platformIntegrations.testPlatformTwilio(body);
+  }
+
+  @Put('platform-integrations/sendgrid')
+  @UseGuards(PlatformAdminGuard)
+  savePlatformSendGrid(@Body() body: PlatformSendGridDto) {
+    return this.platformIntegrations.savePlatformSendGrid(body);
+  }
+
+  @Post('platform-integrations/sendgrid/test')
+  @UseGuards(PlatformAdminGuard)
+  testPlatformSendGrid(@Body() body: TestPlatformSendGridDto) {
+    return this.platformIntegrations.testPlatformSendGrid(body);
+  }
+
+  @Delete('platform-integrations/:provider')
+  @UseGuards(PlatformAdminGuard)
+  removePlatformProvider(@Param('provider') provider: string) {
+    if (provider !== 'twilio' && provider !== 'sendgrid') {
+      throw new BadRequestException('Unsupported managed provider');
+    }
+    return this.platformIntegrations.removePlatformProvider(
+      provider as ManagedMessagingProvider,
+    );
+  }
+
+  @Get('tenants/:tenantId/integrations')
+  tenantIntegrations(@Param('tenantId') tenantId: string) {
+    return this.platformIntegrations.tenantSummary(tenantId);
+  }
+
+  @Put('tenants/:tenantId/integrations/twilio')
+  @UseGuards(PlatformAdminGuard)
+  assignTenantTwilio(
+    @Param('tenantId') tenantId: string,
+    @Body() body: AssignManagedTwilioDto,
+  ) {
+    return this.platformIntegrations.assignTwilio(tenantId, body);
+  }
+
+  @Post('tenants/:tenantId/integrations/twilio/test')
+  @UseGuards(PlatformAdminGuard)
+  testTenantTwilio(
+    @Param('tenantId') tenantId: string,
+    @Body() body: TestTwilioDto,
+  ) {
+    return this.platformIntegrations.testTenantTwilio(tenantId, body);
+  }
+
+  @Put('tenants/:tenantId/integrations/sendgrid')
+  @UseGuards(PlatformAdminGuard)
+  assignTenantSendGrid(
+    @Param('tenantId') tenantId: string,
+    @Body() body: AssignManagedSendGridDto,
+  ) {
+    return this.platformIntegrations.assignSendGrid(tenantId, body);
+  }
+
+  @Post('tenants/:tenantId/integrations/sendgrid/test')
+  @UseGuards(PlatformAdminGuard)
+  testTenantSendGrid(
+    @Param('tenantId') tenantId: string,
+    @Body() body: TestSendGridDto,
+  ) {
+    return this.platformIntegrations.testTenantSendGrid(tenantId, body);
+  }
+
+  @Delete('tenants/:tenantId/integrations/:provider')
+  @UseGuards(PlatformAdminGuard)
+  removeTenantProvider(
+    @Param('tenantId') tenantId: string,
+    @Param('provider') provider: string,
+  ) {
+    if (provider !== 'twilio' && provider !== 'sendgrid') {
+      throw new BadRequestException('Unsupported managed provider');
+    }
+    return this.platformIntegrations.removeTenantProvider(
+      tenantId,
+      provider as ManagedMessagingProvider,
+    );
   }
 
   @Get('tenants/:tenantId/users')
