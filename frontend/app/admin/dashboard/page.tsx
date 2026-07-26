@@ -90,6 +90,16 @@ type Communication = {
   id: string; tenantId: string; leadId: string; leadName: string; channel: string; direction: string
   body: string; status: string; providerStatus?: string | null; createdAt: string
 }
+type LeadAttention = {
+  id: string
+  fullName: string
+  stage: string
+  temperature: "hot" | "warm" | "cold"
+  readinessLevel: "not_ready" | "exploring" | "ready" | "urgent"
+  recommendedNextAction?: string | null
+  createdAt: string
+  tenant: { id: string; name: string }
+}
 type Connection = { tenantId: string; tenantName: string; provider: string; status: string; updatedAt: string }
 type ClientHandoff = {
   id: string; tenantId: string; priority: "normal" | "high" | "urgent"; status: "open" | "opened" | "snoozed" | "completed"
@@ -178,6 +188,7 @@ export default function AdminDashboardPage() {
   const [operators, setOperators] = useState<Operator[]>([])
   const [platformUsers, setPlatformUsers] = useState<PlatformAccessUser[]>([])
   const [communications, setCommunications] = useState<Communication[]>([])
+  const [leadAttention, setLeadAttention] = useState<LeadAttention[]>([])
   const [connections, setConnections] = useState<Connection[]>([])
   const [handoffs, setHandoffs] = useState<ClientHandoff[]>([])
   const [appointments, setAppointments] = useState<ClientAppointment[]>([])
@@ -208,7 +219,7 @@ export default function AdminDashboardPage() {
       setMe(current)
       const requested = new URLSearchParams(window.location.search).get("view") as View | null
       if (requested && views.some((item) => item.id === requested && (!item.ownerOnly || current.platformRole === "super_admin"))) setView(requested)
-      const [nextOverview, nextTenants, nextApplications, nextTasks, nextSupport, nextOperators, nextCommunications, nextConnections, nextReport, nextHandoffs, nextAppointments, nextAiOverview] = await Promise.all([
+      const [nextOverview, nextTenants, nextApplications, nextTasks, nextSupport, nextOperators, nextCommunications, nextLeadAttention, nextConnections, nextReport, nextHandoffs, nextAppointments, nextAiOverview] = await Promise.all([
         apiFetch<Overview>("/admin/overview"),
         apiFetch<Tenant[]>("/admin/tenants"),
         apiFetch<ProspectApplication[]>("/admin/applications?take=100"),
@@ -216,6 +227,7 @@ export default function AdminDashboardPage() {
         apiFetch<SupportTicket[]>("/support/admin/tickets"),
         apiFetch<Operator[]>("/admin/operators"),
         apiFetch<Communication[]>("/admin/communications?take=50"),
+        apiFetch<LeadAttention[]>("/admin/lead-attention?take=50"),
         apiFetch<Connection[]>("/admin/integrations-overview"),
         apiFetch<BusinessReport>("/admin/reporting-overview"),
         apiFetch<ClientHandoff[]>("/admin/client-operations/handoffs?take=100"),
@@ -223,24 +235,11 @@ export default function AdminDashboardPage() {
         apiFetch<AiOverview>("/admin/ai/overview"),
       ])
       setOverview(nextOverview); setTenants(nextTenants); setApplications(nextApplications); setTasks(nextTasks)
-      setSupport(nextSupport); setOperators(nextOperators); setCommunications(nextCommunications); setConnections(nextConnections)
+      setSupport(nextSupport); setOperators(nextOperators); setCommunications(nextCommunications); setLeadAttention(nextLeadAttention); setConnections(nextConnections)
       setReport(nextReport)
       setHandoffs(nextHandoffs); setAppointments(nextAppointments)
       setAiOverview(nextAiOverview)
       setNotes(Object.fromEntries(nextApplications.map((item) => [item.id, item.operatorNotes || ""])))
-      const requestedTenantId = new URLSearchParams(window.location.search).get("tenantId")
-      const requestedTenant = requestedTenantId
-        ? nextTenants.find((tenant) => tenant.id === requestedTenantId)
-        : null
-      if (requestedTenant) {
-        const [users, status] = await Promise.all([
-          apiFetch<TenantUser[]>(`/admin/tenants/${requestedTenant.id}/users`),
-          apiFetch<TenantReadiness>(`/admin/tenants/${requestedTenant.id}/readiness`),
-        ])
-        setSelectedTenant(requestedTenant)
-        setTenantUsers(users)
-        setReadiness(status)
-      }
       if (current.platformRole === "super_admin") {
         const [nextBilling, nextHealth, nextPlatformUsers] = await Promise.all([
           apiFetch<BillingOverview>("/admin/billing-overview"),
@@ -273,6 +272,37 @@ export default function AdminDashboardPage() {
     return () => window.clearTimeout(syncView)
   }, [me, searchParams])
 
+  useEffect(() => {
+    if (!me) return
+    const tenantId = searchParams.get("tenantId")
+    if (!tenantId) {
+      setSelectedTenant(null)
+      setTenantUsers([])
+      setReadiness(null)
+      return
+    }
+    if (selectedTenant?.id === tenantId) return
+    const requestedTenant = tenants.find((tenant) => tenant.id === tenantId)
+    if (!requestedTenant) {
+      setSelectedTenant(null)
+      setTenantUsers([])
+      setReadiness(null)
+      return
+    }
+    setSelectedTenant(requestedTenant)
+    setTenantUsers([])
+    setReadiness(null)
+    void Promise.all([
+      apiFetch<TenantUser[]>(`/admin/tenants/${requestedTenant.id}/users`),
+      apiFetch<TenantReadiness>(`/admin/tenants/${requestedTenant.id}/readiness`),
+    ]).then(([users, status]) => {
+      setTenantUsers(users)
+      setReadiness(status)
+    }).catch((cause) => {
+      setError(messageFor(cause, "Client details could not be loaded"))
+    })
+  }, [me, searchParams, selectedTenant?.id, tenants])
+
   const operatorName = (id?: string | null) => operators.find((operator) => operator.id === id)?.email || "Unassigned"
   const normalizedSearch = search.trim().toLowerCase()
   const matches = (text: string) => !normalizedSearch || text.toLowerCase().includes(normalizedSearch)
@@ -280,6 +310,7 @@ export default function AdminDashboardPage() {
   const filteredApplications = applications.filter((item) => matches(`${item.name} ${item.company} ${item.email}`) && ownerMatches(item.assignedOperatorId) && (statusFilter === "all" || item.status === statusFilter))
   const filteredTenants = tenants.filter((item) => matches(item.name) && ownerMatches(item.assignedOperatorId) && (statusFilter === "all" || item.lifecycleStatus === statusFilter))
   const filteredTasks = tasks.filter((item) => matches(`${item.title} ${item.description} ${item.category}`) && ownerMatches(item.assignedOperatorId) && (statusFilter === "all" || item.status === statusFilter))
+  const filteredLeadAttention = leadAttention.filter((item) => matches(`${item.fullName} ${item.tenant.name} ${item.recommendedNextAction || ""}`) && (statusFilter === "all" || item.stage === statusFilter || item.readinessLevel === statusFilter || item.temperature === statusFilter))
   const filteredHandoffs = handoffs.filter((item) => matches(`${item.tenant.name} ${item.lead.fullName} ${item.reason}`) && (statusFilter === "all" || item.status === statusFilter))
   const filteredAppointments = appointments.filter((item) => matches(`${item.tenant.name} ${item.lead.fullName}`) && (statusFilter === "all" || item.status === statusFilter))
 
@@ -450,6 +481,9 @@ export default function AdminDashboardPage() {
   const urgentTasks = tasks.filter((item) => item.status !== "resolved" && ["high", "critical"].includes(item.priority))
   const urgentSupport = support.filter((item) => item.status !== "resolved" && ["high", "urgent"].includes(item.severity))
   const unassignedLeads = applications.filter((item) => !item.assignedOperatorId && !["accepted", "declined"].includes(item.status))
+  const urgentClientLeads = leadAttention.filter((item) => item.readinessLevel === "urgent" || item.temperature === "hot")
+  const canSuspendSelectedTenant = Boolean(selectedTenant && selectedTenant.lifecycleStatus === "ACTIVE" && selectedTenant.serviceState?.state !== "suspended")
+  const canRestoreSelectedTenant = Boolean(selectedTenant && selectedTenant.lifecycleStatus !== "CANCELED" && selectedTenant.serviceState?.state === "suspended")
 
   return (
     <div className="space-y-6">
@@ -480,6 +514,7 @@ export default function AdminDashboardPage() {
             <CardHeader><CardTitle>Action center</CardTitle><p className="text-sm text-muted-foreground">Start here. These are the items most likely to need you today.</p></CardHeader>
             <CardContent className="grid gap-3 lg:grid-cols-2">
               <Action title={`${applications.filter((item) => item.status === "new").length} new application(s)`} detail="Review, qualify, book the call, then start client setup after close." button="Review leads" onClick={() => switchView("leads")} urgent={applications.some((item) => item.status === "new")} />
+              <Action title={`${urgentClientLeads.length} urgent client lead(s)`} detail="Hot or urgent leads from active client workspaces that need human attention." button="Review client leads" onClick={() => switchView("leads")} urgent={urgentClientLeads.length > 0} />
               <Action title={`${unassignedLeads.length} unassigned lead(s)`} detail="Assign an owner so important follow-up does not sit in the shared queue." button="Assign leads" onClick={() => { switchView("leads"); setOwnerFilter("unassigned") }} urgent={unassignedLeads.length > 0} />
               <Action title={`${urgentTasks.length} high-priority task(s)`} detail="Includes onboarding blocks, failed payments, provider issues, and follow-up." button="Open tasks" onClick={() => switchView("tasks")} urgent={urgentTasks.length > 0} />
               <Action title={`${urgentSupport.length} urgent support request(s)`} detail="Acknowledge, assign, and resolve client issues before their due time." button="Review support" onClick={() => switchView("support")} urgent={urgentSupport.length > 0} />
@@ -495,8 +530,11 @@ export default function AdminDashboardPage() {
       ) : null}
 
       {view === "leads" ? (
-        <Section title="Prospective clients" subtitle="Every website application is saved here even if an email notification fails.">
+        <Section title="Leads" subtitle="Prospective client applications and urgent client leads are visible from one queue.">
           <Filters search={search} setSearch={setSearch} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} operators={operators} statuses={["new", "reviewing", "qualified", "consultation_booked", "accepted", "declined"]} />
+          <div className="space-y-3">
+            {filteredLeadAttention.map((item) => <Card key={item.id} className={item.readinessLevel === "urgent" || item.temperature === "hot" ? "border-amber-500/40" : ""}><CardContent className="space-y-3 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-lg font-medium">{item.fullName}</div><div className="text-sm text-muted-foreground">{item.tenant.name} · {label(item.stage)}</div></div><div className="flex gap-2"><Badge variant={item.readinessLevel === "urgent" ? "destructive" : "secondary"}>{label(item.readinessLevel)}</Badge><Badge variant={item.temperature === "hot" ? "destructive" : "outline"}>{item.temperature}</Badge></div></div><p className="text-sm">{item.recommendedNextAction || "Review this client lead and decide the next follow-up."}</p><Button size="sm" variant="outline" onClick={() => switchView("onboarding", item.tenant.id)}>Open client workspace</Button></CardContent></Card>)}
+          </div>
           <div className="space-y-3">{filteredApplications.map((item) => <Card key={item.id}><CardContent className="space-y-4 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-lg font-medium">{item.company || item.name}</div><div className="text-sm text-muted-foreground">{item.email} · {item.phone || "No phone"} · {label(item.status)}</div></div><Badge variant={item.notificationStatus === "failed" ? "destructive" : "secondary"}>{item.notificationStatus === "failed" ? "Saved—email alert failed" : `Alert ${item.notificationStatus}`}</Badge></div><p className="text-sm">{item.message}</p><div className="grid gap-3 md:grid-cols-3"><label className="space-y-1 text-xs font-medium">Stage<select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={item.status} onChange={(event) => void patchApplication(item, { status: event.target.value, operatorNotes: notes[item.id] || "", assignedOperatorId: item.assignedOperatorId || null })}>{["new", "reviewing", "qualified", "consultation_booked", "accepted", "declined"].map((status) => <option key={status} value={status}>{label(status)}</option>)}</select></label><OwnerSelect value={item.assignedOperatorId || ""} operators={operators} onChange={(value) => void patchApplication(item, { assignedOperatorId: value || null, operatorNotes: notes[item.id] || "" })} /><label className="space-y-1 text-xs font-medium">Internal notes<Input value={notes[item.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [item.id]: event.target.value }))} onBlur={() => { if ((notes[item.id] || "") !== (item.operatorNotes || "")) void patchApplication(item, { operatorNotes: notes[item.id] || "" }) }} /></label></div><div className="flex flex-wrap gap-2"><Button size="sm" onClick={() => prepareClient(item)} disabled={!isOwner || item.status === "declined"}><UserPlus className="mr-2 h-4 w-4" />Start client setup</Button><Button size="sm" variant="outline" onClick={() => void apiFetch(`/admin/applications/${item.id}/onboarding-task`, { method: "POST" }).then(loadAll)}>Create follow-up task</Button></div></CardContent></Card>)}{!filteredApplications.length ? <Empty text="No leads match these filters." /> : null}</div>
         </Section>
       ) : null}
@@ -515,8 +553,8 @@ export default function AdminDashboardPage() {
 
       {view === "onboarding" ? (
         <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-          <Card><CardHeader><CardTitle>Clients onboarding</CardTitle><p className="text-sm text-muted-foreground">Choose a client to see exactly what remains.</p></CardHeader><CardContent className="space-y-2">{tenants.filter((tenant) => tenant.lifecycleStatus !== "CANCELED").map((tenant) => <button type="button" key={tenant.id} onClick={() => void openClient(tenant)} className={`w-full rounded-lg border p-3 text-left hover:bg-muted/50 ${selectedTenant?.id === tenant.id ? "border-primary bg-primary/5" : ""}`}><div className="font-medium">{tenant.name}</div><div className="mt-1 text-xs text-muted-foreground">{label(tenant.lifecycleStatus)} · {operatorName(tenant.assignedOperatorId)}</div></button>)}</CardContent></Card>
-          <Card><CardHeader><CardTitle>{selectedTenant?.name || "Select a client"}</CardTitle>{selectedTenant ? <p className="text-sm text-muted-foreground">{readiness?.ready ? "All required checks pass. The owner can activate service." : `${readiness?.blockers.length || 0} required check(s) remain.`}</p> : null}</CardHeader><CardContent className="space-y-5">{selectedTenant ? <><div className="grid gap-2 sm:grid-cols-2">{readiness?.required.map((item) => <div key={item.key} className="flex gap-2 rounded-lg border p-3 text-sm">{item.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />}<span>{item.label}</span></div>)}</div><div className="rounded-lg border p-4"><div className="font-medium">Record your review</div><p className="mt-1 text-sm text-muted-foreground">Run the real controlled lead journey before marking the test complete.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><Button variant="outline" onClick={() => void recordEvidence({ providerRejectionTestedAt: new Date().toISOString() })}>Failure visibility tested</Button><Button variant="outline" onClick={() => void recordEvidence({ billingVerifiedAt: new Date().toISOString() })} disabled={!isOwner}>Billing verified</Button><Button variant="outline" onClick={() => void recordEvidence({ operatorApproved: true })}>Operator review approved</Button></div><div className="mt-3 flex gap-2"><Input placeholder="Reference the client's written launch approval" value={evidence[selectedTenant.id] || ""} onChange={(event) => setEvidence((current) => ({ ...current, [selectedTenant.id]: event.target.value }))} /><Button variant="outline" disabled={!evidence[selectedTenant.id]?.trim()} onClick={() => void recordEvidence({ clientApprovedAt: new Date().toISOString(), clientApprovalEvidence: evidence[selectedTenant.id].trim() })}>Save approval</Button></div></div>{isOwner ? <div className="flex flex-wrap gap-2"><Button disabled={!readiness?.ready} onClick={() => void changeService("activate")}>Activate service</Button><Button variant="outline" onClick={() => void changeService("pause")}>Pause automations</Button>{selectedTenant.serviceState?.state === "suspended" ? <Button variant="outline" onClick={() => void setServiceSuspended(false)}>Restore all services</Button> : <Button variant="destructive" onClick={() => void setServiceSuspended(true)}>Stop all services</Button>}</div> : null}<div><div className="mb-2 font-medium">Client users</div><div className="space-y-2">{tenantUsers.map((user) => <div key={user.id} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{user.email}</div><div className="text-xs text-muted-foreground">{user.role} · {user.isActive ? "active" : "inactive"}</div></div>{isOwner ? <Button size="sm" variant="outline" disabled={!user.isActive} onClick={() => void impersonate(user.id)}>View as client</Button> : null}</div>)}</div></div></> : <Empty text="Choose a client from the list to manage onboarding." />}</CardContent></Card>
+          <Card><CardHeader><CardTitle>Clients onboarding</CardTitle><p className="text-sm text-muted-foreground">Choose a client to see exactly what remains.</p></CardHeader><CardContent className="space-y-2">{tenants.filter((tenant) => tenant.lifecycleStatus !== "CANCELED").map((tenant) => <button type="button" key={tenant.id} onClick={() => switchView("onboarding", tenant.id)} className={`w-full rounded-lg border p-3 text-left hover:bg-muted/50 ${selectedTenant?.id === tenant.id ? "border-primary bg-primary/5" : ""}`}><div className="font-medium">{tenant.name}</div><div className="mt-1 text-xs text-muted-foreground">{label(tenant.lifecycleStatus)} · {operatorName(tenant.assignedOperatorId)}</div></button>)}</CardContent></Card>
+          <Card><CardHeader><CardTitle>{selectedTenant?.name || "Select a client"}</CardTitle>{selectedTenant ? <p className="text-sm text-muted-foreground">{readiness?.ready ? "All required checks pass. The owner can activate service." : `${readiness?.blockers.length || 0} required check(s) remain.`}</p> : null}</CardHeader><CardContent className="space-y-5">{selectedTenant ? <><div className="grid gap-2 sm:grid-cols-2">{readiness?.required.map((item) => <div key={item.key} className="flex gap-2 rounded-lg border p-3 text-sm">{item.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />}<span>{item.label}</span></div>)}</div><div className="rounded-lg border p-4"><div className="font-medium">Record your review</div><p className="mt-1 text-sm text-muted-foreground">Run the real controlled lead journey before marking the test complete.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><Button variant="outline" onClick={() => void recordEvidence({ providerRejectionTestedAt: new Date().toISOString() })}>Failure visibility tested</Button><Button variant="outline" onClick={() => void recordEvidence({ billingVerifiedAt: new Date().toISOString() })} disabled={!isOwner}>Billing verified</Button><Button variant="outline" onClick={() => void recordEvidence({ operatorApproved: true })}>Operator review approved</Button></div><div className="mt-3 flex gap-2"><Input placeholder="Reference the client's written launch approval" value={evidence[selectedTenant.id] || ""} onChange={(event) => setEvidence((current) => ({ ...current, [selectedTenant.id]: event.target.value }))} /><Button variant="outline" disabled={!evidence[selectedTenant.id]?.trim()} onClick={() => void recordEvidence({ clientApprovedAt: new Date().toISOString(), clientApprovalEvidence: evidence[selectedTenant.id].trim() })}>Save approval</Button></div></div>{isOwner ? <div className="flex flex-wrap gap-2"><Button disabled={!readiness?.ready} onClick={() => void changeService("activate")}>Activate service</Button><Button variant="outline" onClick={() => void changeService("pause")}>Pause automations</Button>{canRestoreSelectedTenant ? <Button variant="outline" onClick={() => void setServiceSuspended(false)}>Restore all services</Button> : null}{canSuspendSelectedTenant ? <Button variant="destructive" onClick={() => void setServiceSuspended(true)}>Stop all services</Button> : null}</div> : null}<div><div className="mb-2 font-medium">Client users</div><div className="space-y-2">{tenantUsers.map((user) => <div key={user.id} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{user.email}</div><div className="text-xs text-muted-foreground">{user.role} · {user.isActive ? "active" : "inactive"}</div></div>{isOwner ? <Button size="sm" variant="outline" disabled={!user.isActive} onClick={() => void impersonate(user.id)}>View as client</Button> : null}</div>)}</div></div></> : <Empty text="Choose a client from the list to manage onboarding." />}</CardContent></Card>
         </div>
       ) : null}
 
