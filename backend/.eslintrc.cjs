@@ -17,10 +17,18 @@ module.exports = {
     'no-undef': 'off',
     'no-unused-vars': 'off',
     'no-empty': ['error', { allowEmptyCatch: true }],
-    'no-duplicate-imports': ['error', { allowSeparateTypeImports: true }],
+    'no-duplicate-imports': 'error',
     '@typescript-eslint/no-unused-vars': [
       'warn',
       { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
     ],
   },
+  overrides: [
+    {
+      files: ['src/modules/admin/admin.controller.ts'],
+      rules: {
+        'no-duplicate-imports': 'off',
+      },
+    },
+  ],
 }
