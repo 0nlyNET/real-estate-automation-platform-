@@ -1,121 +1,28 @@
-name: Apply admin integrations tab patch
+name: Export admin integrations source
 
 on:
-  push:
-    branches:
-      - agent/admin-integrations-tab
   pull_request:
     branches:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch:
-    if: github.event_name == 'pull_request'
+  export:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/admin-integrations-tab
-          fetch-depth: 0
-      - name: Apply focused navigation patch
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path: Path, old: str, new: str) -> None:
-              text = path.read_text()
-              if old not in text:
-                  raise SystemExit(f"Expected pattern missing in {path}: {old[:100]!r}")
-              path.write_text(text.replace(old, new, 1))
-
-          integrations_page = Path("frontend/app/admin/integrations/page.tsx")
-          managed_component = Path("frontend/components/admin/managed-integrations.tsx")
-          if not managed_component.exists():
-              source = integrations_page.read_text()
-              old_decl = "export default function AdminIntegrationsPage() {"
-              if old_decl not in source:
-                  raise SystemExit("Admin integrations page declaration was not found")
-              managed_component.parent.mkdir(parents=True, exist_ok=True)
-              managed_component.write_text(
-                  source.replace(old_decl, "export default function ManagedIntegrations() {", 1)
-              )
-              integrations_page.write_text(
-                  'import ManagedIntegrations from "@/components/admin/managed-integrations"\n\n'
-                  'export default function AdminIntegrationsPage() {\n'
-                  '  return <ManagedIntegrations />\n'
-                  '}\n'
-              )
-
-          dashboard = Path("frontend/app/admin/dashboard/page.tsx")
-          replace_once(dashboard, '  Search,\n  UserPlus,', '  Search,\n  Settings2,\n  UserPlus,')
-          replace_once(
-              dashboard,
-              'import { Input } from "@/components/ui/input"\n',
-              'import { Input } from "@/components/ui/input"\nimport ManagedIntegrations from "@/components/admin/managed-integrations"\n',
-          )
-          replace_once(
-              dashboard,
-              'type View = "overview" | "leads" | "clients" | "handoffs" | "appointments" | "onboarding" | "tasks" | "support" | "activity" | "ai" | "billing"',
-              'type View = "overview" | "leads" | "clients" | "handoffs" | "appointments" | "onboarding" | "tasks" | "support" | "activity" | "integrations" | "ai" | "billing"',
-          )
-          replace_once(
-              dashboard,
-              '  { id: "activity", label: "Activity", icon: Plug },\n  { id: "ai", label: "AI operations", icon: Bot },',
-              '  { id: "activity", label: "Activity", icon: Plug },\n  { id: "integrations", label: "Integrations", icon: Settings2, ownerOnly: true },\n  { id: "ai", label: "AI operations", icon: Bot },',
-          )
-          replace_once(
-              dashboard,
-              '  activity: ["integrations", "communications"],\n  ai: ["ai"],',
-              '  activity: ["integrations", "communications"],\n  integrations: [],\n  ai: ["ai"],',
-          )
-          replace_once(
-              dashboard,
-              '      {view === "activity" ? (',
-              '      {view === "integrations" ? <ManagedIntegrations /> : null}\n\n      {view === "activity" ? (',
-          )
-
-          layout = Path("frontend/app/admin/layout.tsx")
-          replace_once(layout, 'href="/admin/integrations"', 'href="/admin/dashboard?view=integrations"')
-          replace_once(layout, '              Provider setup', '              Integrations')
-
-          client_check = Path("frontend/scripts/verify-client-readiness.mjs")
-          replace_once(
-              client_check,
-              'const managedIntegrations = read("app/admin/integrations/page.tsx")',
-              'const managedIntegrations = read("components/admin/managed-integrations.tsx")',
-          )
-          replace_once(
-              client_check,
-              'assert.match(read("app/admin/layout.tsx"), /href="\\/admin\\/integrations"/)',
-              'assert.match(read("app/admin/layout.tsx"), /href="\\/admin\\/dashboard\\?view=integrations"/)\nassert.match(read("app/admin/dashboard/page.tsx"), /id: "integrations", label: "Integrations"/)\nassert.match(read("app/admin/dashboard/page.tsx"), /view === "integrations" \\? <ManagedIntegrations \\/>/)',
-          )
-
-          routing_check = Path("frontend/scripts/verify-admin-routing.mjs")
-          marker = 'assert.match(layout, /href="\\/admin\\/dashboard"/, "admin navigation must expose the canonical workspace")\n'
-          addition = marker + 'assert.match(dashboard, /id: "integrations", label: "Integrations"/, "provider setup must be a canonical dashboard tab")\n' + 'assert.match(dashboard, /view === "integrations" \\? <ManagedIntegrations \\/>/, "the integrations tab must render inside the canonical dashboard")\n' + 'assert.match(layout, /href="\\/admin\\/dashboard\\?view=integrations"/, "admin navigation must open the canonical integrations tab")\n'
-          replace_once(routing_check, marker, addition)
-          PY
-
-          git diff --check
-          git status --short
-      - name: Commit patch
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "No patch changes were required."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add frontend/app/admin/dashboard/page.tsx \
-                  frontend/app/admin/integrations/page.tsx \
-                  frontend/app/admin/layout.tsx \
-                  frontend/components/admin/managed-integrations.tsx \
-                  frontend/scripts/verify-client-readiness.mjs \
-                  frontend/scripts/verify-admin-routing.mjs
-          git commit -m "Add integrations to canonical admin dashboard"
-          git push origin HEAD:agent/admin-integrations-tab
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-integrations-source
+          path: |
+            frontend/app/admin/dashboard/page.tsx
+            frontend/app/admin/integrations/page.tsx
+            frontend/app/admin/layout.tsx
+            frontend/scripts/verify-client-readiness.mjs
+            frontend/scripts/verify-admin-routing.mjs
+          if-no-files-found: error
