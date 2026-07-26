@@ -27,7 +27,6 @@ describe('RealtorComService', () => {
 
   it('requires a public API URL before generating provider credentials', async () => {
     delete process.env.PUBLIC_API_URL;
-    delete process.env.BACKEND_URL;
     await expect(service.rotateKey('tenant-1')).rejects.toThrow('PUBLIC_API_URL');
   });
 

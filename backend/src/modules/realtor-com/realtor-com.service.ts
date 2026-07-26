@@ -48,10 +48,7 @@ export class RealtorComService {
   }
 
   private publicBaseUrl() {
-    return String(process.env.PUBLIC_API_URL || process.env.BACKEND_URL || '').replace(
-      /\/+$/,
-      '',
-    );
+    return String(process.env.PUBLIC_API_URL || '').replace(/\/+$/, '');
   }
 
   private requirePublicBaseUrl() {

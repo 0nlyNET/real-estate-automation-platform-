@@ -34,7 +34,7 @@ Realtor.com product labels and menu placement may differ between eligible accoun
 
 Do not market the connector as fully production-verified until all of the following are complete:
 
-- `PUBLIC_API_URL` or `BACKEND_URL` resolves to the exact public HTTPS backend origin.
+- `PUBLIC_API_URL` resolves to the exact public HTTPS backend origin.
 - An eligible Realtor.com agent or broker account exposes the relevant Lead Delivery/API settings.
 - The current Realtor.com Lead Delivery API Implementation Guide or provider-issued sample payload has been reviewed.
 - Realtor.com's official connection test reaches the tenant endpoint and changes the RealtyTechAI status to **Connected**.
