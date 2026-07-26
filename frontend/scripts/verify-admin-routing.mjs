@@ -28,5 +28,8 @@ assert.match(dashboard, /AI status unavailable/, "an unavailable AI endpoint mus
 assert.match(dashboard, /ownerDataSections/, "owner-only data requests must remain separated from staff requests")
 assert.doesNotMatch(layout, /\/admin\/overview|full=1/, "admin navigation must only link to the canonical workspace")
 assert.match(layout, /href="\/admin\/dashboard"/, "admin navigation must expose the canonical workspace")
+assert.match(dashboard, /id: "integrations", label: "Integrations"/, "provider setup must be a canonical dashboard tab")
+assert.match(dashboard, /view === "integrations" \? <ManagedIntegrations \/>/, "the integrations tab must render inside the canonical dashboard")
+assert.match(layout, /href="\/admin\/dashboard\?view=integrations"/, "admin navigation must open the canonical integrations tab")
 
 console.log("Admin routing regression checks passed.")

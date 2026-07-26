@@ -22,8 +22,8 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             <Link className="text-muted-foreground hover:text-foreground" href="/admin/dashboard">
               Admin workspace
             </Link>
-            <Link className="text-muted-foreground hover:text-foreground" href="/admin/integrations">
-              Provider setup
+            <Link className="text-muted-foreground hover:text-foreground" href="/admin/dashboard?view=integrations">
+              Integrations
             </Link>
             <NotificationCenter />
             <Link className="text-muted-foreground hover:text-foreground" href="/logout">

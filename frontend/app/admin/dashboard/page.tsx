@@ -18,6 +18,7 @@ import {
   Plug,
   PauseCircle,
   Search,
+  Settings2,
   UserPlus,
   Users,
 } from "lucide-react"
@@ -27,8 +28,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import ManagedIntegrations from "@/components/admin/managed-integrations"
 
-type View = "overview" | "leads" | "clients" | "handoffs" | "appointments" | "onboarding" | "tasks" | "support" | "activity" | "ai" | "billing"
+type View = "overview" | "leads" | "clients" | "handoffs" | "appointments" | "onboarding" | "tasks" | "support" | "activity" | "integrations" | "ai" | "billing"
 type Overview = {
   totalClients: number; active: number; onboarding: number; newApplications: number
   openTasks: number; urgentTasks: number; openSupport: number
@@ -152,6 +154,7 @@ const views: Array<{ id: View; label: string; icon: typeof Users; ownerOnly?: bo
   { id: "tasks", label: "Tasks", icon: ListTodo },
   { id: "support", label: "Support", icon: LifeBuoy },
   { id: "activity", label: "Activity", icon: Plug },
+  { id: "integrations", label: "Integrations", icon: Settings2, ownerOnly: true },
   { id: "ai", label: "AI operations", icon: Bot },
   { id: "billing", label: "Billing & health", icon: CreditCard, ownerOnly: true },
 ]
@@ -218,6 +221,7 @@ const viewDataSections: Record<View, DataSection[]> = {
   tasks: ["tasks", "operators"],
   support: ["support", "operators"],
   activity: ["integrations", "communications"],
+  integrations: [],
   ai: ["ai"],
   billing: ["billing", "health", "access"],
 }
@@ -688,6 +692,8 @@ export default function AdminDashboardPage() {
           </Section>
         </div>
       ) : null}
+
+      {view === "integrations" ? <ManagedIntegrations /> : null}
 
       {view === "activity" ? <div className="grid gap-5 xl:grid-cols-2"><Section title="Connection status" subtitle="Operational status only—credentials and secrets never reach this page."><div className="space-y-2">{connections.map((item) => <div key={`${item.tenantId}-${item.provider}`} className="flex items-center justify-between rounded-lg border p-3"><div><div className="text-sm font-medium">{item.tenantName}</div><div className="text-xs text-muted-foreground">{label(item.provider)} · updated {new Date(item.updatedAt).toLocaleString()}</div></div><Badge>{item.status}</Badge></div>)}{!sectionErrors.integrations && !connections.length ? <Empty text="No client connections have been saved yet." /> : null}</div></Section><Section title="Communications history" subtitle="Read-only delivery history. Sending and replies remain inside the client workspace."><div className="space-y-2">{communications.map((item) => <div key={item.id} className="rounded-lg border p-3"><div className="flex items-center justify-between gap-3"><div className="text-sm font-medium">{item.leadName}</div><Badge variant="secondary">{item.channel} · {item.status}</Badge></div><p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{item.body}</p><div className="mt-2 text-xs text-muted-foreground">{item.direction} · {new Date(item.createdAt).toLocaleString()}</div></div>)}{!sectionErrors.communications && !communications.length ? <Empty text="No communications yet." /> : null}</div></Section></div> : null}
 
