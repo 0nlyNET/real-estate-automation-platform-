@@ -35,6 +35,7 @@ import { BrokerageKnowledge } from '../modules/ai/brokerage-knowledge.entity';
 import { ConversationAiState } from '../modules/ai/conversation-ai-state.entity';
 import { AiRun } from '../modules/ai/ai-run.entity';
 import { PlatformAiControl } from '../modules/ai/platform-ai-control.entity';
+import { PlatformCredential } from '../modules/integrations/platform-credential.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -47,6 +48,7 @@ export const databaseEntities = [
   SequenceEnrollment,
   SequenceStep,
   Credential,
+  PlatformCredential,
   TenantSettings,
   RoutingRule,
   RoutingAssignmentLog,
