@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - agent/admin-integrations-tab
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,16 +51,11 @@ jobs:
               )
 
           dashboard = Path("frontend/app/admin/dashboard/page.tsx")
-          replace_once(
-              dashboard,
-              '  Search,\n  UserPlus,',
-              '  Search,\n  Settings2,\n  UserPlus,',
-          )
+          replace_once(dashboard, '  Search,\n  UserPlus,', '  Search,\n  Settings2,\n  UserPlus,')
           replace_once(
               dashboard,
               'import { Input } from "@/components/ui/input"\n',
-              'import { Input } from "@/components/ui/input"\n'
-              'import ManagedIntegrations from "@/components/admin/managed-integrations"\n',
+              'import { Input } from "@/components/ui/input"\nimport ManagedIntegrations from "@/components/admin/managed-integrations"\n',
           )
           replace_once(
               dashboard,
@@ -66,30 +65,21 @@ jobs:
           replace_once(
               dashboard,
               '  { id: "activity", label: "Activity", icon: Plug },\n  { id: "ai", label: "AI operations", icon: Bot },',
-              '  { id: "activity", label: "Activity", icon: Plug },\n'
-              '  { id: "integrations", label: "Integrations", icon: Settings2, ownerOnly: true },\n'
-              '  { id: "ai", label: "AI operations", icon: Bot },',
+              '  { id: "activity", label: "Activity", icon: Plug },\n  { id: "integrations", label: "Integrations", icon: Settings2, ownerOnly: true },\n  { id: "ai", label: "AI operations", icon: Bot },',
           )
           replace_once(
               dashboard,
               '  activity: ["integrations", "communications"],\n  ai: ["ai"],',
-              '  activity: ["integrations", "communications"],\n'
-              '  integrations: [],\n'
-              '  ai: ["ai"],',
+              '  activity: ["integrations", "communications"],\n  integrations: [],\n  ai: ["ai"],',
           )
           replace_once(
               dashboard,
               '      {view === "activity" ? (',
-              '      {view === "integrations" ? <ManagedIntegrations /> : null}\n\n'
-              '      {view === "activity" ? (',
+              '      {view === "integrations" ? <ManagedIntegrations /> : null}\n\n      {view === "activity" ? (',
           )
 
           layout = Path("frontend/app/admin/layout.tsx")
-          replace_once(
-              layout,
-              'href="/admin/integrations"',
-              'href="/admin/dashboard?view=integrations"',
-          )
+          replace_once(layout, 'href="/admin/integrations"', 'href="/admin/dashboard?view=integrations"')
           replace_once(layout, '              Provider setup', '              Integrations')
 
           client_check = Path("frontend/scripts/verify-client-readiness.mjs")
@@ -101,19 +91,12 @@ jobs:
           replace_once(
               client_check,
               'assert.match(read("app/admin/layout.tsx"), /href="\\/admin\\/integrations"/)',
-              'assert.match(read("app/admin/layout.tsx"), /href="\\/admin\\/dashboard\\?view=integrations"/)\n'
-              'assert.match(read("app/admin/dashboard/page.tsx"), /id: "integrations", label: "Integrations"/)\n'
-              'assert.match(read("app/admin/dashboard/page.tsx"), /view === "integrations" \\? <ManagedIntegrations \\/>/)',
+              'assert.match(read("app/admin/layout.tsx"), /href="\\/admin\\/dashboard\\?view=integrations"/)\nassert.match(read("app/admin/dashboard/page.tsx"), /id: "integrations", label: "Integrations"/)\nassert.match(read("app/admin/dashboard/page.tsx"), /view === "integrations" \\? <ManagedIntegrations \\/>/)',
           )
 
           routing_check = Path("frontend/scripts/verify-admin-routing.mjs")
           marker = 'assert.match(layout, /href="\\/admin\\/dashboard"/, "admin navigation must expose the canonical workspace")\n'
-          addition = (
-              marker
-              + 'assert.match(dashboard, /id: "integrations", label: "Integrations"/, "provider setup must be a canonical dashboard tab")\n'
-              + 'assert.match(dashboard, /view === "integrations" \\? <ManagedIntegrations \\/>/, "the integrations tab must render inside the canonical dashboard")\n'
-              + 'assert.match(layout, /href="\\/admin\\/dashboard\\?view=integrations"/, "admin navigation must open the canonical integrations tab")\n'
-          )
+          addition = marker + 'assert.match(dashboard, /id: "integrations", label: "Integrations"/, "provider setup must be a canonical dashboard tab")\n' + 'assert.match(dashboard, /view === "integrations" \\? <ManagedIntegrations \\/>/, "the integrations tab must render inside the canonical dashboard")\n' + 'assert.match(layout, /href="\\/admin\\/dashboard\\?view=integrations"/, "admin navigation must open the canonical integrations tab")\n'
           replace_once(routing_check, marker, addition)
           PY
 
