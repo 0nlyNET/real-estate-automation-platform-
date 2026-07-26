@@ -52,8 +52,7 @@ export class LeadsService {
     @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
-  private async applyRoutingRules(lead: Lead, plan: string) {
-    if (!['teams', 'enterprise'].includes(plan)) return lead;
+  private async applyRoutingRules(lead: Lead) {
     const assignment = await this.routingService.routeLead(lead);
     if (!assignment) return lead;
     lead.assignedToUserId = assignment.assignedToUserId;
@@ -207,9 +206,9 @@ export class LeadsService {
       return existing;
     }
 
-    // Teams/Brokerages: lead routing (round robin)
+    // Apply the workspace routing configuration for the managed service.
     const settings = await this.getTenantSettings(tenant.id);
-    const shouldRoute = Boolean((settings as any)?.roundRobinEnabled) && ['teams','enterprise'].includes(String(tenant.plan));
+    const shouldRoute = Boolean((settings as any)?.roundRobinEnabled);
     const teamId = (settings as any)?.roundRobinTeamId || null;
     const assigneeUserId = shouldRoute ? await this.pickRoundRobinAssignee(tenant.id, teamId) : null;
 
@@ -250,7 +249,7 @@ export class LeadsService {
     } as Partial<Lead>);
 
     let saved = await this.leadsRepository.save(lead as Lead);
-    saved = await this.applyRoutingRules(saved, String(tenant.plan));
+    saved = await this.applyRoutingRules(saved);
 
     await this.logLeadEvent(saved, 'created', payload as any);
     await this.recordStageChange(saved, null, saved.stage, undefined, 'intake');
@@ -325,8 +324,8 @@ export class LeadsService {
       if (!team) throw new ForbiddenException('Team must belong to this tenant');
     }
 
-    // Teams/Enterprise: if no manual assignee, apply round robin routing when enabled.
-    if (!assigneeUserId && ['teams', 'enterprise'].includes(String(tenant.plan))) {
+    // If no manual assignee exists, apply round robin routing when enabled.
+    if (!assigneeUserId) {
       const settings = await this.getTenantSettings(tenant.id);
       const shouldRoute = Boolean((settings as any)?.roundRobinEnabled);
       const rrTeamId = (settings as any)?.roundRobinTeamId || null;
@@ -376,7 +375,7 @@ export class LeadsService {
     } as Partial<Lead>);
 
     let saved = await this.leadsRepository.save(lead as Lead);
-    if (!assigneeUserId) saved = await this.applyRoutingRules(saved, String(tenant.plan));
+    if (!assigneeUserId) saved = await this.applyRoutingRules(saved);
     await this.logLeadEvent(saved, 'created', payload as any);
     await this.recordStageChange(saved, null, saved.stage, ctx?.userId, 'manual_create');
     await this.complianceService.recordLeadConsent(

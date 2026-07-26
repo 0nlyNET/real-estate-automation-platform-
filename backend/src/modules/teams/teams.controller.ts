@@ -1,12 +1,12 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
-import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
+import { RequireServiceAccess, ServiceAccessGuard } from '../../common/guards/plan.guard';
 import { TeamsService } from './teams.service';
 import { TeamNameDto } from './teams.dto';
 
-@UseGuards(JwtAuthGuard, TeamsPlanGuard, RolesGuard)
-@RequireTeamsPlan()
+@UseGuards(JwtAuthGuard, ServiceAccessGuard, RolesGuard)
+@RequireServiceAccess()
 @Controller('teams')
 export class TeamsController {
   constructor(private readonly teams: TeamsService) {}

@@ -228,7 +228,7 @@ export default function OnboardingPage() {
 
               {step === 1 ? (
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Where leads come from (comma-separated)" value={listValue("serviceScope", "leadSources")} onChange={(value) => csv("serviceScope", "leadSources", value)} placeholder="Website, Facebook Lead Ads, Zillow" />
+                  <Field label="Where leads come from (comma-separated)" value={listValue("serviceScope", "leadSources")} onChange={(value) => csv("serviceScope", "leadSources", value)} placeholder="Website, Facebook Lead Ads, Realtor.com" />
                   <Field label="Expected leads per month" type="number" value={data.serviceScope.expectedLeadVolume} onChange={(value) => field("serviceScope", "expectedLeadVolume", value)} />
                   <Field label="Who should receive new leads?" value={data.leadHandling.routingRules} onChange={(value) => field("leadHandling", "routingRules", value)} placeholder="Round robin between Alex and Jordan" />
                   <Field label="Business hours" value={data.leadHandling.businessHours} onChange={(value) => field("leadHandling", "businessHours", value)} placeholder="Mon–Fri 8 AM–7 PM" />

@@ -10,7 +10,7 @@ import * as bcrypt from "bcryptjs";
 import * as crypto from "crypto";
 import { User } from "./user.entity";
 import { Tenant } from "../tenants/tenant.entity";
-import { planHasTeamsFeatures, planSeatLimit } from "../../common/plans";
+import { managedServiceSeatLimit } from "../../common/plans";
 import { UserRole } from "../../common/rbac";
 import { Team } from "../teams/team.entity";
 
@@ -164,17 +164,11 @@ export class UsersService {
     role: UserRole;
     teamId?: string | null;
   }) {
-    if (!planHasTeamsFeatures(params.tenant.plan)) {
-      throw new BadRequestException(
-        "Adding team members requires the Teams plan",
-      );
-    }
-
     const activeCount = await this.countActiveByTenant(params.tenant.id);
-    const limit = planSeatLimit(params.tenant.plan);
+    const limit = managedServiceSeatLimit();
     if (activeCount >= limit) {
       throw new BadRequestException(
-        `Seat limit reached (${limit}). Upgrade your plan to add more users.`,
+        `Workspace seat limit reached (${limit}). Contact RealtyTechAI support to change the service scope.`,
       );
     }
 

@@ -15,8 +15,8 @@ import { TenantsService } from '../tenants/tenants.service';
 import { UsersService } from './users.service';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 import {
-  RequireTeamsPlan,
-  TeamsPlanGuard,
+  RequireServiceAccess,
+  ServiceAccessGuard,
 } from '../../common/guards/plan.guard';
 import { UserRole, canManageUsers } from '../../common/rbac';
 import {
@@ -71,8 +71,8 @@ export class UsersController {
     ];
   }
 
-  @UseGuards(TeamsPlanGuard)
-  @RequireTeamsPlan()
+  @UseGuards(ServiceAccessGuard)
+  @RequireServiceAccess()
   @RequireRole('admin')
   @Post()
   async create(@Req() req: any, @Body() body: CreateTeamUserDto) {
@@ -121,8 +121,8 @@ export class UsersController {
     };
   }
 
-  @UseGuards(TeamsPlanGuard)
-  @RequireTeamsPlan()
+  @UseGuards(ServiceAccessGuard)
+  @RequireServiceAccess()
   @RequireRole('admin')
   @Patch(':id/role')
   async updateRole(
@@ -138,8 +138,8 @@ export class UsersController {
     });
   }
 
-  @UseGuards(TeamsPlanGuard)
-  @RequireTeamsPlan()
+  @UseGuards(ServiceAccessGuard)
+  @RequireServiceAccess()
   @RequireRole('admin')
   @Patch(':id/team')
   async updateTeam(
@@ -155,8 +155,8 @@ export class UsersController {
     });
   }
 
-  @UseGuards(TeamsPlanGuard)
-  @RequireTeamsPlan()
+  @UseGuards(ServiceAccessGuard)
+  @RequireServiceAccess()
   @RequireRole('admin')
   @Patch(':id/active')
   async setActive(

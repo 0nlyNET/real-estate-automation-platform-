@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { RolesGuard } from './guards/roles.guard';
-import { TeamsPlanGuard } from './guards/plan.guard';
+import { ServiceAccessGuard } from './guards/plan.guard';
 import { PlatformAdminGuard } from './guards/platform-admin.guard';
 import { PlatformOperatorGuard } from './guards/platform-operator.guard';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -15,7 +15,7 @@ import { ConversationLockService } from './conversation-lock.service';
   providers: [
     Reflector,
     RolesGuard,
-    TeamsPlanGuard,
+    ServiceAccessGuard,
     PlatformAdminGuard,
     PlatformOperatorGuard,
     PlatformOperatorsService,
@@ -24,7 +24,7 @@ import { ConversationLockService } from './conversation-lock.service';
   exports: [
     TypeOrmModule,
     RolesGuard,
-    TeamsPlanGuard,
+    ServiceAccessGuard,
     PlatformAdminGuard,
     PlatformOperatorGuard,
     PlatformOperatorsService,

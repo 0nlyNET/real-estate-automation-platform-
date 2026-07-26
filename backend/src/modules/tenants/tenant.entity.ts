@@ -13,7 +13,15 @@ import { Lead } from '../leads/lead.entity';
 import { Credential } from '../settings/credential.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 
-export type Plan = 'trial' | 'free' | 'pro' | 'teams' | 'enterprise';
+// `pro`, `teams`, and `enterprise` remain readable for legacy rows only.
+// New paid subscriptions are normalized to the single managed service.
+export type Plan =
+  | 'trial'
+  | 'free'
+  | 'service'
+  | 'pro'
+  | 'teams'
+  | 'enterprise';
 export type TenantStatus =
   | 'active'
   | 'trialing'

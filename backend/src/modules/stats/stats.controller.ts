@@ -1,6 +1,6 @@
 import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
+import { RequireServiceAccess, ServiceAccessGuard } from '../../common/guards/plan.guard';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 import { StatsService } from './stats.service';
 
@@ -18,9 +18,9 @@ export class StatsController {
     }, { from, to });
   }
 
-  // Teams/Brokerages: agent leaderboard & performance
-  @UseGuards(JwtAuthGuard, TeamsPlanGuard, RolesGuard)
-  @RequireTeamsPlan()
+  // Managed-service agent leaderboard and performance.
+  @UseGuards(JwtAuthGuard, ServiceAccessGuard, RolesGuard)
+  @RequireServiceAccess()
   @RequireRole('admin')
   @Get('agents')
   async agentMetrics(@Req() req: any) {

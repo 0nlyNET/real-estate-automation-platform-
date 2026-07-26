@@ -3,7 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CommonModule } from './common.module';
 
 describe('CommonModule', () => {
-  it('exports the tenant repository used by TeamsPlanGuard', () => {
+  it('exports the tenant repository used by ServiceAccessGuard', () => {
     const exports = Reflect.getMetadata(MODULE_METADATA.EXPORTS, CommonModule);
 
     expect(exports).toContain(TypeOrmModule);

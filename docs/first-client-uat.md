@@ -37,10 +37,10 @@ Record the tester, UTC timestamp, deployed commit, tenant ID, Stripe mode, and e
 ## Test 4 — Service selection
 
 - Pass/fail: [ ] PASS [ ] FAIL
-- Preconditions: Owner-approved package/pricing decision and draft agreement/SOW exist; four Stripe test price IDs are configured.
-- Exact action: Compare `Managed Pro Pilot` and `Managed Teams Pilot` on `/pricing` with the agreement, SOW, internal `pro`/`teams` plan, monthly/annual interval, and `STRIPE_PRICE_PRO_MONTH`, `STRIPE_PRICE_PRO_YEAR`, `STRIPE_PRICE_TEAMS_MONTH`, `STRIPE_PRICE_TEAMS_YEAR`. Start each permitted checkout in test mode and inspect its Stripe line item without paying.
+- Preconditions: Owner-approved one-service pricing decision and draft agreement/SOW exist; `STRIPE_PRICE_SERVICE_MONTH` contains the approved Stripe test price ID.
+- Exact action: Compare the single managed service on `/pricing` with the agreement, SOW, monthly billing terms, and `STRIPE_PRICE_SERVICE_MONTH`. Start checkout in test mode and inspect its Stripe line item without paying. Confirm the browser cannot submit a plan, interval, price ID, or amount.
 - Expected result: Names, included scope, billing interval, and Stripe product/price agree. Public pricing never renders blank and says `Contact for pilot pricing` until the owner publishes an approved amount. The server—not browser text—selects one configured price ID.
-- Evidence to retain: Signed-off mapping table, screenshots, four test price IDs (IDs are safe; no secret keys), agreement/SOW version.
+- Evidence to retain: Signed-off service mapping, screenshots, the test price ID (IDs are safe; no secret keys), and agreement/SOW version.
 - Failure response: Block checkout for the mismatched package and correct the central mapping or external Stripe price.
 - Rollback action: Disable billing by removing the production Stripe secret or keep checkout inaccessible; do not invent a replacement price.
 

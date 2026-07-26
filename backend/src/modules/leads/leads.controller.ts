@@ -14,8 +14,8 @@ import {
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RequireRole, RolesGuard } from "../../common/guards/roles.guard";
 import {
-  RequireTeamsPlan,
-  TeamsPlanGuard,
+  RequireServiceAccess,
+  ServiceAccessGuard,
 } from "../../common/guards/plan.guard";
 
 import { LeadsService } from "./leads.service";
@@ -106,8 +106,8 @@ export class LeadsController {
     });
   }
 
-  @UseGuards(JwtAuthGuard, TeamsPlanGuard, RolesGuard)
-  @RequireTeamsPlan()
+  @UseGuards(JwtAuthGuard, ServiceAccessGuard, RolesGuard)
+  @RequireServiceAccess()
   @RequireRole("admin")
   @Post("leads/:id/assign")
   assign(

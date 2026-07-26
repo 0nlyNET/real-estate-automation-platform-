@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Multi-tenant real estate agent automation platform backend (NestJS)",
   "license": "MIT",
+  "engines": {
+    "node": "24.x"
+  },
   "main": "dist/main.js",
   "scripts": {
     "build": "npx nest build",

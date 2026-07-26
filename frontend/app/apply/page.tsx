@@ -159,7 +159,7 @@ export default function ApplyPage() {
                   <input
                     required
                     name="lead_source"
-                    placeholder="Primary lead source (Facebook, website, Zillow, etc.)"
+                    placeholder="Primary lead source (Facebook, website, Realtor.com, etc.)"
                     className="w-full rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
                   />
 

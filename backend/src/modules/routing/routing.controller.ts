@@ -2,11 +2,11 @@ import { Body, Controller, Delete, Get, Param, Post, Req, UseGuards } from '@nes
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RoutingService } from './routing.service';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
-import { RequireTeamsPlan, TeamsPlanGuard } from '../../common/guards/plan.guard';
+import { RequireServiceAccess, ServiceAccessGuard } from '../../common/guards/plan.guard';
 import { UpsertRoutingRuleDto } from './routing.dto';
 
-@UseGuards(JwtAuthGuard, TeamsPlanGuard, RolesGuard)
-@RequireTeamsPlan()
+@UseGuards(JwtAuthGuard, ServiceAccessGuard, RolesGuard)
+@RequireServiceAccess()
 @Controller('routing')
 export class RoutingController {
   constructor(private readonly routing: RoutingService) {}
