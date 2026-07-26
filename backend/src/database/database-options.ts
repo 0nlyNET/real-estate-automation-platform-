@@ -11,6 +11,7 @@ import { ClientTodayWorkflow1784592000001 } from './migrations/202607210001-clie
 import { ServiceSuspension1784764800001 } from './migrations/202607230001-service-suspension';
 import { ClientExperienceReadiness1784851200001 } from './migrations/202607240001-client-experience-readiness';
 import { ControlledAiLeadAgent1784937600001 } from './migrations/202607250001-controlled-ai-lead-agent';
+import { PlatformManagedIntegrations1785024000001 } from './migrations/202607260001-platform-managed-integrations';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -23,6 +24,7 @@ const databaseMigrations = [
   ServiceSuspension1784764800001,
   ClientExperienceReadiness1784851200001,
   ControlledAiLeadAgent1784937600001,
+  PlatformManagedIntegrations1785024000001,
 ];
 
 function migrationOptions() {
