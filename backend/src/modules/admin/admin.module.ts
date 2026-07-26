@@ -21,6 +21,7 @@ import { OperationsTask } from '../operations/operations-task.entity';
 import { SupportTicket } from '../support/support-ticket.entity';
 import { BillingEvent } from '../billing/billing-event.entity';
 import { ServiceControlModule } from '../service-control/service-control.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { ServiceControlModule } from '../service-control/service-control.module'
     MailModule,
     OnboardingModule,
     ServiceControlModule,
+    IntegrationsModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],
