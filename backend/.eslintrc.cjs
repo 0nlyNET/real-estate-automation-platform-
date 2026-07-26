@@ -17,7 +17,7 @@ module.exports = {
     'no-undef': 'off',
     'no-unused-vars': 'off',
     'no-empty': ['error', { allowEmptyCatch: true }],
-    'no-duplicate-imports': 'error',
+    'no-duplicate-imports': ['error', { allowSeparateTypeImports: true }],
     '@typescript-eslint/no-unused-vars': [
       'warn',
       { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
