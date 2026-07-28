@@ -60,4 +60,32 @@ describe('production configuration contract', () => {
     process.env.SENDGRID_FROM_EMAIL = 'hello@example.com';
     expect(environmentReadiness().systemEmail.status).toBe('down');
   });
+
+  it('rejects swapped or malformed VAPID keys without exposing their values', () => {
+    process.env.VAPID_PUBLIC_KEY = Buffer.alloc(32, 1).toString('base64url');
+    process.env.VAPID_PRIVATE_KEY = Buffer.alloc(65, 2).toString('base64url');
+    process.env.VAPID_SUBJECT = 'realtytechai@example.com';
+
+    const report = environmentReadiness();
+    expect(report.devicePush.status).toBe('down');
+    expect(report.devicePush.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining('VAPID_PUBLIC_KEY'),
+      expect.stringContaining('VAPID_PRIVATE_KEY'),
+      expect.stringContaining('VAPID_SUBJECT'),
+    ]));
+    expect(JSON.stringify(report)).not.toContain(process.env.VAPID_PUBLIC_KEY);
+    expect(JSON.stringify(report)).not.toContain(process.env.VAPID_PRIVATE_KEY);
+  });
+
+  it('accepts a correctly shaped VAPID configuration', () => {
+    process.env.VAPID_PUBLIC_KEY = Buffer.alloc(65, 1).toString('base64url');
+    process.env.VAPID_PRIVATE_KEY = Buffer.alloc(32, 2).toString('base64url');
+    process.env.VAPID_SUBJECT = 'mailto:alerts@example.com';
+
+    expect(environmentReadiness().devicePush).toMatchObject({
+      status: 'up',
+      missing: [],
+      issues: [],
+    });
+  });
 });

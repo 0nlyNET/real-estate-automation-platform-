@@ -33,10 +33,48 @@ type Preferences = {
   severitySettings: Record<string, boolean>
 }
 
+type DeviceStatus = {
+  isAppleMobile: boolean
+  isStandalone: boolean
+  hasServiceWorker: boolean
+  hasPushManager: boolean
+  hasNotifications: boolean
+  permission: NotificationPermission | "unavailable"
+}
+
+const EMPTY_DEVICE_STATUS: DeviceStatus = {
+  isAppleMobile: false,
+  isStandalone: false,
+  hasServiceWorker: false,
+  hasPushManager: false,
+  hasNotifications: false,
+  permission: "unavailable",
+}
+
 function applicationKey(value: string) {
   const padding = "=".repeat((4 - (value.length % 4)) % 4)
   const raw = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"))
-  return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)))
+  const key = Uint8Array.from([...raw].map((character) => character.charCodeAt(0)))
+  if (key.byteLength !== 65) {
+    throw new Error("The Railway VAPID_PUBLIC_KEY is invalid. Use the longer generated public key, not the 43-character private key.")
+  }
+  return key
+}
+
+function detectDeviceStatus(): DeviceStatus {
+  if (typeof window === "undefined") return EMPTY_DEVICE_STATUS
+  const appleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+  const standalone = window.matchMedia("(display-mode: standalone)").matches ||
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+  const hasNotifications = "Notification" in window
+  return {
+    isAppleMobile: appleMobile,
+    isStandalone: standalone,
+    hasServiceWorker: "serviceWorker" in navigator,
+    hasPushManager: "PushManager" in window,
+    hasNotifications,
+    permission: hasNotifications ? Notification.permission : "unavailable",
+  }
 }
 
 export function NotificationCenter({ audience = "admin" }: { audience?: "admin" | "client" }) {
@@ -48,12 +86,18 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
   const [message, setMessage] = useState("")
   const [busy, setBusy] = useState(false)
   const [thisDeviceEnabled, setThisDeviceEnabled] = useState(false)
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>(EMPTY_DEVICE_STATUS)
   const [categoryFilter, setCategoryFilter] = useState("all")
   const [severityFilter, setSeverityFilter] = useState("all")
   const [readFilter, setReadFilter] = useState("all")
 
   const loadDeviceState = useCallback(async () => {
-    if (!("serviceWorker" in navigator)) return setThisDeviceEnabled(false)
+    const status = detectDeviceStatus()
+    setDeviceStatus(status)
+    if (!status.hasServiceWorker || !status.hasPushManager) {
+      setThisDeviceEnabled(false)
+      return
+    }
     const registration = await navigator.serviceWorker.getRegistration("/")
     const subscription = await registration?.pushManager.getSubscription()
     setThisDeviceEnabled(Boolean(subscription))
@@ -100,38 +144,58 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
     setBusy(true)
     setMessage("")
     try {
-      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-        throw new Error("This browser does not support web push notifications.")
+      const status = detectDeviceStatus()
+      setDeviceStatus(status)
+      if (status.isAppleMobile && !status.isStandalone) {
+        throw new Error("Open RealtyTechAI from its Home Screen icon—not inside Safari—then connect this device.")
+      }
+      if (!status.hasServiceWorker || !status.hasPushManager || !status.hasNotifications) {
+        throw new Error(
+          status.isAppleMobile
+            ? "This iPhone needs iOS 16.4 or later and RealtyTechAI must be opened from the Home Screen."
+            : "This browser does not support web push notifications.",
+        )
+      }
+      if (status.permission === "denied") {
+        throw new Error("Notifications are blocked for this app. Delete the Home Screen app, reinstall it, and choose Allow when asked.")
       }
       const config = await apiFetch<{ configured: boolean; publicKey: string | null }>(
         `${basePath}/push/config`,
       )
       if (!config.configured || !config.publicKey) {
-        throw new Error("Phone alerts need VAPID keys in Railway before they can be enabled.")
+        throw new Error("Phone alerts are not ready. Check the VAPID values in Railway and redeploy the backend.")
       }
+      const publicKey = applicationKey(config.publicKey)
       const permission = await Notification.requestPermission()
+      setDeviceStatus(detectDeviceStatus())
       if (permission !== "granted") throw new Error("Notification permission was not granted.")
-      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" })
+      await navigator.serviceWorker.register("/sw.js", { scope: "/" })
+      const registration = await navigator.serviceWorker.ready
       const existing = await registration.pushManager.getSubscription()
       const subscription = existing || await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: applicationKey(config.publicKey),
+        applicationServerKey: publicKey,
       })
       const payload = subscription.toJSON()
+      if (!payload.keys?.p256dh || !payload.keys?.auth) {
+        throw new Error("The phone created an incomplete push subscription. Reinstall the Home Screen app and try again.")
+      }
       await apiFetch(`${basePath}/push/subscriptions`, {
         method: "POST",
         body: {
           endpoint: subscription.endpoint,
           keys: payload.keys,
-          deviceLabel: navigator.userAgent.includes("iPhone") ? "iPhone" : "Browser device",
+          deviceLabel: status.isAppleMobile ? "iPhone or iPad" : "Browser device",
         },
       })
       await updatePreferences({ pushEnabled: true })
       setThisDeviceEnabled(true)
+      setDeviceStatus(detectDeviceStatus())
       setMessage("Phone alerts are enabled on this device.")
       await load()
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : "Phone alerts could not be enabled.")
+      setDeviceStatus(detectDeviceStatus())
     } finally {
       setBusy(false)
     }
@@ -151,6 +215,7 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
       }
       await updatePreferences({ pushEnabled: summary.activeDevices > 1 })
       setThisDeviceEnabled(false)
+      setDeviceStatus(detectDeviceStatus())
       setMessage("Phone alerts are disconnected from this device.")
       await load()
     } catch (cause) {
@@ -251,6 +316,15 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
               {thisDeviceEnabled ? "Disconnect this device" : busy ? "Connecting…" : "Connect this device"}
             </Button>
           </div>
+          <details className="rounded-md border p-3 text-sm" open={deviceStatus.isAppleMobile && !thisDeviceEnabled}>
+            <summary className="cursor-pointer font-medium">Device check</summary>
+            <div className="mt-3 grid grid-cols-[1fr_auto] gap-x-3 gap-y-2 text-xs">
+              <span>Opened as Home Screen app</span><span className="font-medium">{deviceStatus.isStandalone ? "Yes" : "No"}</span>
+              <span>Browser push support</span><span className="font-medium">{deviceStatus.hasServiceWorker && deviceStatus.hasPushManager && deviceStatus.hasNotifications ? "Ready" : "Unavailable"}</span>
+              <span>Notification permission</span><span className="font-medium">{deviceStatus.permission}</span>
+              <span>Railway push keys</span><span className="font-medium">{summary.pushConfigured ? "Detected" : "Not ready"}</span>
+            </div>
+          </details>
           {preferences ? (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3 rounded-md bg-muted p-3">

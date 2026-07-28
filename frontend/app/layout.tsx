@@ -6,6 +6,7 @@ import "./globals.css"
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"),
+  applicationName: "RealtyTechAI",
   title: "RealtyTechAI | Managed real-estate lead response",
   description: "Managed lead intake, routing, approved SMS and email follow-up, shared message history, and supervised pilot onboarding.",
   alternates: { canonical: "/" },
@@ -21,6 +22,14 @@ export const metadata: Metadata = {
     apple: "/images/tech-20house-20logo-20with-20circuit-20lines.png",
   },
   manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "RealtyTechAI",
+    statusBarStyle: "black-translucent",
+  },
+  formatDetection: {
+    telephone: false,
+  },
 }
 
 export const viewport: Viewport = {

@@ -19,6 +19,12 @@ const STRIPE_VALUES = [
   'STRIPE_WEBHOOK_SECRET',
 ] as const;
 
+const VAPID_VALUES = [
+  'VAPID_PUBLIC_KEY',
+  'VAPID_PRIVATE_KEY',
+  'VAPID_SUBJECT',
+] as const;
+
 function present(name: string) {
   return Boolean(String(process.env[name] || '').trim());
 }
@@ -39,6 +45,36 @@ function validEncryptionKey() {
   } catch {
     return false;
   }
+}
+
+function base64UrlBytes(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw || !/^[A-Za-z0-9_-]+$/.test(raw)) return -1;
+  try {
+    const normalized = raw.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = '='.repeat((4 - (normalized.length % 4)) % 4);
+    return Buffer.from(normalized + padding, 'base64').length;
+  } catch {
+    return -1;
+  }
+}
+
+function vapidIssues() {
+  const issues: string[] = [];
+  const publicKey = String(process.env.VAPID_PUBLIC_KEY || '').trim();
+  const privateKey = String(process.env.VAPID_PRIVATE_KEY || '').trim();
+  const subject = String(process.env.VAPID_SUBJECT || '').trim();
+
+  if (publicKey && base64UrlBytes(publicKey) !== 65) {
+    issues.push('VAPID_PUBLIC_KEY must be the generated 65-byte public key');
+  }
+  if (privateKey && base64UrlBytes(privateKey) !== 32) {
+    issues.push('VAPID_PRIVATE_KEY must be the generated 32-byte private key');
+  }
+  if (subject && !/^mailto:[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(subject) && !/^https:\/\//i.test(subject)) {
+    issues.push('VAPID_SUBJECT must be a mailto: address or HTTPS URL');
+  }
+  return issues;
 }
 
 export function environmentReadiness() {
@@ -91,6 +127,9 @@ export function environmentReadiness() {
   if (stripeEnabled && !present('STRIPE_PRICE_SERVICE_MONTH')) {
     stripeMissing.push('STRIPE_PRICE_SERVICE_MONTH');
   }
+  const pushMissing = VAPID_VALUES.filter((name) => !present(name));
+  const pushConfigured = VAPID_VALUES.length - pushMissing.length;
+  const pushIssues = vapidIssues();
 
   return {
     environment: production ? 'production' : process.env.NODE_ENV || 'development',
@@ -122,12 +161,13 @@ export function environmentReadiness() {
     },
     devicePush: {
       status:
-        present('VAPID_PUBLIC_KEY') && present('VAPID_PRIVATE_KEY') && present('VAPID_SUBJECT')
-          ? 'up'
-          : 'not_configured',
-      missing: ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'].filter(
-        (name) => !present(name),
-      ),
+        pushConfigured === 0
+          ? 'not_configured'
+          : pushMissing.length || pushIssues.length
+            ? 'down'
+            : 'up',
+      missing: pushMissing,
+      issues: pushIssues,
     },
     retention: {
       status: 'up',
