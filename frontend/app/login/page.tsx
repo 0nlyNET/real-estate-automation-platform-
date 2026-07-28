@@ -25,6 +25,7 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
 
   const [error, setError] = useState("");
 
@@ -46,7 +47,11 @@ export default function LoginPage() {
       const res = await fetch(`${API_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: emailClean, password: passwordClean }),
+        body: JSON.stringify({
+          email: emailClean,
+          password: passwordClean,
+          rememberMe,
+        }),
         credentials: "include",
       });
 
@@ -156,6 +161,25 @@ export default function LoginPage() {
                       )}
                       <span className="sr-only">{showPassword ? "Hide password" : "Show password"}</span>
                     </Button>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/40 p-3">
+                  <input
+                    id="rememberMe"
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    disabled={loading}
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-primary"
+                  />
+                  <div className="space-y-1">
+                    <Label htmlFor="rememberMe" className="cursor-pointer text-sm font-medium text-foreground">
+                      Keep me signed in
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Only use this on a device you trust.
+                    </p>
                   </div>
                 </div>
 
