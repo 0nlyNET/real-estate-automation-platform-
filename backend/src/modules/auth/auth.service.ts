@@ -12,6 +12,9 @@ import { isPlatformAdminEmail, resolvePlatformRole } from '../../common/env';
 import { MailService } from '../../mail/mail.service';
 import { OperationsService } from '../operations/operations.service';
 
+const STANDARD_SESSION_EXPIRES_IN = '12h' as const;
+const REMEMBERED_SESSION_EXPIRES_IN = '30d' as const;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -23,7 +26,7 @@ export class AuthService {
     private readonly operations: OperationsService,
   ) {}
 
-  signForUser(user: User) {
+  signForUser(user: User, rememberMe = false) {
     const payload = {
       sub: user.id,
       email: user.email,
@@ -33,7 +36,9 @@ export class AuthService {
       platformRole: resolvePlatformRole(user.email, user.platformRole),
       sessionVersion: user.sessionVersion,
     };
-    return this.jwtService.sign(payload);
+    return this.jwtService.sign(payload, {
+      expiresIn: rememberMe ? REMEMBERED_SESSION_EXPIRES_IN : STANDARD_SESSION_EXPIRES_IN,
+    });
   }
 
   signForImpersonation(
@@ -55,7 +60,7 @@ export class AuthService {
     return this.jwtService.sign(payload, { expiresIn: '15m' });
   }
 
-  async login(email: string, password: string) {
+  async login(email: string, password: string, rememberMe = false) {
     const user = await this.usersService.findByEmail(email);
 
     if (!user) {
@@ -86,7 +91,7 @@ export class AuthService {
     await this.usersService.save(user);
 
     return {
-      accessToken: this.signForUser(user),
+      accessToken: this.signForUser(user, rememberMe),
       user: {
         id: user.id,
         email: user.email,
@@ -162,7 +167,6 @@ export class AuthService {
       tokenHash,
       expiresAt,
     });
-
     await this.passwordResetRepo.save(reset);
 
     const frontend = process.env.FRONTEND_URL || 'http://localhost:3000';

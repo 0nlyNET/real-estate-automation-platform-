@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 export const SESSION_COOKIE = 'rtai_session';
 export const PRIMARY_SESSION_COOKIE = 'rtai_primary_session';
 export const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+export const REMEMBER_ME_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function setSessionCookie(
   response: Response,
