@@ -5,17 +5,19 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { MarketingHeader } from "@/components/ui/marketing-header"
 import { Footer } from "@/components/ui/footer"
-import { ArrowRight, CheckCircle2 } from "lucide-react"
+import { ArrowRight, CalendarDays, CheckCircle2 } from "lucide-react"
 import { apiFetch } from "@/lib/api"
 
 export default function ApplyPage() {
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<string | null>(null)
+  const [bookingUrl, setBookingUrl] = useState<string | null>(null)
 
   async function submitApplication(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setSubmitting(true)
     setResult(null)
+    setBookingUrl(null)
 
     const formElement = event.currentTarget
     const form = new FormData(formElement)
@@ -38,6 +40,9 @@ export default function ApplyPage() {
       })
       formElement.reset()
       setResult(response.message || "Your application was received. Our team will review it and contact you using the information provided.")
+
+      const booking = await apiFetch<{ configured: boolean; bookingUrl: string | null }>("/public/sales-booking").catch(() => null)
+      if (booking?.configured && booking.bookingUrl) setBookingUrl(booking.bookingUrl)
     } catch (error) {
       setResult(error instanceof Error ? error.message : "Application could not be submitted.")
     } finally {
@@ -86,8 +91,8 @@ export default function ApplyPage() {
                 <h3 className="text-lg font-semibold text-foreground">What happens next</h3>
                 <ol className="mt-4 space-y-3 text-muted-foreground">
                   <li>1) You submit the application</li>
-                  <li>2) We review fit and lead source</li>
-                  <li>3) We map your install and launch</li>
+                  <li>2) You can book a discovery call when the calendar is available</li>
+                  <li>3) We review fit, map your install, and launch</li>
                 </ol>
               </div>
             </div>
@@ -177,6 +182,14 @@ export default function ApplyPage() {
                   </Button>
 
                   {result ? <p role="status" className="text-sm text-muted-foreground">{result}</p> : null}
+
+                  {bookingUrl ? (
+                    <Button asChild className="w-full">
+                      <a href={bookingUrl} target="_blank" rel="noreferrer">
+                        <CalendarDays className="mr-2 h-4 w-4" /> Book your RealtyTechAI discovery call
+                      </a>
+                    </Button>
+                  ) : null}
 
                   <p className="pt-2 text-xs text-muted-foreground">
                     We review applications manually. Not everyone is accepted.
