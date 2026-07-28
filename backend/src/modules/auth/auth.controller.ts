@@ -4,7 +4,15 @@ import { AuthService } from './auth.service';
 import { Throttle } from '@nestjs/throttler';
 import { ChangeTemporaryPasswordDto, ForgotPasswordDto, LoginDto, ResetPasswordDto, VerifyEmailDto } from './auth.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
-import { clearSessionCookie, PRIMARY_SESSION_COOKIE, readCookie, SESSION_COOKIE, setSessionCookie } from './session-cookie';
+import {
+  clearSessionCookie,
+  PRIMARY_SESSION_COOKIE,
+  readCookie,
+  REMEMBER_ME_MAX_AGE_MS,
+  SESSION_COOKIE,
+  SESSION_MAX_AGE_MS,
+  setSessionCookie,
+} from './session-cookie';
 
 @Controller('auth')
 export class AuthController {
@@ -13,8 +21,14 @@ export class AuthController {
   @Post('login')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) response: Response) {
-    const result = await this.auth.login(dto.email, dto.password);
-    setSessionCookie(response, result.accessToken);
+    const rememberMe = dto.rememberMe === true;
+    const result = await this.auth.login(dto.email, dto.password, rememberMe);
+    setSessionCookie(
+      response,
+      result.accessToken,
+      SESSION_COOKIE,
+      rememberMe ? REMEMBER_ME_MAX_AGE_MS : SESSION_MAX_AGE_MS,
+    );
     clearSessionCookie(response, PRIMARY_SESSION_COOKIE);
     return { user: result.user };
   }
