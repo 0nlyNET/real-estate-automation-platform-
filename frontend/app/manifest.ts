@@ -1,6 +1,8 @@
 import type { MetadataRoute } from "next"
 
 export default function manifest(): MetadataRoute.Manifest {
+  const icon = "/images/tech-20house-20logo-20with-20circuit-20lines.png"
+
   return {
     id: "/",
     name: "RealtyTechAI",
@@ -15,10 +17,16 @@ export default function manifest(): MetadataRoute.Manifest {
     categories: ["business", "productivity"],
     icons: [
       {
-        src: "/images/tech-20house-20logo-20with-20circuit-20lines.png",
+        src: icon,
         sizes: "1024x1024",
         type: "image/png",
-        purpose: "any maskable",
+        purpose: "any",
+      },
+      {
+        src: icon,
+        sizes: "1024x1024",
+        type: "image/png",
+        purpose: "maskable",
       },
     ],
   }
