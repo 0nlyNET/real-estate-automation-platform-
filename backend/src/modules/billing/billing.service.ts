@@ -17,6 +17,7 @@ import { StripeWebhookEvent } from './stripe-webhook-event.entity';
 import {
   ServiceBillingInterval,
   requireConfiguredServicePriceId,
+  requireConfiguredSetupPriceId,
   planForStripePrice,
 } from './stripe-plan-config';
 import { OperationsService } from '../operations/operations.service';
@@ -192,7 +193,23 @@ export class BillingService {
         tenant = (await this.tenants.findById(tenant.id)) || tenant;
       }
 
-      const priceId = requireConfiguredServicePriceId();
+      const servicePriceId = requireConfiguredServicePriceId();
+      const setupFeeIncluded = !tenant.setupPaidAt;
+      const setupPriceId = setupFeeIncluded
+        ? requireConfiguredSetupPriceId()
+        : null;
+      const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+        { price: servicePriceId, quantity: 1 },
+      ];
+      if (setupPriceId) {
+        lineItems.push({ price: setupPriceId, quantity: 1 });
+      }
+      const checkoutMetadata: Record<string, string> = {
+        tenantId: tenant.id,
+        setupFeeIncluded: String(setupFeeIncluded),
+      };
+      if (setupPriceId) checkoutMetadata.setupPriceId = setupPriceId;
+
       await this.tenants.updateBilling(tenant.id, {
         stripeCheckoutSessionId: 'creating',
         stripeCheckoutStartedAt: new Date(),
@@ -205,13 +222,13 @@ export class BillingService {
           {
             mode: 'subscription',
             customer: customerId,
-            line_items: [{ price: priceId, quantity: 1 }],
+            line_items: lineItems,
             success_url: params.successUrl,
             cancel_url: params.cancelUrl,
             allow_promotion_codes: true,
             client_reference_id: tenant.id,
-            subscription_data: { metadata: { tenantId: tenant.id } },
-            metadata: { tenantId: tenant.id },
+            subscription_data: { metadata: checkoutMetadata },
+            metadata: checkoutMetadata,
           },
           { idempotencyKey: `checkout:${tenant.id}:${crypto.randomUUID()}` },
         );
@@ -452,6 +469,12 @@ export class BillingService {
               });
             }
           } else {
+            await this.recordSetupPaymentIfIncluded(
+              subscription,
+              tenantId,
+              invoice.id,
+              stripeDate(event.created) || new Date(),
+            );
             await this.tenants.updateBilling(tenantId, {
               status: mapStripeStatusToTenantStatus(subscription.status),
               lastPaymentFailureAt: null,
@@ -546,7 +569,7 @@ export class BillingService {
           severity: 'critical',
           audience: 'super_admin',
           title: 'Stripe dispute opened',
-          message: 'A client payment dispute was opened. Review it in Stripe promptly.',
+          message: 'A Stripe payment dispute was opened. Review it in Stripe promptly.',
           deduplicationKey: `stripe:${event.id}`,
           actionUrl: '/admin/dashboard?view=billing',
           ...(tenantId ? { entityType: 'tenant', entityId: tenantId } : {}),
@@ -596,6 +619,27 @@ export class BillingService {
     const parent = (invoice as any).parent?.subscription_details?.subscription;
     const value = legacy || parent;
     return typeof value === 'string' ? value : value?.id || null;
+  }
+
+  private async recordSetupPaymentIfIncluded(
+    subscription: Stripe.Subscription,
+    tenantId: string,
+    invoiceId: string,
+    paidAt: Date,
+  ) {
+    if (String(subscription.metadata?.setupFeeIncluded || '') !== 'true') return;
+    const setupPriceId = String(subscription.metadata?.setupPriceId || '').trim();
+    if (!setupPriceId) {
+      throw new Error('Setup fee subscription metadata is missing setupPriceId');
+    }
+    const tenant = await this.tenants.findById(tenantId);
+    if (!tenant || tenant.setupPaidAt) return;
+    await this.tenants.updateBilling(tenantId, {
+      setupPaidAt: paidAt,
+      setupInvoiceId: invoiceId,
+      setupStripePriceId: setupPriceId,
+      billingStateUpdatedAt: new Date(),
+    });
   }
 
   private async resolveTenantId(subscription: Stripe.Subscription) {
