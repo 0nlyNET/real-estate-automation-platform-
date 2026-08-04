@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TenantsModule } from '../tenants/tenants.module';
 import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
+import { BillingReconciliationService } from './billing-reconciliation.service';
 import { CommonModule } from '../../common/common.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { StripeWebhookEvent } from './stripe-webhook-event.entity';
@@ -18,6 +19,6 @@ import { ServiceControlModule } from '../service-control/service-control.module'
     TypeOrmModule.forFeature([StripeWebhookEvent, BillingEvent, Tenant, TenantSettings]),
   ],
   controllers: [BillingController],
-  providers: [BillingService],
+  providers: [BillingService, BillingReconciliationService],
 })
 export class BillingModule {}
