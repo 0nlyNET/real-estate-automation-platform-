@@ -17,6 +17,8 @@ const SYSTEM_EMAIL_VALUES = [
 
 const STRIPE_VALUES = [
   'STRIPE_WEBHOOK_SECRET',
+  'STRIPE_PRICE_SERVICE_MONTH',
+  'STRIPE_PRICE_SETUP_ONCE',
 ] as const;
 
 const VAPID_VALUES = [
@@ -124,9 +126,6 @@ export function environmentReadiness() {
   const stripeMissing: string[] = stripeEnabled
     ? STRIPE_VALUES.filter((name) => !present(name))
     : [];
-  if (stripeEnabled && !present('STRIPE_PRICE_SERVICE_MONTH')) {
-    stripeMissing.push('STRIPE_PRICE_SERVICE_MONTH');
-  }
   const pushMissing = VAPID_VALUES.filter((name) => !present(name));
   const pushConfigured = VAPID_VALUES.length - pushMissing.length;
   const pushIssues = vapidIssues();
