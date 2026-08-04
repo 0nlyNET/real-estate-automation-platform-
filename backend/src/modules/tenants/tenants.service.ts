@@ -27,6 +27,9 @@ export class TenantsService {
       stripeSubscriptionId: null,
       stripeSubscriptionStatus: null,
       stripePriceId: null,
+      setupPaidAt: null,
+      setupInvoiceId: null,
+      setupStripePriceId: null,
     });
     return await this.repo.save(tenant);
   }
@@ -61,6 +64,9 @@ export class TenantsService {
         | 'canceledAt'
         | 'latestInvoiceId'
         | 'lastPaymentFailureAt'
+        | 'setupPaidAt'
+        | 'setupInvoiceId'
+        | 'setupStripePriceId'
         | 'billingStateUpdatedAt'
         | 'assignedOperatorId'
         | 'stripeUnitAmount'

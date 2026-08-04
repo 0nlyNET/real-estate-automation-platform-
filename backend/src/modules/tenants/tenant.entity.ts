@@ -141,6 +141,15 @@ export class Tenant {
   @Column({ name: 'last_payment_failure_at', type: 'timestamptz', nullable: true })
   lastPaymentFailureAt?: Date | null;
 
+  @Column({ name: 'setup_paid_at', type: 'timestamptz', nullable: true })
+  setupPaidAt?: Date | null;
+
+  @Column({ name: 'setup_invoice_id', type: 'text', nullable: true })
+  setupInvoiceId?: string | null;
+
+  @Column({ name: 'setup_stripe_price_id', type: 'text', nullable: true })
+  setupStripePriceId?: string | null;
+
   @Column({ name: 'billing_state_updated_at', type: 'timestamptz', nullable: true })
   billingStateUpdatedAt?: Date | null;
 

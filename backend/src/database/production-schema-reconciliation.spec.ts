@@ -13,6 +13,7 @@ import { ServiceSuspension1784764800001 } from "./migrations/202607230001-servic
 import { ClientExperienceReadiness1784851200001 } from "./migrations/202607240001-client-experience-readiness";
 import { ControlledAiLeadAgent1784937600001 } from "./migrations/202607250001-controlled-ai-lead-agent";
 import { PlatformManagedIntegrations1785024000001 } from "./migrations/202607260001-platform-managed-integrations";
+import { StripeSetupFeeTracking1785801600001 } from "./migrations/202608040001-stripe-setup-fee-tracking";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -159,6 +160,7 @@ describe("deployed legacy schema reproduction", () => {
     await new ClientExperienceReadiness1784851200001().up(queryRunner);
     await new ControlledAiLeadAgent1784937600001().up(queryRunner);
     await new PlatformManagedIntegrations1785024000001().up(queryRunner);
+    await new StripeSetupFeeTracking1785801600001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
@@ -223,6 +225,7 @@ describe("deployed legacy schema reproduction", () => {
     await new ClientExperienceReadiness1784851200001().up(queryRunner);
     await new ControlledAiLeadAgent1784937600001().up(queryRunner);
     await new PlatformManagedIntegrations1785024000001().up(queryRunner);
+    await new StripeSetupFeeTracking1785801600001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({

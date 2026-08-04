@@ -6,11 +6,30 @@ export function configuredServicePriceId() {
   return String(process.env.STRIPE_PRICE_SERVICE_MONTH || '').trim() || null;
 }
 
+export function configuredSetupPriceId() {
+  return String(process.env.STRIPE_PRICE_SETUP_ONCE || '').trim() || null;
+}
+
 export function requireConfiguredServicePriceId() {
   const priceId = configuredServicePriceId();
   if (!priceId) {
     throw new BadRequestException(
       'Billing is not configured; STRIPE_PRICE_SERVICE_MONTH is missing',
+    );
+  }
+  return priceId;
+}
+
+export function requireConfiguredSetupPriceId() {
+  const priceId = configuredSetupPriceId();
+  if (!priceId) {
+    throw new BadRequestException(
+      'Billing is not configured; STRIPE_PRICE_SETUP_ONCE is missing',
+    );
+  }
+  if (priceId === configuredServicePriceId()) {
+    throw new BadRequestException(
+      'Billing is not configured; STRIPE_PRICE_SETUP_ONCE must differ from STRIPE_PRICE_SERVICE_MONTH',
     );
   }
   return priceId;
@@ -40,6 +59,9 @@ export function missingStripeConfiguration() {
   );
   if (!configuredServicePriceId()) {
     missing.push('STRIPE_PRICE_SERVICE_MONTH');
+  }
+  if (!configuredSetupPriceId()) {
+    missing.push('STRIPE_PRICE_SETUP_ONCE');
   }
   return missing;
 }
