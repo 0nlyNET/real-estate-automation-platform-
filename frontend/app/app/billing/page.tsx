@@ -7,24 +7,51 @@ import { Button } from "@/components/ui/button"
 import { apiFetch } from "@/lib/api"
 import { fetchMePlan, MePlan } from "@/lib/plan"
 
+const OPEN_SUBSCRIPTION_STATES = new Set([
+  "active",
+  "trialing",
+  "past_due",
+  "unpaid",
+  "paused",
+  "incomplete",
+])
+
 export default function BillingPage() {
   const [billing, setBilling] = useState<MePlan | null>(null)
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
-  useEffect(() => { void fetchMePlan().then(setBilling) }, [])
+
+  async function refreshBilling() {
+    try {
+      await apiFetch("/billing/reconcile", { method: "POST" })
+    } catch {
+      // Webhooks remain the primary sync path. Keep the last known state available
+      // if Stripe is temporarily unavailable during this best-effort repair.
+    }
+    const current = await fetchMePlan()
+    setBilling(current)
+    return current
+  }
+
+  useEffect(() => {
+    void refreshBilling()
+  }, [])
 
   const hasSubscription = Boolean(
-    billing && ["active", "trialing", "past_due", "unpaid", "paused"].includes(billing.status),
+    billing && OPEN_SUBSCRIPTION_STATES.has(billing.status),
   )
 
   async function openBilling() {
     setLoading(true)
     setError("")
     try {
-      const path = hasSubscription ? "/billing/portal-session" : "/billing/checkout-session"
+      const current = await refreshBilling()
+      if (!current) throw new Error("Billing status could not be loaded")
+      const currentHasSubscription = OPEN_SUBSCRIPTION_STATES.has(current.status)
+      const path = currentHasSubscription ? "/billing/portal-session" : "/billing/checkout-session"
       const result = await apiFetch<{ url: string }>(path, {
         method: "POST",
-        body: hasSubscription ? undefined : {},
+        body: currentHasSubscription ? undefined : {},
       })
       window.location.href = result.url
     } catch (cause) {
