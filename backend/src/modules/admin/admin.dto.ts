@@ -34,3 +34,15 @@ export class SuspendClientServicesDto {
   @Length(3, 1000)
   reason!: string;
 }
+
+export class SuspendClientDto {
+  @IsOptional()
+  @IsString()
+  @Length(3, 1000)
+  reason?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 2000)
+  internalNote?: string;
+}

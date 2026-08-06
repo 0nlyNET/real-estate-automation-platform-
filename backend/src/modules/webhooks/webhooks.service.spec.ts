@@ -1,6 +1,10 @@
 import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { Message } from '../messaging/message.entity';
+import { ComplianceEvent } from '../compliance/compliance-event.entity';
+import { ComplianceOptOut } from '../compliance/compliance-optout.entity';
+import { LeadConsentRecord } from '../compliance/lead-consent-record.entity';
+import { TwilioInboundMessage } from './twilio-inbound-message.entity';
 import { validTwilioSignature, WebhooksService } from './webhooks.service';
 
 describe('Twilio inbound webhooks', () => {
@@ -57,6 +61,12 @@ describe('Twilio inbound webhooks', () => {
       }),
     };
     const leadRepo = {
+      createQueryBuilder: jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([lead]),
+      })),
       findOne: jest.fn().mockResolvedValue(lead),
       create: jest.fn((value) => Object.assign(new Lead(), value)),
       save: jest.fn(async (value) => value),
@@ -65,12 +75,35 @@ describe('Twilio inbound webhooks', () => {
       create: jest.fn((value) => Object.assign(new LeadEvent(), value)),
       save: jest.fn(async (value) => value),
     };
+    const inboundRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) =>
+        Object.assign(new TwilioInboundMessage(), value),
+      ),
+      save: jest.fn(async (value) => Object.assign(value, { id: 'inbound-1' })),
+    };
+    const optOutRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => value),
+    };
+    const consentRepo = {
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
+    const complianceEventRepo = {
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => value),
+    };
     const manager = {
       query: jest.fn().mockResolvedValue([]),
       getRepository: jest.fn((entity) => {
+        if (entity === TwilioInboundMessage) return inboundRepo;
         if (entity === Message) return messageRepo;
         if (entity === Lead) return leadRepo;
         if (entity === LeadEvent) return eventRepo;
+        if (entity === ComplianceOptOut) return optOutRepo;
+        if (entity === LeadConsentRecord) return consentRepo;
+        if (entity === ComplianceEvent) return complianceEventRepo;
         throw new Error('Unexpected entity');
       }),
     };
@@ -106,19 +139,23 @@ describe('Twilio inbound webhooks', () => {
     ).resolves.toEqual({ status: 'ok' });
     expect(manager.query).toHaveBeenCalledWith(
       'SELECT pg_advisory_xact_lock(hashtext($1))',
-      ['twilio:SM123'],
+      ['twilio:tenant-1:SM123'],
     );
     expect(savedMessages[0]).toMatchObject({ providerMessageId: 'SM123' });
     expect(lead.firstResponseReceivedAt).toBeInstanceOf(Date);
     expect(lead.firstResponseTimeSec).toBeGreaterThanOrEqual(29);
     expect(lead.sequenceStatus).toBe('stopped');
-    expect(sequences.stopForLead).toHaveBeenCalledWith('lead-1', 'reply');
+    expect(sequences.stopForLead).toHaveBeenCalledWith(
+      'tenant-1',
+      'lead-1',
+      'reply',
+    );
     expect(eventRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'lead_replied' }),
     );
   });
 
-  it('replays idempotent STOP side effects after a duplicate delivery', async () => {
+  it('does not replay STOP side effects after a duplicate delivery', async () => {
     process.env.TWILIO_WEBHOOK_URL = url;
     const body = {
       From: '+15555550101',
@@ -161,14 +198,8 @@ describe('Twilio inbound webhooks', () => {
         'x-twilio-signature': validSignature(body),
       }),
     ).resolves.toEqual({ status: 'duplicate' });
-    expect(compliance.addOptOut).toHaveBeenCalledWith(
-      'tenant-1',
-      'sms',
-      '15555550101',
-      'stop_keyword',
-      'twilio_webhook',
-    );
-    expect(sequences.stopForLead).toHaveBeenCalledWith('lead-1', 'opt_out');
+    expect(compliance.addOptOut).not.toHaveBeenCalled();
+    expect(sequences.stopForLead).not.toHaveBeenCalled();
   });
 
   function validSignature(body: Record<string, unknown>) {

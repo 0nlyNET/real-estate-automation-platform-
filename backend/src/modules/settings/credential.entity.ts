@@ -17,6 +17,18 @@ export class Credential extends BaseEntity {
   @Column({ name: 'routingKey', type: 'varchar', nullable: true })
   routingKey?: string | null;
 
+  @Column({
+    name: 'ingestion_key_hash',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  @Index('IDX_credentials_provider_ingestion_key_hash', {
+    unique: true,
+    where: '"ingestion_key_hash" IS NOT NULL',
+  })
+  ingestionKeyHash?: string | null;
+
   @Column({ type: 'text' })
   encryptedValue!: string;
 }

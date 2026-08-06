@@ -12,16 +12,24 @@ import { ComplianceModule } from '../compliance/compliance.module';
 import { SequencesModule } from '../sequences/sequences.module';
 import { LeadsModule } from '../leads/leads.module';
 import { AiModule } from '../ai/ai.module';
+import { TwilioInboundMessage } from './twilio-inbound-message.entity';
+import { TelephonyController } from './telephony.controller';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Credential, Lead, Message, LeadEvent]),
+    TypeOrmModule.forFeature([
+      Credential,
+      Lead,
+      Message,
+      LeadEvent,
+      TwilioInboundMessage,
+    ]),
     ComplianceModule,
     SequencesModule,
     LeadsModule,
     AiModule,
   ],
-  controllers: [WebhooksController],
+  controllers: [WebhooksController, TelephonyController],
   providers: [WebhooksService],
 })
 export class WebhooksModule {}

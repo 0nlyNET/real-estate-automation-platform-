@@ -18,6 +18,8 @@ async function bootstrap() {
       ? supplied
       : randomUUID();
     const startedAt = Date.now();
+    (request as express.Request & { correlationId: string }).correlationId =
+      requestId;
     response.setHeader('x-request-id', requestId);
     response.on('finish', () => {
       httpLogger.log(
@@ -35,6 +37,7 @@ async function bootstrap() {
 
   // Needed for Twilio inbound webhooks (application/x-www-form-urlencoded)
   app.use(express.urlencoded({ extended: false }));
+  app.use(express.text({ type: 'text/plain', limit: '256kb' }));
 
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: false }),

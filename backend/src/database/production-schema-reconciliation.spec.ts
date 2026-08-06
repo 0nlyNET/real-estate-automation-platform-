@@ -14,6 +14,7 @@ import { ClientExperienceReadiness1784851200001 } from "./migrations/20260724000
 import { ControlledAiLeadAgent1784937600001 } from "./migrations/202607250001-controlled-ai-lead-agent";
 import { PlatformManagedIntegrations1785024000001 } from "./migrations/202607260001-platform-managed-integrations";
 import { StripeSetupFeeTracking1785801600001 } from "./migrations/202608040001-stripe-setup-fee-tracking";
+import { FirstClientSafetyPipeline1785974400001 } from "./migrations/202608060001-first-client-safety-pipeline";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -118,7 +119,7 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 38,
+      expectedTables: 40,
       actualTables: 12,
       missingTables: [
         "admin_notification_preferences",
@@ -134,6 +135,7 @@ describe("deployed legacy schema reproduction", () => {
         "conversation_ai_states",
         "lead_consent_records",
         "lead_handoffs",
+        "lead_ingestion_events",
         "lead_stage_events",
         "onboarding_records",
         "operations_tasks",
@@ -146,6 +148,7 @@ describe("deployed legacy schema reproduction", () => {
         "support_tickets",
         "teams",
         "tenant_quiet_hours",
+        "twilio_inbound_messages",
         "workspace_ai_settings",
       ],
     });
@@ -161,12 +164,13 @@ describe("deployed legacy schema reproduction", () => {
     await new ControlledAiLeadAgent1784937600001().up(queryRunner);
     await new PlatformManagedIntegrations1785024000001().up(queryRunner);
     await new StripeSetupFeeTracking1785801600001().up(queryRunner);
+    await new FirstClientSafetyPipeline1785974400001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 38,
-      actualTables: 38,
+      expectedTables: 40,
+      actualTables: 40,
       missingTables: [],
       missingColumns: [],
     });
@@ -226,15 +230,29 @@ describe("deployed legacy schema reproduction", () => {
     await new ControlledAiLeadAgent1784937600001().up(queryRunner);
     await new PlatformManagedIntegrations1785024000001().up(queryRunner);
     await new StripeSetupFeeTracking1785801600001().up(queryRunner);
+    await new FirstClientSafetyPipeline1785974400001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 38,
-      actualTables: 38,
+      expectedTables: 40,
+      actualTables: 40,
       missingTables: [],
       missingColumns: [],
     });
+
+    const rollbackRunner = dataSource.createQueryRunner();
+    await rollbackRunner.connect();
+    await new FirstClientSafetyPipeline1785974400001().down(rollbackRunner);
+    await rollbackRunner.release();
+    await expect(
+      dataSource.query(
+        `SELECT table_name
+         FROM information_schema.tables
+         WHERE table_schema = 'public'
+           AND table_name IN ('lead_ingestion_events', 'twilio_inbound_messages')`,
+      ),
+    ).resolves.toEqual([]);
 
     await dataSource.destroy();
   });

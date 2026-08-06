@@ -176,6 +176,7 @@ describe('SendGrid inbound email webhook', () => {
       'sendgrid_inbound_webhook',
     );
     expect(item.sequences.stopForLead).toHaveBeenCalledWith(
+      item.lead.tenantId,
       item.lead.id,
       'opt_out',
     );

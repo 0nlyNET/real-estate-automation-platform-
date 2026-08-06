@@ -20,6 +20,7 @@ import { RoutingService } from '../routing/routing.service';
 import { ComplianceService } from '../compliance/compliance.service';
 import { LeadStageEvent } from './lead-stage-event.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { normalizePhoneE164 } from '../../common/phone';
 
 @Injectable()
 export class LeadsService {
@@ -82,6 +83,14 @@ export class LeadsService {
 
   private normalizeName(name?: string): string {
     return String(name || '').trim();
+  }
+
+  private isEligibleEmail(email?: string): boolean {
+    return Boolean(email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+  }
+
+  private isEligiblePhone(phone?: string): boolean {
+    return normalizePhoneE164(phone) !== null;
   }
 
   private normalizeString(v: any): string | undefined {
@@ -219,6 +228,9 @@ export class LeadsService {
       fullName,
       email,
       phone,
+      emailEligible: this.isEligibleEmail(email),
+      smsEligible: this.isEligiblePhone(phone),
+      communicationStatus: 'active',
 
       source: this.normalizeString(payload.source) || 'Website',
       location: this.normalizeString(payload.location),
@@ -245,7 +257,7 @@ export class LeadsService {
 
       score: this.clampScore((payload as any).score),
 
-      lastActivityAt: new Date(),
+        lastActivityAt: new Date(),
     } as Partial<Lead>);
 
     let saved = await this.leadsRepository.save(lead as Lead);
@@ -342,6 +354,9 @@ export class LeadsService {
       fullName,
       email,
       phone,
+      emailEligible: this.isEligibleEmail(email),
+      smsEligible: this.isEligiblePhone(phone),
+      communicationStatus: 'active',
 
       source: this.normalizeString(payload.source) || 'Manual',
       location: this.normalizeString(payload.location),
@@ -418,9 +433,11 @@ export class LeadsService {
 
     if (payload.email !== undefined) {
       lead.email = payload.email === null ? null as any : (this.normalizeEmail(payload.email ?? undefined) as any);
+      lead.emailEligible = this.isEligibleEmail(lead.email);
     }
     if (payload.phone !== undefined) {
       lead.phone = payload.phone === null ? null as any : (this.normalizePhone(payload.phone ?? undefined) as any);
+      lead.smsEligible = this.isEligiblePhone(lead.phone);
     }
 
     if ((payload as any).source !== undefined) {
@@ -630,6 +647,9 @@ export class LeadsService {
         phone,
         tenant,
         tenantId: tenant.id,
+        emailEligible: this.isEligibleEmail(email),
+        smsEligible: this.isEligiblePhone(phone),
+        communicationStatus: 'active',
 
       lastActivityAt: new Date(),
         nextFollowUpAt: i % 3 === 0 ? new Date() : undefined,

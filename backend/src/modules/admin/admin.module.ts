@@ -22,6 +22,7 @@ import { SupportTicket } from '../support/support-ticket.entity';
 import { BillingEvent } from '../billing/billing-event.entity';
 import { ServiceControlModule } from '../service-control/service-control.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
+import { ClientSuspensionController } from './client-suspension.controller';
 
 @Module({
   imports: [
@@ -46,7 +47,7 @@ import { IntegrationsModule } from '../integrations/integrations.module';
     ServiceControlModule,
     IntegrationsModule,
   ],
-  controllers: [AdminController],
+  controllers: [AdminController, ClientSuspensionController],
   providers: [AdminService],
 })
 export class AdminModule {}

@@ -22,6 +22,39 @@ export class TenantSettings extends BaseEntity {
   @Column({ name: 'booking_link_verified_at', type: 'timestamptz', nullable: true })
   bookingLinkVerifiedAt?: Date | null;
 
+  @Column({
+    name: "booking_link_verification_status",
+    type: "varchar",
+    length: 30,
+    default: "unverified",
+  })
+  bookingLinkVerificationStatus!:
+    | "unverified"
+    | "verified"
+    | "failed"
+    | "revoked";
+
+  @Column({
+    name: "booking_link_verification_expires_at",
+    type: "timestamptz",
+    nullable: true,
+  })
+  bookingLinkVerificationExpiresAt?: Date | null;
+
+  @Column({
+    name: "booking_link_revoked_at",
+    type: "timestamptz",
+    nullable: true,
+  })
+  bookingLinkRevokedAt?: Date | null;
+
+  @Column({
+    name: "time_zone_verified_at",
+    type: "timestamptz",
+    nullable: true,
+  })
+  timeZoneVerifiedAt?: Date | null;
+
   @Column({ name: "automations_enabled", type: "bool", default: false })
   automationsEnabled!: boolean;
 
@@ -41,6 +74,10 @@ export class TenantSettings extends BaseEntity {
   @Column({ name: "zapier_api_key_last4", type: "varchar", nullable: true })
   zapierApiKeyLast4?: string;
 
+  @Index("IDX_tenant_settings_intake_key_hash", {
+    unique: true,
+    where: '"intake_api_key_hash" IS NOT NULL',
+  })
   @Column({ name: "intake_api_key_hash", type: "varchar", nullable: true })
   intakeApiKeyHash?: string | null;
 

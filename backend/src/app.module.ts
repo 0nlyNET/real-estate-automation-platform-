@@ -36,6 +36,7 @@ import { ClientOperationsModule } from './modules/client-operations/client-opera
 import { RealtorComModule } from './modules/realtor-com/realtor-com.module';
 import { ServiceControlModule } from './modules/service-control/service-control.module';
 import { AiModule } from './modules/ai/ai.module';
+import { LeadIngestionModule } from './modules/lead-ingestion/lead-ingestion.module';
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { AiModule } from './modules/ai/ai.module';
     NotificationsModule,
     ClientOperationsModule,
     AiModule,
+    LeadIngestionModule,
   ],
   controllers: [AppController],
   providers: [

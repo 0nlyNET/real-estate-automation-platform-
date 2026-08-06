@@ -15,6 +15,7 @@ export type MessageStatus =
   | 'received'
   | 'draft'
   | 'skipped'
+  | 'blocked'
   | 'canceled'
   // Legacy values remain readable while the readiness migration normalizes them.
   | 'pending'
@@ -102,7 +103,65 @@ export class Message extends BaseEntity {
   @Column({ name: 'next_attempt_at', type: 'timestamptz', nullable: true })
   nextAttemptAt?: Date | null;
 
-  @Column({ name: 'authorship', type: 'varchar', length: 20, default: 'system' })
+  @Column({
+    name: 'communication_type',
+    type: 'varchar',
+    length: 30,
+    default: 'sms',
+  })
+  communicationType!: 'sms' | 'email' | 'sequence' | 'reminder';
+
+  @Column({ name: 'requires_booking_link', type: 'boolean', default: false })
+  requiresBookingLink!: boolean;
+
+  @Column({
+    name: 'job_purpose',
+    type: 'varchar',
+    length: 50,
+    default: 'ordinary',
+  })
+  jobPurpose!: 'ordinary' | 'no_show_reschedule';
+
+  @Column({ name: 'blocked_at', type: 'timestamptz', nullable: true })
+  blockedAt?: Date | null;
+
+  @Column({ name: 'blocked_reason', type: 'text', nullable: true })
+  blockedReason?: string | null;
+
+  @Column({
+    name: 'blocked_reason_history',
+    type: 'jsonb',
+    default: () => "'[]'::jsonb",
+  })
+  blockedReasonHistory!: Array<{
+    reason: string;
+    ruleIds: string[];
+    blockedAt: string;
+  }>;
+
+  @Column({
+    name: 'safety_rule_ids',
+    type: 'jsonb',
+    default: () => "'[]'::jsonb",
+  })
+  safetyRuleIds!: string[];
+
+  @Column({ name: 'cancellation_reason', type: 'text', nullable: true })
+  cancellationReason?: string | null;
+
+  @Column({
+    name: 'provider_submission_started_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  providerSubmissionStartedAt?: Date | null;
+
+  @Column({
+    name: 'authorship',
+    type: 'varchar',
+    length: 20,
+    default: 'system',
+  })
   authorship!: 'ai' | 'human' | 'template' | 'system';
 
   @Column({ name: 'ai_run_id', type: 'uuid', nullable: true })

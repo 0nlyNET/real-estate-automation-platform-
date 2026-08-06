@@ -1,5 +1,6 @@
 import { SettingsService, hashIntakeKey } from "./settings.service";
 import { TenantSettings } from "./tenant-settings.entity";
+import { BadRequestException } from "@nestjs/common";
 
 describe("SettingsService intake keys", () => {
   let saved: TenantSettings | null;
@@ -62,5 +63,36 @@ describe("SettingsService intake keys", () => {
     expect(response.intake).toMatchObject({ configured: true, last4: "1234" });
     expect(JSON.stringify(response)).not.toContain("secret-");
     expect(response).not.toHaveProperty("intakeApiKeyHash");
+  });
+
+  it("rejects invalid zones and records explicit IANA-zone verification", async () => {
+    await expect(
+      service.updateTenantSettings("tenant-1", { timeZone: "Mars/Olympus" }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.updateTenantSettings("tenant-1", {
+        timeZone: "America/Los_Angeles",
+      }),
+    ).resolves.toMatchObject({ timeZone: "America/Los_Angeles" });
+    expect(saved?.timeZoneVerifiedAt).toBeInstanceOf(Date);
+  });
+
+  it("expires booking-link verification and resets it when the URL changes", async () => {
+    saved!.bookingLink = "https://cal.example.com/first";
+    const verified = await service.verifyBookingLink("tenant-1");
+    expect(verified.bookingLinkStatus).toBe("verified");
+    expect(saved?.bookingLinkVerificationStatus).toBe("verified");
+    expect(saved?.bookingLinkVerificationExpiresAt?.getTime()).toBeGreaterThan(
+      saved?.bookingLinkVerifiedAt?.getTime() || 0,
+    );
+
+    await service.updateTenantSettings("tenant-1", {
+      bookingLink: "https://cal.example.com/second",
+    });
+    expect(saved).toMatchObject({
+      bookingLinkVerificationStatus: "unverified",
+      bookingLinkVerifiedAt: null,
+      bookingLinkVerificationExpiresAt: null,
+    });
   });
 });

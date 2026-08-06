@@ -92,9 +92,22 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
     const tenantId = lead.tenantId || lead.tenant?.id;
     if (!lead.id || !tenantId) return;
     try {
+      if (
+        ['paused', 'blocked', 'opted_out'].includes(
+          String(lead.communicationStatus || ''),
+        ) ||
+        lead.optedOutAt ||
+        ['lost', 'closed'].includes(lead.stage)
+      ) {
+        await this.logLeadEvent(lead, 'automation_blocked', {
+          code: 'LEAD_COMMUNICATION_BLOCKED',
+          reason: 'Lead communication state prohibits new automation',
+        });
+        return;
+      }
       await this.entitlements.assertAllowed(tenantId, 'enroll_lead');
       const existing = await this.enrollmentRepository.findOne({
-        where: { leadId: lead.id, status: 'active' },
+        where: { tenantId, leadId: lead.id, status: 'active' },
       });
       if (existing) return;
 
@@ -396,8 +409,24 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
     return { ok: true };
   }
 
-  async resumeEnrollment(tenantId: string, leadId: string, enrollmentId: string, ctx?: { userId?: string; role?: UserRole }) {
-    await this.requireLeadAccess(tenantId, leadId, ctx);
+  async resumeEnrollment(
+    tenantId: string,
+    leadId: string,
+    enrollmentId: string,
+    ctx?: { userId?: string; role?: UserRole },
+  ) {
+    const lead = await this.requireLeadAccess(tenantId, leadId, ctx);
+    if (
+      ['paused', 'blocked', 'opted_out'].includes(
+        String(lead.communicationStatus || ''),
+      ) ||
+      lead.optedOutAt ||
+      ['lost', 'closed'].includes(lead.stage)
+    ) {
+      throw new ForbiddenException(
+        'Lead communication state prohibits automation',
+      );
+    }
     await this.entitlements.assertAllowed(tenantId, 'run_sequence_step');
     const enrollment = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, tenantId, leadId } });
     if (!enrollment) return { ok: false, message: 'Enrollment not found' };
@@ -420,9 +449,13 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
     return { ok: true };
   }
 
-  async stopForLead(leadId: string, reason: 'reply' | 'manual' | 'other' | 'opt_out' = 'other') {
+  async stopForLead(
+    tenantId: string,
+    leadId: string,
+    reason: 'reply' | 'manual' | 'other' | 'opt_out' = 'other',
+  ) {
     await this.enrollmentRepository.update(
-      { leadId, status: In(['active', 'paused']) },
+      { tenantId, leadId, status: In(['active', 'paused']) },
       {
         status: 'stopped',
         stoppedReason: reason,
@@ -494,6 +527,20 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
     });
     if (!sequence || !lead || !sequence.active) {
       await this.stopEnrollmentInternal(enrollment, 'other');
+      return;
+    }
+    if (
+      ['paused', 'blocked', 'opted_out'].includes(
+        String(lead.communicationStatus || ''),
+      ) ||
+      lead.optedOutAt ||
+      ['lost', 'closed'].includes(lead.stage)
+    ) {
+      await this.stopEnrollmentInternal(enrollment, 'opt_out');
+      await this.logLeadEvent(lead, 'automation_blocked', {
+        code: 'LEAD_COMMUNICATION_BLOCKED',
+        reason: 'Lead communication state prohibits automation',
+      });
       return;
     }
 
@@ -590,6 +637,8 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
           nextAttemptAt: scheduledAt || new Date(),
           idempotencyKey,
           authorship: 'template',
+          communicationType: 'sequence',
+          requiresBookingLink: /\{\{\s*bookingLink\s*\}\}/i.test(step.template),
         }),
       );
     } catch (error: any) {
@@ -632,6 +681,8 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
           lastError: reason,
           idempotencyKey: key,
           authorship: 'template',
+          communicationType: 'sequence',
+          requiresBookingLink: /\{\{\s*bookingLink\s*\}\}/i.test(step.template),
         }),
       );
     } catch (error: any) {

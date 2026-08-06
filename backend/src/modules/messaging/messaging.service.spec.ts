@@ -3,17 +3,29 @@ import { Lead } from '../leads/lead.entity';
 import { Message } from './message.entity';
 import { MessagingService } from './messaging.service';
 
-function buildService(options: {
-  dataSource?: any;
-  messageRepo?: any;
-  credentialRepo?: any;
-  eventRepo?: any;
-  operations?: any;
-  leadRepo?: any;
-  compliance?: any;
-} = {}) {
+function buildService(
+  options: {
+    dataSource?: any;
+    messageRepo?: any;
+    credentialRepo?: any;
+    eventRepo?: any;
+    operations?: any;
+    leadRepo?: any;
+    compliance?: any;
+    messageSafety?: any;
+  } = {},
+) {
+  const dataSource = {
+    transaction: jest.fn().mockResolvedValue([]),
+    createQueryRunner: jest.fn(() => ({
+      connect: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue([]),
+      release: jest.fn().mockResolvedValue(undefined),
+    })),
+    ...(options.dataSource || {}),
+  };
   return new MessagingService(
-    options.dataSource || { transaction: jest.fn().mockResolvedValue([]) },
+    dataSource,
     options.messageRepo || {},
     options.leadRepo || ({} as any),
     {} as any,
@@ -25,7 +37,12 @@ function buildService(options: {
         communicationEligibility: jest.fn().mockResolvedValue({ allowed: true }),
         getQuietHours: jest.fn().mockResolvedValue({ enabled: false }),
       } as any),
-    { evaluate: jest.fn().mockResolvedValue({ allowed: true, reasons: [] }) } as any,
+    options.messageSafety ||
+      ({
+        evaluateMessageSafety: jest
+          .fn()
+          .mockResolvedValue({ allowed: true, reasons: [], ruleIds: [] }),
+      } as any),
     options.operations || ({ createTask: jest.fn() } as any),
     {
       runAiSendExclusive: jest.fn(
@@ -168,7 +185,7 @@ describe('outbound message worker safety', () => {
     expect(messageRepo.find).not.toHaveBeenCalled();
   });
 
-  it('rechecks quiet hours when an approved AI draft reaches the send worker', async () => {
+  it('does not call a provider when the final safety check blocks quiet hours', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-07-25T02:00:00.000Z'));
     const lead = Object.assign(new Lead(), {
       id: 'lead-quiet',
@@ -194,18 +211,28 @@ describe('outbound message worker safety', () => {
     const manager = {
       query: jest.fn().mockResolvedValue([{ id: message.id }]),
     };
+    const lockRunner = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue([]),
+      release: jest.fn().mockResolvedValue(undefined),
+    };
     const service = buildService({
       dataSource: {
         transaction: jest.fn(async (callback) => callback(manager)),
+        createQueryRunner: jest.fn(() => lockRunner),
       },
       messageRepo,
-      compliance: {
-        communicationEligibility: jest.fn().mockResolvedValue({ allowed: true }),
-        getQuietHours: jest.fn().mockResolvedValue({
-          enabled: true,
-          timezone: 'UTC',
-          startMinute: 0,
-          endMinute: 480,
+      messageSafety: {
+        evaluateMessageSafety: jest.fn(async () => {
+          message.status = 'blocked';
+          message.blockedReason =
+            'Automated delivery is blocked during client quiet hours';
+          Object.assign(message, { lockedAt: null, lockedBy: null });
+          return {
+            allowed: false,
+            reasons: [message.blockedReason],
+            ruleIds: ['QUIET_HOURS'],
+          };
         }),
       },
     });
@@ -214,13 +241,15 @@ describe('outbound message worker safety', () => {
       service.processPendingOutbound({ limit: 1 }),
     ).resolves.toEqual({ claimed: 1 });
     expect(message).toMatchObject({
-      status: 'queued',
+      status: 'blocked',
       attemptCount: 0,
       lockedAt: null,
       lockedBy: null,
     });
-    expect(message.scheduledAt?.toISOString()).toBe(
-      '2026-07-25T08:00:00.000Z',
+    expect(message.blockedReason).toContain('quiet hours');
+    expect(lockRunner.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_lock(hashtext($1))',
+      ['service-control:tenant-1'],
     );
   });
 });

@@ -87,6 +87,8 @@ describe('client service control', () => {
       tenantId: setup.tenant.id,
       source: 'manual',
       reason: 'Payment was not received.',
+      internalNote: 'Owner confirmed the suspension.',
+      requestCorrelationId: 'request-123',
       actor: {
         id: '22222222-2222-4222-8222-222222222222',
         email: 'owner@example.com',
@@ -95,8 +97,11 @@ describe('client service control', () => {
 
     expect(result).toMatchObject({
       changed: true,
+      clientId: setup.tenant.id,
+      previousState: 'ACTIVE',
       lifecycleStatus: 'SUSPENDED',
       stoppedEnrollments: 1,
+      blockedMessages: 1,
       canceledMessages: 1,
     });
     expect(setup.tenant.lifecycleStatus).toBe('SUSPENDED');
@@ -110,6 +115,20 @@ describe('client service control', () => {
       expect.stringContaining('UPDATE messages'),
       [setup.tenant.id],
     );
+    const suspensionSql = setup.manager.query.mock.calls
+      .map(([sql]) => String(sql))
+      .join('\n');
+    expect(suspensionSql).toContain(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+    );
+    expect(suspensionSql).toContain('provider_submission_started_at IS NULL');
+    expect(suspensionSql).toContain(
+      "status IN ('created', 'queued', 'pending', 'scheduled', 'sending')",
+    );
+    expect(suspensionSql).toContain(
+      'SELECT id FROM leads WHERE tenant_id = $1',
+    );
+    expect(suspensionSql).not.toContain('DELETE FROM');
     expect(setup.notifications.createForPlatform).toHaveBeenCalledTimes(1);
     expect(setup.notifications.createForTenant).toHaveBeenCalledTimes(1);
     expect(setup.taskRepo.save).toHaveBeenCalledTimes(1);
@@ -119,9 +138,15 @@ describe('client service control', () => {
         action: 'client.services.suspended',
         metadata: expect.objectContaining({
           stoppedEnrollments: 1,
+          blockedMessages: 1,
           canceledMessages: 1,
+          previousState: 'ACTIVE',
+          newState: 'SUSPENDED',
+          requestCorrelationId: 'request-123',
+          internalNote: 'Owner confirmed the suspension.',
         }),
       }),
+      setup.manager,
     );
   });
 
