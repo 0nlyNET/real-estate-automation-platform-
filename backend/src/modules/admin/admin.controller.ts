@@ -178,7 +178,9 @@ export class AdminController {
               serviceSuspendedAt: t.serviceSuspendedAt || null,
               serviceSuspensionReason: t.serviceSuspensionReason || null,
               serviceSuspensionSource: t.serviceSuspensionSource || null,
+              serviceSuspendedById: t.serviceSuspendedById || null,
               serviceRestoredAt: t.serviceRestoredAt || null,
+              serviceRestoredById: t.serviceRestoredById || null,
             }
           : {}),
         createdAt: t.createdAt,

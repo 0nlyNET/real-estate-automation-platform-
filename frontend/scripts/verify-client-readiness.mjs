@@ -30,9 +30,7 @@ for (const pattern of [
   assert.equal(pattern.test(publicSource), false, `unsupported public claim: ${pattern}`)
 }
 
-const linkSources = [...publicFiles, "app/thanks/page.tsx", "app/signup/page.tsx"]
-  .map(read)
-  .join("\n")
+const linkSources = [...publicFiles, "app/thanks/page.tsx", "app/signup/page.tsx"].map(read).join("\n")
 const links = [...linkSources.matchAll(/href=["'](\/[A-Za-z0-9_\-/]*)["']/g)].map((match) => match[1])
 for (const href of links) {
   if (href === "/") continue
@@ -49,13 +47,9 @@ const legal = ["app/privacy/page.tsx", "app/terms/page.tsx", "app/refund/page.ts
 assert.doesNotMatch(legal, /RealtyTechAI LLC|123 Tech Lane|Austin, TX|privacy@|legal@|256-bit|regular security audits/i)
 assert.match(legal, /data-deletion request/i)
 
-const authSource = [
-  "app/login/page.tsx",
-  "app/logout/page.tsx",
-  "lib/api.ts",
-  "lib/impersonation.ts",
-  "proxy.ts",
-].map(read).join("\n")
+const authSource = ["app/login/page.tsx", "app/logout/page.tsx", "lib/api.ts", "lib/impersonation.ts", "proxy.ts"]
+  .map(read)
+  .join("\n")
 assert.doesNotMatch(authSource, /localStorage|document\.cookie/)
 const proxySource = read("proxy.ts")
 assert.doesNotMatch(proxySource, /decodePayload|token\.split|\batob\b/)
@@ -126,9 +120,11 @@ assert.match(managedIntegrations, /\/admin\/platform-integrations\/twilio/)
 assert.match(managedIntegrations, /\/admin\/platform-integrations\/sendgrid/)
 assert.match(managedIntegrations, /\/admin\/tenants\/\$\{tenantId\}\/integrations\/twilio/)
 assert.match(managedIntegrations, /\/admin\/tenants\/\$\{tenantId\}\/integrations\/sendgrid/)
-assert.match(read("app/admin/layout.tsx"), /href="\/admin\/dashboard\?view=integrations"/)
-assert.match(read("app/admin/dashboard/page.tsx"), /id: "integrations", label: "Integrations"/)
-assert.match(read("app/admin/dashboard/page.tsx"), /view === "integrations" \? <ManagedIntegrations \/>/)
+const adminNavigation = read("components/admin/admin-navigation.ts")
+const adminDashboard = read("app/admin/dashboard/admin-dashboard-client.tsx")
+assert.match(adminNavigation, /id: "settings", label: "Settings", ownerOnly: true/)
+assert.match(adminDashboard, /<ManagedIntegrations \/>/)
+assert.match(read("app/admin/integrations/page.tsx"), /redirect\("\/admin\/dashboard\?view=settings"\)/)
 
 const sidebar = read("components/app-shell/sidebar.tsx")
 assert.match(sidebar, /label: "Help", href: "\/support"/)
@@ -148,20 +144,26 @@ assert.match(appointments, /\/client\/appointments/)
 assert.match(appointments, /Schedule appointment/)
 assert.match(appointments, /Reschedule/)
 
-const admin = read("app/admin/dashboard/page.tsx")
+const admin = [
+  read("app/admin/dashboard/page.tsx"),
+  adminDashboard,
+  adminNavigation,
+  read("components/admin/service-control-dialog.tsx"),
+].join("\n")
 assert.match(admin, /\/admin\/applications\?take=100/)
 assert.match(admin, /\/admin\/operations\?take=100/)
 assert.match(admin, /\/support\/admin\/tickets/)
-assert.match(admin, /Action center/)
+assert.match(admin, /Action required/)
 assert.match(admin, /\/admin\/client-operations\/handoffs/)
 assert.match(admin, /\/admin\/client-operations\/appointments/)
-assert.match(admin, /Billing & health/)
-assert.match(admin, /AI operations/)
+assert.match(admin, /id: "billing", label: "Billing", ownerOnly: true/)
+assert.match(admin, /id: "health", label: "System health", ownerOnly: true/)
 assert.match(admin, /\/admin\/ai\/overview/)
 assert.match(admin, /\/admin\/ai\/emergency-pause/)
-assert.match(admin, /Platform AI control/)
-assert.match(admin, /without disabling inboxes, manual messaging, leads, or appointments/)
+assert.match(admin, /Global AI control/)
+assert.match(admin, /Manual messaging,[\s\S]*inboxes,\s*leads, and appointments remain available/)
 assert.doesNotMatch(admin, /window\.prompt/)
+assert.doesNotMatch(admin, /window\.confirm/)
 
 const notifications = read("components/admin/notification-center.tsx")
 assert.match(notifications, /Notification\.requestPermission\(\)/)
@@ -190,8 +192,10 @@ const flatServicePages = [
   "app/app/team/page.tsx",
   "app/app/compliance/page.tsx",
   "app/app/reports/page.tsx",
-].map(read).join("\n")
+]
+  .map(read)
+  .join("\n")
 assert.doesNotMatch(flatServicePages, /Teams plan|Enterprise plan|Upgrade to|See plans/)
-assert.match(admin, /Live Stripe activity/)
+assert.match(admin, /Recent payment activity/)
 
 console.log(`Client-readiness frontend verification passed (${links.length} static links checked).`)
