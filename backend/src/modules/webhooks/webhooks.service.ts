@@ -8,8 +8,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import * as crypto from 'crypto';
+import { validateRequest as validateTwilioRequest } from 'twilio/lib/webhooks/webhooks';
 
 import { normalizePhoneDigits, normalizePhoneE164 } from '../../common/phone';
+import { isOptOutMessage, normalizeOptOutBody } from '../../common/opt-out';
 import { Credential } from '../settings/credential.entity';
 import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
@@ -24,6 +26,10 @@ import {
   sanitizeOperationalText,
 } from '../../common/operational-log';
 import { AiConversationService } from '../ai/ai-conversation.service';
+import { TwilioInboundMessage } from './twilio-inbound-message.entity';
+import { ComplianceOptOut } from '../compliance/compliance-optout.entity';
+import { LeadConsentRecord } from '../compliance/lead-consent-record.entity';
+import { ComplianceEvent } from '../compliance/compliance-event.entity';
 
 export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
@@ -31,6 +37,8 @@ export type TwilioInboundBody = Record<string, unknown> & {
   Body?: string;
   MessageSid?: string;
   SmsSid?: string;
+  MessagingServiceSid?: string;
+  OptOutType?: string;
 };
 
 export type TwilioStatusBody = Record<string, unknown> & {
@@ -48,22 +56,12 @@ export function validTwilioSignature(
   authToken: string,
   supplied: string,
 ) {
-  const payload =
-    url +
-    Object.keys(params)
-      .sort()
-      .map((key) => `${key}${String(params[key] ?? '')}`)
-      .join('');
-  const expected = crypto
-    .createHmac('sha1', authToken)
-    .update(payload)
-    .digest('base64');
-  const expectedBuffer = Buffer.from(expected);
-  const suppliedBuffer = Buffer.from(supplied || '');
-  return (
-    expectedBuffer.length === suppliedBuffer.length &&
-    crypto.timingSafeEqual(expectedBuffer, suppliedBuffer)
-  );
+  const stringParams: Record<string, string> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null)
+      stringParams[key] = String(value);
+  }
+  return validateTwilioRequest(authToken, supplied, url, stringParams);
 }
 
 type PersistedInbound = {
@@ -73,6 +71,12 @@ type PersistedInbound = {
   messageId?: string;
   channel?: 'sms' | 'email';
   stopKeyword?: boolean;
+  processingResult?:
+    | 'reply_recorded'
+    | 'opt_out_applied'
+    | 'lead_not_found'
+    | 'ambiguous_lead';
+  canceledJobs?: number;
 };
 
 @Injectable()
@@ -349,6 +353,7 @@ export class WebhooksService {
 
   private async findTwilioCredential(
     routingKey: string,
+    messagingServiceSid?: string | null,
   ): Promise<Credential | null> {
     const direct = await this.credentialsRepo.findOne({
       where: { provider: 'twilio', routingKey },
@@ -366,7 +371,10 @@ export class WebhooksService {
       const payload = decryptIntegrationPayload(row.encryptedValue);
       return (
         Boolean(payload?.connected) &&
-        normalizePhoneE164(payload?.fromNumber) === routingKey
+        (normalizePhoneE164(payload?.fromNumber) === routingKey ||
+          (messagingServiceSid &&
+            String(payload?.messagingServiceSid || '').trim() ===
+              messagingServiceSid))
       );
     });
     if (matches.length !== 1) return null;
@@ -387,18 +395,24 @@ export class WebhooksService {
     body: TwilioInboundBody,
     headers: Record<string, string | string[] | undefined>,
   ) {
-    const from = normalizePhoneDigits(String(body.From || ''));
+    const fromE164 = normalizePhoneE164(String(body.From || ''));
+    const fromDigits = normalizePhoneDigits(String(body.From || ''));
     const toRoutingKey = normalizePhoneE164(String(body.To || ''));
     const text = String(body.Body ?? '');
     const providerMessageId = String(
       body.MessageSid || body.SmsSid || '',
     ).trim();
+    const messagingServiceSid = String(body.MessagingServiceSid || '').trim();
+    const optOutType = String(body.OptOutType || '').trim() || null;
 
-    if (!from || !toRoutingKey || !providerMessageId) {
+    if (!fromE164 || !fromDigits || !toRoutingKey || !providerMessageId) {
       throw new BadRequestException('Missing required Twilio message fields');
     }
 
-    const credential = await this.findTwilioCredential(toRoutingKey);
+    const credential = await this.findTwilioCredential(
+      toRoutingKey,
+      messagingServiceSid,
+    );
     if (!credential?.tenant?.id) {
       this.logger.warn(
         operationalEvent('twilio_inbound_unrouted', {
@@ -421,6 +435,16 @@ export class WebhooksService {
       !webhookUrl ||
       !validTwilioSignature(webhookUrl, body, authToken, signature)
     ) {
+      await this.compliance
+        .recordEvent(credential.tenant.id, {
+          type: 'twilio_signature_rejected',
+          channel: 'sms',
+          payload: {
+            providerMessageId,
+            to: toRoutingKey,
+          },
+        })
+        .catch(() => undefined);
       this.logger.warn(
         operationalEvent('invalid_webhook_signature', {
           provider: 'twilio',
@@ -433,33 +457,26 @@ export class WebhooksService {
     }
 
     const tenantId = credential.tenant.id;
-    const stopKeyword = this.compliance.isStopKeyword(text);
+    const stopKeyword = isOptOutMessage(text, optOutType);
     const persisted = await this.dataSource.transaction((manager) =>
       this.persistInbound(manager, {
         tenantId,
-        from,
+        fromE164,
+        fromDigits,
+        to: toRoutingKey,
         text,
         providerMessageId,
+        messagingServiceSid: messagingServiceSid || null,
+        optOutType,
         stopKeyword,
       }),
     );
 
     if (!persisted.leadId) return { status: 'ignored' } as const;
-
-    if (stopKeyword) {
-      await this.compliance.addOptOut(
-        tenantId,
-        'sms',
-        from,
-        'stop_keyword',
-        'twilio_webhook',
-      );
+    if (!persisted.duplicate && !stopKeyword) {
+      await this.sequences.stopForLead(tenantId, persisted.leadId, 'reply');
     }
-    await this.sequences.stopForLead(
-      persisted.leadId,
-      stopKeyword ? 'opt_out' : 'reply',
-    );
-    if (!persisted.duplicate && persisted.messageId) {
+    if (!persisted.duplicate && !stopKeyword && persisted.messageId) {
       await this.queueAiSafely({
         tenantId,
         leadId: persisted.leadId,
@@ -475,10 +492,16 @@ export class WebhooksService {
         providerMessageId,
         stopKeyword,
         duplicate: persisted.duplicate,
+        processingResult: persisted.processingResult,
+        canceledJobs: persisted.canceledJobs || 0,
       }),
     );
     return {
-      status: persisted.duplicate ? 'duplicate' : 'ok',
+      status: persisted.duplicate
+        ? 'duplicate'
+        : stopKeyword
+          ? 'opted_out'
+          : 'ok',
     } as const;
   }
 
@@ -535,6 +558,7 @@ export class WebhooksService {
       );
     }
     await this.sequences.stopForLead(
+      tenantId,
       persisted.leadId,
       stopKeyword ? 'opt_out' : 'reply',
     );
@@ -564,65 +588,162 @@ export class WebhooksService {
     manager: EntityManager,
     input: {
       tenantId: string;
-      from: string;
+      fromE164: string;
+      fromDigits: string;
+      to: string;
       text: string;
       providerMessageId: string;
+      messagingServiceSid: string | null;
+      optOutType: string | null;
       stopKeyword: boolean;
     },
   ): Promise<PersistedInbound> {
     await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-      `twilio:${input.providerMessageId}`,
+      `twilio:${input.tenantId}:${input.providerMessageId}`,
+    ]);
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `service-control:${input.tenantId}`,
     ]);
 
+    const inboundRepository = manager.getRepository(TwilioInboundMessage);
     const messageRepository = manager.getRepository(Message);
     const leadRepository = manager.getRepository(Lead);
     const leadEventRepository = manager.getRepository(LeadEvent);
-    const duplicate = await messageRepository.findOne({
-      where: { providerMessageId: input.providerMessageId },
-      relations: ['lead'],
+    const duplicateEvent = await inboundRepository.findOne({
+      where: {
+        tenantId: input.tenantId,
+        messageSid: input.providerMessageId,
+      },
     });
-    if (duplicate) {
+    if (duplicateEvent) {
       return {
         duplicate: true,
         tenantId: input.tenantId,
-        leadId: duplicate.leadId || duplicate.lead?.id,
-        messageId: duplicate.id,
+        leadId: duplicateEvent.leadId ?? undefined,
         channel: 'sms',
-        stopKeyword: input.stopKeyword,
+        stopKeyword: duplicateEvent.isOptOut,
+        processingResult: duplicateEvent.processingResult,
+        canceledJobs: 0,
       };
     }
 
-    let lead = await leadRepository.findOne({
-      where: { tenantId: input.tenantId, phone: input.from },
+    const legacyMessage = await messageRepository.findOne({
+      where: { providerMessageId: input.providerMessageId },
+      relations: ['lead'],
     });
-    if (!lead) {
-      lead = leadRepository.create({
+    if (legacyMessage?.lead?.tenantId === input.tenantId) {
+      const legacyEvent = await inboundRepository.save(
+        inboundRepository.create({
+          tenantId: input.tenantId,
+          leadId: legacyMessage.leadId,
+          messageSid: input.providerMessageId,
+          messagingServiceSid: input.messagingServiceSid,
+          fromNumber: input.fromE164,
+          toNumber: input.to,
+          body: input.text.slice(0, 10_000),
+          normalizedBody: normalizeOptOutBody(input.text).slice(0, 10_000),
+          optOutType: input.optOutType?.slice(0, 50) ?? null,
+          isOptOut: input.stopKeyword,
+          processingResult: input.stopKeyword
+            ? 'opt_out_applied'
+            : 'reply_recorded',
+          processedAt: new Date(),
+        }),
+      );
+      return {
+        duplicate: true,
         tenantId: input.tenantId,
-        fullName: input.from,
-        phone: input.from,
-        source: 'twilio',
-        stage: 'new',
-        score: 50,
-        leadType: 'buyer',
-        temperature: 'warm',
-        sequenceStatus: 'idle',
-      });
-      lead = await leadRepository.save(lead);
+        leadId: legacyMessage.leadId,
+        messageId: legacyMessage.id,
+        channel: 'sms',
+        stopKeyword: input.stopKeyword,
+        processingResult: legacyEvent.processingResult,
+        canceledJobs: 0,
+      };
     }
 
+    const candidates = await leadRepository
+      .createQueryBuilder('lead')
+      .where('lead.tenantId = :tenantId', { tenantId: input.tenantId })
+      .andWhere('lead.phone IS NOT NULL')
+      .andWhere("regexp_replace(lead.phone, '[^0-9]', '', 'g') = :fromDigits", {
+        fromDigits: input.fromDigits,
+      })
+      .orderBy('lead.createdAt', 'ASC')
+      .getMany();
     const receivedAt = new Date();
+    if (candidates.length !== 1) {
+      const processingResult =
+        candidates.length === 0 ? 'lead_not_found' : 'ambiguous_lead';
+      const event = await inboundRepository.save(
+        inboundRepository.create({
+          tenantId: input.tenantId,
+          leadId: null,
+          messageSid: input.providerMessageId,
+          messagingServiceSid: input.messagingServiceSid,
+          fromNumber: input.fromE164,
+          toNumber: input.to,
+          body: input.text.slice(0, 10_000),
+          normalizedBody: normalizeOptOutBody(input.text).slice(0, 10_000),
+          optOutType: input.optOutType?.slice(0, 50) ?? null,
+          isOptOut: input.stopKeyword,
+          processingResult,
+          processedAt: receivedAt,
+        }),
+      );
+      await manager.getRepository(ComplianceEvent).save(
+        manager.getRepository(ComplianceEvent).create({
+          tenantId: input.tenantId,
+          type:
+            processingResult === 'ambiguous_lead'
+              ? 'twilio_inbound_ambiguous_lead'
+              : 'twilio_inbound_lead_not_found',
+          channel: 'sms',
+          leadId: null,
+          userId: null,
+          messageId: null,
+          to: input.fromE164,
+          payload: {
+            messageSid: input.providerMessageId,
+            candidateCount: candidates.length,
+            inboundEventId: event.id,
+          },
+        }),
+      );
+      return {
+        duplicate: false,
+        tenantId: input.tenantId,
+        channel: 'sms',
+        stopKeyword: input.stopKeyword,
+        processingResult,
+        canceledJobs: 0,
+      };
+    }
+
+    const lead = await leadRepository.findOne({
+      where: { id: candidates[0].id, tenantId: input.tenantId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!lead)
+      throw new Error(
+        'Tenant-scoped lead disappeared during inbound processing',
+      );
+
     const message = await messageRepository.save(
       messageRepository.create({
         lead,
         leadId: lead.id,
         channel: 'sms',
         direction: 'inbound',
-        body: input.text,
+        body: input.text.slice(0, 10_000),
         providerMessageId: input.providerMessageId,
         status: 'received',
         providerStatus: 'received',
         sentAt: receivedAt,
         attemptCount: 0,
+        communicationType: 'sms',
+        requiresBookingLink: false,
+        jobPurpose: 'ordinary',
       }),
     );
 
@@ -640,7 +761,102 @@ export class WebhooksService {
     lead.lastActivityAt = receivedAt;
     lead.nextFollowUpAt = undefined;
     lead.sequenceStatus = 'stopped';
+    let canceledJobs = 0;
+    if (input.stopKeyword) {
+      lead.communicationStatus = 'opted_out';
+      lead.optedOutAt = lead.optedOutAt || receivedAt;
+      lead.optOutSource = 'twilio_inbound_sms';
+
+      const optOutRepository = manager.getRepository(ComplianceOptOut);
+      const existingOptOut = await optOutRepository.findOne({
+        where: {
+          tenantId: input.tenantId,
+          channel: 'sms',
+          value: input.fromDigits,
+        },
+      });
+      if (!existingOptOut) {
+        await optOutRepository.save(
+          optOutRepository.create({
+            tenantId: input.tenantId,
+            channel: 'sms',
+            value: input.fromDigits,
+            reason: 'stop_keyword',
+            source: 'twilio_inbound_sms',
+          }),
+        );
+      }
+
+      await manager.getRepository(LeadConsentRecord).update(
+        {
+          tenantId: input.tenantId,
+          leadId: lead.id,
+          channel: 'sms',
+        },
+        {
+          status: 'revoked',
+          revokedAt: receivedAt,
+          revocationSource: 'twilio_inbound_sms',
+        },
+      );
+      const canceled: Array<{ id: string }> = await manager.query(
+        `UPDATE messages
+         SET status = 'canceled',
+             canceled_at = $3,
+             cancellation_reason = 'Cancelled by inbound SMS opt-out',
+             error_code = 'CANCELLED_BY_OPT_OUT',
+             sanitized_error_message = 'Cancelled after recipient SMS opt-out',
+             last_error = 'Cancelled after recipient SMS opt-out',
+             locked_at = NULL,
+             locked_by = NULL,
+             next_attempt_at = NULL
+         WHERE "leadId" = $1
+           AND direction = 'outbound'
+           AND status IN ('created', 'queued', 'pending', 'scheduled', 'sending')
+           AND (status <> 'sending' OR provider_submission_started_at IS NULL)
+           AND EXISTS (
+             SELECT 1 FROM leads
+             WHERE leads.id = messages."leadId"
+               AND leads.tenant_id = $2
+           )
+         RETURNING id`,
+        [lead.id, input.tenantId, receivedAt],
+      );
+      canceledJobs = canceled.length;
+      await manager.query(
+        `UPDATE sequence_enrollments
+         SET status = 'stopped',
+             stopped_reason = 'opt_out',
+             next_run_at = NULL,
+             locked_at = NULL,
+             locked_by = NULL
+         WHERE tenant_id = $1
+           AND "leadId" = $2
+           AND status IN ('active', 'paused')`,
+        [input.tenantId, lead.id],
+      );
+    }
     await leadRepository.save(lead);
+
+    const processingResult = input.stopKeyword
+      ? 'opt_out_applied'
+      : 'reply_recorded';
+    const inboundEvent = await inboundRepository.save(
+      inboundRepository.create({
+        tenantId: input.tenantId,
+        leadId: lead.id,
+        messageSid: input.providerMessageId,
+        messagingServiceSid: input.messagingServiceSid,
+        fromNumber: input.fromE164,
+        toNumber: input.to,
+        body: input.text.slice(0, 10_000),
+        normalizedBody: normalizeOptOutBody(input.text).slice(0, 10_000),
+        optOutType: input.optOutType?.slice(0, 50) ?? null,
+        isOptOut: input.stopKeyword,
+        processingResult,
+        processedAt: receivedAt,
+      }),
+    );
 
     await leadEventRepository.save(
       leadEventRepository.create({
@@ -650,9 +866,31 @@ export class WebhooksService {
           channel: 'sms',
           messageId: message.id,
           providerMessageId: input.providerMessageId,
+          inboundEventId: inboundEvent.id,
+          canceledJobs,
         },
       }),
     );
+
+    if (input.stopKeyword) {
+      await manager.getRepository(ComplianceEvent).save(
+        manager.getRepository(ComplianceEvent).create({
+          tenantId: input.tenantId,
+          type: 'sms_opt_out_recorded',
+          channel: 'sms',
+          leadId: lead.id,
+          userId: null,
+          messageId: message.id,
+          to: input.fromE164,
+          payload: {
+            source: 'twilio_inbound_sms',
+            messageSid: input.providerMessageId,
+            optOutType: input.optOutType,
+            canceledJobs,
+          },
+        }),
+      );
+    }
 
     return {
       duplicate: false,
@@ -661,6 +899,8 @@ export class WebhooksService {
       messageId: message.id,
       channel: 'sms',
       stopKeyword: input.stopKeyword,
+      processingResult,
+      canceledJobs,
     };
   }
 
@@ -768,6 +1008,9 @@ export class WebhooksService {
           tenantId: input.tenantId,
           fullName: input.from,
           email: input.from,
+          emailEligible: true,
+          smsEligible: false,
+          communicationStatus: 'active',
           source: 'sendgrid',
           stage: 'new',
           score: 50,
@@ -790,6 +1033,9 @@ export class WebhooksService {
         providerStatus: 'received',
         sentAt: receivedAt,
         attemptCount: 0,
+        communicationType: 'email',
+        requiresBookingLink: false,
+        jobPurpose: 'ordinary',
       }),
     );
     if (!lead.firstResponseReceivedAt) {

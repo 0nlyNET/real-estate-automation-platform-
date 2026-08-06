@@ -5,7 +5,7 @@ import * as crypto from "crypto";
 import { TenantSettings } from "./tenant-settings.entity";
 import { Team } from "../teams/team.entity";
 import { TenantQuietHours } from "../compliance/tenant-quiet-hours.entity";
-import { parseHHMM } from "../../common/time";
+import { isValidIanaTimeZone, parseHHMM } from "../../common/time";
 import { EntitlementService } from "../entitlements/entitlement.service";
 import { isSafeBookingUrl } from "../../common/booking-link";
 
@@ -64,7 +64,18 @@ export class SettingsService {
       quietHoursEnd: settings.quietHoursEnd,
       bookingLink: settings.bookingLink || "",
       bookingLinkVerifiedAt: settings.bookingLinkVerifiedAt || null,
-      bookingLinkStatus: !settings.bookingLink ? "missing" : settings.bookingLinkVerifiedAt ? "verified" : "test_required",
+      bookingLinkStatus: !settings.bookingLink
+        ? "missing"
+        : settings.bookingLinkVerificationStatus === "verified" &&
+            settings.bookingLinkVerifiedAt &&
+            !settings.bookingLinkRevokedAt &&
+            (!settings.bookingLinkVerificationExpiresAt ||
+              settings.bookingLinkVerificationExpiresAt > new Date())
+          ? "verified"
+          : "test_required",
+      bookingLinkVerificationExpiresAt:
+        settings.bookingLinkVerificationExpiresAt || null,
+      timeZoneVerifiedAt: settings.timeZoneVerifiedAt || null,
       automationsEnabled: settings.automationsEnabled,
       roundRobinEnabled: settings.roundRobinEnabled,
       roundRobinTeamId: settings.roundRobinTeamId || null,
@@ -114,7 +125,13 @@ export class SettingsService {
     const link = String(settings.bookingLink || '').trim();
     if (!isSafeBookingUrl(link)) throw new BadRequestException('Save a full HTTPS booking link before confirming it');
     settings.bookingLink = link;
-    settings.bookingLinkVerifiedAt = new Date();
+    const verifiedAt = new Date();
+    settings.bookingLinkVerifiedAt = verifiedAt;
+    settings.bookingLinkVerificationStatus = "verified";
+    settings.bookingLinkVerificationExpiresAt = new Date(
+      verifiedAt.getTime() + 90 * 24 * 60 * 60 * 1000,
+    );
+    settings.bookingLinkRevokedAt = null;
     return this.safeSettings(await this.tenantSettingsRepo.save(settings));
   }
 
@@ -162,8 +179,16 @@ export class SettingsService {
         );
     }
 
-    if (typeof updates.timeZone === "string" && "timeZone" in current)
-      (current as any).timeZone = updates.timeZone;
+    if (typeof updates.timeZone === "string" && "timeZone" in current) {
+      const timeZone = updates.timeZone.trim();
+      if (!isValidIanaTimeZone(timeZone)) {
+        throw new BadRequestException(
+          "timeZone must be a valid IANA time zone",
+        );
+      }
+      current.timeZone = timeZone;
+      current.timeZoneVerifiedAt = new Date();
+    }
     if (
       typeof updates.quietHoursStart === "string" &&
       "quietHoursStart" in current
@@ -173,8 +198,14 @@ export class SettingsService {
       (current as any).quietHoursEnd = updates.quietHoursEnd;
     if (typeof updates.bookingLink === "string" && "bookingLink" in current) {
       const link = updates.bookingLink.trim();
-      if (link && !isSafeBookingUrl(link)) throw new BadRequestException("Booking link must be a full HTTPS URL");
-      if (link !== String(current.bookingLink || '').trim()) current.bookingLinkVerifiedAt = null;
+      if (link && !isSafeBookingUrl(link))
+        throw new BadRequestException("Booking link must be a full HTTPS URL");
+      if (link !== String(current.bookingLink || "").trim()) {
+        current.bookingLinkVerifiedAt = null;
+        current.bookingLinkVerificationStatus = "unverified";
+        current.bookingLinkVerificationExpiresAt = null;
+        current.bookingLinkRevokedAt = null;
+      }
       (current as any).bookingLink = link;
     }
     if (

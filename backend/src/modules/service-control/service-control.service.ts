@@ -140,8 +140,11 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
   async suspend(input: {
     tenantId: string;
     reason: string;
+    internalNote?: string;
     source: ServiceSuspensionSource;
     actor?: ServiceControlActor | null;
+    requestCorrelationId?: string;
+    auditPath?: string;
   }) {
     const reason = String(input.reason || '').trim().slice(0, 1000);
     if (reason.length < 3) throw new BadRequestException('A suspension reason is required');
@@ -151,19 +154,24 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
         `service-control:${input.tenantId}`,
       ]);
       const tenantRepo = manager.getRepository(Tenant);
-      const tenant = await tenantRepo.findOne({ where: { id: input.tenantId } });
+      const tenant = await tenantRepo.findOne({
+        where: { id: input.tenantId },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!tenant) throw new NotFoundException('Workspace not found');
 
       if (tenant.lifecycleStatus === 'SUSPENDED' && tenant.serviceSuspendedAt) {
         return {
           changed: false,
           tenant,
+          previousState: tenant.lifecycleStatus,
           stoppedEnrollments: 0,
           canceledMessages: 0,
         };
       }
 
       const suspendedAt = new Date();
+      const previousState = tenant.lifecycleStatus;
       tenant.servicePreviousLifecycleStatus = tenant.lifecycleStatus;
       tenant.lifecycleStatus = 'SUSPENDED';
       tenant.servicePausedAt = suspendedAt;
@@ -207,17 +215,27 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
         [input.tenantId],
       );
 
-      const canceled: Array<{ id: string }> = await manager.query(
+      const blocked: Array<{ id: string }> = await manager.query(
         `UPDATE messages
-         SET status = 'canceled',
-             canceled_at = now(),
-             error_code = 'SERVICE_SUSPENDED',
+         SET status = 'blocked',
+             blocked_at = now(),
+             blocked_reason = 'Client services are suspended',
+             blocked_reason_history = COALESCE(blocked_reason_history, '[]'::jsonb) ||
+               jsonb_build_array(jsonb_build_object(
+                 'reason', 'Client services are suspended',
+                 'ruleIds', jsonb_build_array('CLIENT_SUSPENDED'),
+                 'blockedAt', now()
+               )),
+             safety_rule_ids = jsonb_build_array('CLIENT_SUSPENDED'),
+             error_code = 'CLIENT_SUSPENDED',
              sanitized_error_message = 'Client services are suspended',
              last_error = 'Client services are suspended',
              locked_at = NULL,
-             locked_by = NULL
+             locked_by = NULL,
+             next_attempt_at = NULL
          WHERE direction = 'outbound'
            AND status IN ('created', 'queued', 'pending', 'scheduled', 'sending')
+           AND (status <> 'sending' OR provider_submission_started_at IS NULL)
            AND "leadId" IN (
              SELECT id FROM leads WHERE tenant_id = $1
            )
@@ -256,11 +274,40 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      await this.audit.record(
+        {
+          tenantId: input.tenantId,
+          actorId: input.actor?.id || input.tenantId,
+          actorEmail: input.actor?.email || null,
+          action: 'client.services.suspended',
+          method: input.source === 'billing' ? 'EVENT' : 'POST',
+          path:
+            input.auditPath ||
+            (input.source === 'billing'
+              ? '/billing/service-suspension'
+              : `/admin/tenants/${input.tenantId}/suspend`),
+          statusCode: 200,
+          metadata: {
+            source: input.source,
+            reason,
+            internalNote: input.internalNote?.trim().slice(0, 2000) || null,
+            previousState,
+            newState: tenant.lifecycleStatus,
+            requestCorrelationId: input.requestCorrelationId || null,
+            stoppedEnrollments: stopped.length,
+            blockedMessages: blocked.length,
+            canceledMessages: blocked.length,
+          },
+        },
+        manager,
+      );
+
       return {
         changed: true,
         tenant,
+        previousState,
         stoppedEnrollments: stopped.length,
-        canceledMessages: canceled.length,
+        canceledMessages: blocked.length,
       };
     });
 
@@ -295,34 +342,16 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
       }),
     ]);
 
-    if (result.changed) {
-      await this.audit.record({
-        tenantId: input.tenantId,
-        actorId: input.actor?.id || input.tenantId,
-        actorEmail: input.actor?.email || null,
-        action: 'client.services.suspended',
-        method: input.source === 'billing' ? 'EVENT' : 'POST',
-        path:
-          input.source === 'billing'
-            ? '/billing/service-suspension'
-            : `/admin/tenants/${input.tenantId}/suspend`,
-        statusCode: 200,
-        metadata: {
-          source: input.source,
-          reason,
-          stoppedEnrollments: result.stoppedEnrollments,
-          canceledMessages: result.canceledMessages,
-        },
-      });
-    }
-
     return {
       changed: result.changed,
+      clientId: input.tenantId,
+      previousState: result.previousState,
       lifecycleStatus: result.tenant.lifecycleStatus,
       suspendedAt: result.tenant.serviceSuspendedAt,
       reason: result.tenant.serviceSuspensionReason,
       source: result.tenant.serviceSuspensionSource,
       stoppedEnrollments: result.stoppedEnrollments,
+      blockedMessages: result.canceledMessages,
       canceledMessages: result.canceledMessages,
     };
   }

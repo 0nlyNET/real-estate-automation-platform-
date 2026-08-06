@@ -151,7 +151,7 @@ export class AiConversationControlService {
     return this.locks.withLock(tenantId, leadId, async () => {
       const state = await this.getOrCreateState(tenantId, leadId);
       await this.cancelPendingAiMessages(leadId, 'HUMAN_TAKEOVER');
-      await this.sequences.stopForLead(leadId, 'manual');
+      await this.sequences.stopForLead(tenantId, leadId, 'manual');
       state.ownershipStatus = 'human_handling';
       state.takenOverByUserId = actor.userId || null;
       state.takenOverAt = new Date();
@@ -346,7 +346,7 @@ export class AiConversationControlService {
         this.states.save(state),
         this.cancelPendingAiMessages(leadId, 'HUMAN_EDITED_DRAFT', message.id),
       ]);
-      await this.sequences.stopForLead(leadId, 'manual');
+      await this.sequences.stopForLead(tenantId, leadId, 'manual');
       if (actor.userId) {
         await this.aiAudit.recordHuman({
           tenantId,
@@ -404,7 +404,7 @@ export class AiConversationControlService {
       state.returnedToAiAt = null;
       state.aiPausedReason = 'A human sent a manual message.';
       await this.states.save(state);
-      await this.sequences.stopForLead(leadId, 'manual');
+      await this.sequences.stopForLead(tenantId, leadId, 'manual');
       if (actor?.userId) {
         await this.aiAudit.recordHuman({
           tenantId,

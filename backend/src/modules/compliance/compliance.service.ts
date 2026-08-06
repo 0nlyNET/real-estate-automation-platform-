@@ -11,6 +11,7 @@ import { LeadConsentRecord } from './lead-consent-record.entity';
 import { Lead } from '../leads/lead.entity';
 import { Message } from '../messaging/message.entity';
 import { ConsentEvidenceDto, LeadConsentDto } from './consent.dto';
+import { isOptOutMessage } from '../../common/opt-out';
 
 function normalizePhone(v: string) {
   let digits = (v || '').replace(/\D/g, '');
@@ -351,14 +352,6 @@ export class ComplianceService {
   }
 
   isStopKeyword(body: string) {
-    const t = (body || '').trim().toUpperCase();
-    return (
-      t === 'STOP' ||
-      t === 'STOPALL' ||
-      t === 'UNSUBSCRIBE' ||
-      t === 'CANCEL' ||
-      t === 'END' ||
-      t === 'QUIT'
-    );
+    return isOptOutMessage(body);
   }
 }

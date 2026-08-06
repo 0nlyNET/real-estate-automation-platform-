@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { AuditLog } from './audit-log.entity';
 import { sanitizeAuditMetadata } from './audit-metadata';
 
@@ -22,13 +22,14 @@ export class AuditService {
     private readonly repository: Repository<AuditLog>,
   ) {}
 
-  async record(input: AuditRecord): Promise<AuditLog> {
-    const row = this.repository.create({
+  async record(input: AuditRecord, manager?: EntityManager): Promise<AuditLog> {
+    const repository = manager?.getRepository(AuditLog) ?? this.repository;
+    const row = repository.create({
       ...input,
       actorEmail: input.actorEmail?.trim().toLowerCase() || null,
       metadata: sanitizeAuditMetadata(input.metadata),
     });
-    return this.repository.save(row);
+    return repository.save(row);
   }
 
   async listForTenant(tenantId: string, take = 100, skip = 0) {

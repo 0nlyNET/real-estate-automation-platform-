@@ -173,6 +173,8 @@ export class InboxSendService {
         msg.attemptCount = 0;
         msg.sentAt = null;
         msg.authorship = 'human';
+        msg.communicationType = 'sms';
+        msg.requiresBookingLink = false;
         msg.idempotencyKey = `manual:${tenantId}:${lead.id}:${crypto.randomUUID()}`;
 
         const saved = await this.messagesRepo.save(msg as any);

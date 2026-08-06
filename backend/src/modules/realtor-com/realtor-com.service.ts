@@ -69,8 +69,8 @@ export class RealtorComService {
     return value;
   }
 
-  private endpointPath(tenantId: string) {
-    return `/webhooks/realtor-com/${encodeURIComponent(tenantId)}`;
+  private endpointPath(_tenantId: string) {
+    return '/api/v1/ingest/lead';
   }
 
   async getSetup(tenantId: string) {
@@ -124,6 +124,10 @@ export class RealtorComService {
         encryptedValue: '',
       });
     row.routingKey = tenantId;
+    row.ingestionKeyHash = crypto
+      .createHash('sha256')
+      .update(apiKey, 'utf8')
+      .digest('hex');
     row.encryptedValue = encryptString(JSON.stringify(config));
     await this.credentials.save(row);
 

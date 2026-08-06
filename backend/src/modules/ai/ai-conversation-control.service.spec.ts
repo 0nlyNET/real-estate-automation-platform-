@@ -170,6 +170,7 @@ describe('AI conversation ownership', () => {
     );
     expect(fixture.pendingQuery.execute).toHaveBeenCalled();
     expect(fixture.dependencies.sequences.stopForLead).toHaveBeenCalledWith(
+      fixture.tenantId,
       fixture.lead.id,
       'manual',
     );

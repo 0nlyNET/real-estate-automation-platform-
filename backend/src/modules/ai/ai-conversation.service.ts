@@ -467,6 +467,7 @@ export class AiConversationService
         preflight,
         event.channel,
         body,
+        Boolean(verifiedBookingLink),
       );
       run.status =
         run.mode === 'draft' ? 'drafted' : 'response_queued';
@@ -786,6 +787,7 @@ export class AiConversationService
     context: PreflightContext,
     channel: 'sms' | 'email',
     body: string,
+    requiresBookingLink: boolean,
   ) {
     return this.locks.withLock(run.tenantId, run.leadId, async () => {
       const [state, settings, existing] = await Promise.all([
@@ -831,6 +833,8 @@ export class AiConversationService
           idempotencyKey: `ai:${run.id}`,
           authorship: 'ai',
           aiRunId: run.id,
+          communicationType: channel,
+          requiresBookingLink,
         }),
       );
       state.lastInboundMessageIdProcessed = run.triggeringMessageId;

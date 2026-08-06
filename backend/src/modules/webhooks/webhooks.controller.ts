@@ -19,8 +19,8 @@ export class WebhooksController {
 
   @Post('twilio/inbound')
   async twilioInbound(
-    @Body() body: any,
-    @Headers() headers: Record<string, string | undefined>,
+    @Body() body: Record<string, unknown>,
+    @Headers() headers: Record<string, string | string[] | undefined>,
     @Res() res: Response,
   ) {
     await this.webhooks.handleTwilioInbound(body, headers);
@@ -33,8 +33,8 @@ export class WebhooksController {
 
   @Post('twilio/status')
   twilioStatus(
-    @Body() body: any,
-    @Headers() headers: Record<string, string | undefined>,
+    @Body() body: Record<string, unknown>,
+    @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
     return this.webhooks.handleTwilioStatus(body, headers);
   }

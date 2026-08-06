@@ -16,10 +16,21 @@ import { ComplianceModule } from '../compliance/compliance.module';
 import { ClientOperationsModule } from '../client-operations/client-operations.module';
 import { SettingsModule } from '../settings/settings.module';
 import { AiModule } from '../ai/ai.module';
+import { Appointment } from '../client-operations/appointment.entity';
+import { TenantSettings } from '../settings/tenant-settings.entity';
+import { MessageSafetyService } from './message-safety.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Message, Lead, Tenant, LeadEvent, Credential]),
+    TypeOrmModule.forFeature([
+      Message,
+      Lead,
+      Tenant,
+      LeadEvent,
+      Credential,
+      TenantSettings,
+      Appointment,
+    ]),
     SequencesModule,
     ComplianceModule,
     ClientOperationsModule,
@@ -27,7 +38,7 @@ import { AiModule } from '../ai/ai.module';
     AiModule,
   ],
   controllers: [MessagingController],
-  providers: [MessagingService, InboxSendService],
-  exports: [MessagingService],
+  providers: [MessagingService, InboxSendService, MessageSafetyService],
+  exports: [MessagingService, MessageSafetyService],
 })
 export class MessagingModule {}

@@ -19,13 +19,12 @@ import { decryptIntegrationPayload } from '../integrations/integrations.service'
 import { ComplianceService } from '../compliance/compliance.service';
 import { sendSendGridEmail, sendTwilioSms } from '../../common/providers';
 import { UserRole, hasAtLeastRole } from '../../common/rbac';
-import { EntitlementService } from '../entitlements/entitlement.service';
 import { OperationsService } from '../operations/operations.service';
 import { operationalEvent } from '../../common/operational-log';
 import { ClientOperationsService } from '../client-operations/client-operations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AiConversationControlService } from '../ai/ai-conversation-control.service';
-import { nextAllowedSendTime } from '../../common/time';
+import { MessageSafetyService } from './message-safety.service';
 
 type ProviderConfig = {
   sendgrid?: { apiKey?: string; fromEmail?: string; fromName?: string };
@@ -60,7 +59,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     private readonly credentialRepository: Repository<Credential>,
     private readonly sequencesService: SequencesService,
     private readonly complianceService: ComplianceService,
-    private readonly entitlements: EntitlementService,
+    private readonly messageSafety: MessageSafetyService,
     private readonly operations: OperationsService,
     private readonly aiControl: AiConversationControlService,
     @Optional() private readonly clientOperations?: ClientOperationsService,
@@ -264,56 +263,6 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       await this.failPermanently(message, 'MISSING_LEAD', 'Message has no lead');
       return;
     }
-    const automated = message.authorship === 'ai' || message.authorship === 'template';
-    const action = automated
-      ? message.channel === 'sms'
-        ? 'send_automated_sms'
-        : 'send_automated_email'
-      : message.channel === 'sms'
-        ? 'send_manual_sms'
-        : 'send_manual_email';
-    const entitlement = await this.entitlements.evaluate(lead.tenantId, action);
-    if (!entitlement.allowed) {
-      await this.skipMessage(message, 'SERVICE_NOT_ENTITLED', entitlement.reasons.join('; '));
-      return;
-    }
-    const consent = await this.complianceService.communicationEligibility(
-      lead.tenantId,
-      lead,
-      message.channel,
-    );
-    if (!consent.allowed) {
-      await this.skipMessage(
-        message,
-        consent.code || 'MISSING_CONSENT',
-        consent.reason || 'Consent check failed',
-      );
-      return;
-    }
-    if (message.authorship === 'ai') {
-      const quiet = await this.complianceService.getQuietHours(lead.tenantId);
-      if (quiet.enabled) {
-        const now = new Date();
-        const next = nextAllowedSendTime({
-          now,
-          timeZone: quiet.timezone,
-          quietStart: `${String(Math.floor(quiet.startMinute / 60)).padStart(2, '0')}:${String(quiet.startMinute % 60).padStart(2, '0')}`,
-          quietEnd: `${String(Math.floor(quiet.endMinute / 60)).padStart(2, '0')}:${String(quiet.endMinute % 60).padStart(2, '0')}`,
-        });
-        if (next > now) {
-          message.status = 'queued';
-          message.scheduledAt = next;
-          message.lockedAt = null;
-          message.lockedBy = null;
-          await this.messageRepository.save(message);
-          return;
-        }
-      }
-    }
-
-    message.attemptCount = (message.attemptCount || 0) + 1;
-    message.lastAttemptedAt = new Date();
-    message.lastError = null as any;
     try {
       const send = (): Promise<{
         providerMessageId?: string;
@@ -323,6 +272,11 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
           ? this.sendEmail(message)
           : this.sendSms(message);
       const sendAndPersistAcceptance = async () => {
+        message.attemptCount = (message.attemptCount || 0) + 1;
+        message.lastAttemptedAt = new Date();
+        message.lastError = null as any;
+        message.providerSubmissionStartedAt = message.lastAttemptedAt;
+        await this.messageRepository.save(message);
         const result = await send();
         const acceptedAt = new Date();
         message.providerMessageId =
@@ -340,24 +294,51 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         await this.leadRepository.save(lead);
         return result;
       };
-      if (message.authorship === 'ai') {
-        const exclusive = await this.aiControl.runAiSendExclusive(
-          lead.tenantId,
-          lead.id,
-          message.id,
-          sendAndPersistAcceptance,
-        );
-        if (!exclusive.allowed) {
-          await this.skipMessage(
-            message,
-            'AI_CONTROL_CHANGED',
-            exclusive.reason,
-          );
-          return;
-        }
-      } else {
-        await sendAndPersistAcceptance();
-      }
+      const submitted = await this.withTenantDispatchLock(
+        lead.tenantId,
+        async () => {
+          const current = await this.messageRepository.findOne({
+            where: {
+              id: message.id,
+              lockedBy: this.workerId,
+              status: 'sending',
+            },
+            relations: ['lead'],
+          });
+          if (!current?.lead || current.lead.tenantId !== lead.tenantId) {
+            return false;
+          }
+          const safety = await this.messageSafety.evaluateMessageSafety({
+            leadId: lead.id,
+            clientId: lead.tenantId,
+            jobId: message.id,
+            communicationType: message.communicationType || message.channel,
+            requiresBookingLink: message.requiresBookingLink === true,
+          });
+          if (!safety.allowed) return false;
+
+          if (message.authorship === 'ai') {
+            const exclusive = await this.aiControl.runAiSendExclusive(
+              lead.tenantId,
+              lead.id,
+              message.id,
+              sendAndPersistAcceptance,
+            );
+            if (!exclusive.allowed) {
+              await this.skipMessage(
+                message,
+                'AI_CONTROL_CHANGED',
+                exclusive.reason,
+              );
+              return false;
+            }
+          } else {
+            await sendAndPersistAcceptance();
+          }
+          return true;
+        },
+      );
+      if (!submitted) return;
       await this.logLeadEvent(lead, 'message_provider_accepted', {
         channel: message.channel,
         messageId: message.id,
@@ -393,6 +374,30 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       await this.failPermanently(message, 'PROVIDER_SEND_FAILED', sanitized);
+    }
+  }
+
+  private async withTenantDispatchLock<T>(
+    tenantId: string,
+    callback: () => Promise<T>,
+  ): Promise<T> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    const lockName = `service-control:${tenantId}`;
+    let locked = false;
+    try {
+      await queryRunner.query('SELECT pg_advisory_lock(hashtext($1))', [
+        lockName,
+      ]);
+      locked = true;
+      return await callback();
+    } finally {
+      if (locked) {
+        await queryRunner
+          .query('SELECT pg_advisory_unlock(hashtext($1))', [lockName])
+          .catch(() => undefined);
+      }
+      await queryRunner.release();
     }
   }
 
@@ -580,7 +585,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       messageId: message.id,
       subject,
     });
-    await this.sequencesService.stopForLead(lead.id, 'reply');
+    await this.sequencesService.stopForLead(lead.tenantId, lead.id, 'reply');
     try {
       await this.clientOperations?.processInboundReply(lead, message.body, message.id);
     } catch (error: any) {
@@ -599,6 +604,8 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     const message = this.messageRepository.create({
       ...data,
       leadId: data.leadId || data.lead?.id,
+      communicationType: data.communicationType || data.channel || 'sms',
+      requiresBookingLink: data.requiresBookingLink === true,
       idempotencyKey: data.idempotencyKey || `message:${randomUUID()}`,
     });
     return this.messageRepository.save(message);

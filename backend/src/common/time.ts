@@ -10,7 +10,7 @@ type TzParts = {
 function getTzParts(date: Date, timeZone: string): TzParts {
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone,
-    hour12: false,
+    hourCycle: 'h23',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -35,9 +35,19 @@ function getTzParts(date: Date, timeZone: string): TzParts {
   };
 }
 
+export function isValidIanaTimeZone(timeZone?: string | null): boolean {
+  const value = String(timeZone || '').trim();
+  if (!value || !value.includes('/')) return value === 'UTC';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Returns the offset (in ms) between the provided timezone wall-clock and UTC at the given instant.
- * This is an approximation without external timezone libraries, but it is good enough for quiet-hours gating.
  */
 export function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
   const p = getTzParts(date, timeZone);
@@ -105,8 +115,6 @@ export function nextAllowedSendTime(opts: {
   if (!end) return opts.now;
 
   const nowParts = getTzParts(opts.now, opts.timeZone);
-  const offsetMs = getTimeZoneOffsetMs(opts.now, opts.timeZone);
-
   // Schedule for today at quietEnd in that timezone. If already past, schedule next day.
   const nowMin = minutesSinceMidnight(nowParts.hour, nowParts.minute);
   const endMin = minutesSinceMidnight(end.hour, end.minute);
@@ -115,15 +123,33 @@ export function nextAllowedSendTime(opts: {
   let month = nowParts.month;
   let day = nowParts.day;
   if (nowMin >= endMin) {
-    const tmp = new Date(Date.UTC(year, month - 1, day, 12, 0, 0) - offsetMs);
-    tmp.setUTCDate(tmp.getUTCDate() + 1);
-    const p2 = getTzParts(tmp, opts.timeZone);
-    year = p2.year;
-    month = p2.month;
-    day = p2.day;
+    const nextCalendarDay = new Date(Date.UTC(year, month - 1, day + 1));
+    year = nextCalendarDay.getUTCFullYear();
+    month = nextCalendarDay.getUTCMonth() + 1;
+    day = nextCalendarDay.getUTCDate();
   }
 
-  const wallUtc = Date.UTC(year, month - 1, day, end.hour, end.minute, 0);
-  const actual = wallUtc - offsetMs;
-  return new Date(actual);
+  return zonedWallClockToDate(
+    { year, month, day, hour: end.hour, minute: end.minute, second: 0 },
+    opts.timeZone,
+  );
+}
+
+function zonedWallClockToDate(parts: TzParts, timeZone: string): Date {
+  const wallClockUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+  let candidate = wallClockUtc;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const offset = getTimeZoneOffsetMs(new Date(candidate), timeZone);
+    const adjusted = wallClockUtc - offset;
+    if (adjusted === candidate) break;
+    candidate = adjusted;
+  }
+  return new Date(candidate);
 }

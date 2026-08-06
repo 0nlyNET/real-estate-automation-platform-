@@ -12,6 +12,11 @@ import { Appointment } from '../client-operations/appointment.entity';
 export type LeadType = 'buyer' | 'seller' | 'investor' | 'renter';
 export type LeadTemperature = 'hot' | 'warm' | 'cold';
 export type LeadReadiness = 'not_ready' | 'exploring' | 'ready' | 'urgent';
+export type LeadCommunicationStatus =
+  | 'active'
+  | 'paused'
+  | 'blocked'
+  | 'opted_out';
 export type LeadStage =
   | 'new'
   | 'contacted'
@@ -27,6 +32,14 @@ export type LeadStage =
 @Entity({ name: 'leads' })
 @Index(['tenant', 'email'], { unique: true, where: 'email IS NOT NULL' })
 @Index(['tenant', 'phone'], { unique: true, where: 'phone IS NOT NULL' })
+@Index(
+  'IDX_leads_tenant_provider_lead',
+  ['tenantId', 'provider', 'providerLeadId'],
+  {
+    unique: true,
+    where: '"provider_lead_id" IS NOT NULL AND "provider" IS NOT NULL',
+  },
+)
 export class Lead extends BaseEntity {
   @Column({ name: 'full_name' })
   fullName!: string;
@@ -73,6 +86,50 @@ export class Lead extends BaseEntity {
 
   @Column({ nullable: true })
   source?: string;
+
+  @Column({ name: 'provider', type: 'varchar', length: 30, nullable: true })
+  provider?: 'zillow' | 'realtor' | null;
+
+  @Column({
+    name: 'provider_lead_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  providerLeadId?: string | null;
+
+  @Column({
+    name: 'ingestion_fingerprint',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  ingestionFingerprint?: string | null;
+
+  @Column({
+    name: 'communication_status',
+    type: 'varchar',
+    length: 30,
+    default: 'active',
+  })
+  communicationStatus!: LeadCommunicationStatus;
+
+  @Column({ name: 'opted_out_at', type: 'timestamptz', nullable: true })
+  optedOutAt?: Date | null;
+
+  @Column({
+    name: 'opt_out_source',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
+  optOutSource?: string | null;
+
+  @Column({ name: 'sms_eligible', type: 'boolean', default: false })
+  smsEligible!: boolean;
+
+  @Column({ name: 'email_eligible', type: 'boolean', default: false })
+  emailEligible!: boolean;
 
   @Column({ nullable: true })
   location?: string;
