@@ -12,6 +12,10 @@ import {
 import type { Request, Response } from 'express';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { WebhooksService } from './webhooks.service';
+import {
+  issueSendGridInboundAccessToken,
+  normalizeSendGridInboundAuthorization,
+} from './sendgrid-inbound-oauth';
 
 @Controller('webhooks')
 export class WebhooksController {
@@ -39,6 +43,14 @@ export class WebhooksController {
     return this.webhooks.handleTwilioStatus(body, headers);
   }
 
+  @Post('sendgrid/oauth/token')
+  sendGridOauthToken(
+    @Body() body: Record<string, unknown>,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return issueSendGridInboundAccessToken(body, authorization || '');
+  }
+
   @Post('sendgrid/inbound')
   @UseInterceptors(
     AnyFilesInterceptor({
@@ -54,7 +66,10 @@ export class WebhooksController {
     @Body() body: any,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.webhooks.handleSendGridInbound(body, authorization || '');
+    return this.webhooks.handleSendGridInbound(
+      body,
+      normalizeSendGridInboundAuthorization(authorization || ''),
+    );
   }
 
   @Get('facebook/lead-ads')
