@@ -5,6 +5,7 @@ import {
 import {
   issueSendGridInboundAccessToken,
   normalizeSendGridInboundAuthorization,
+  SendGridInboundAuthorizationError,
 } from './sendgrid-inbound-oauth';
 
 describe('SendGrid inbound OAuth security', () => {
@@ -20,13 +21,23 @@ describe('SendGrid inbound OAuth security', () => {
     jest.restoreAllMocks();
   });
 
-  it('issues and validates a client-credentials bearer token', () => {
-    const response = issueSendGridInboundAccessToken({
+  function issueToken() {
+    return issueSendGridInboundAccessToken({
       grant_type: 'client_credentials',
       client_id: 'rta_sendgrid_inbound',
       client_secret: 'strong-test-password',
       scope: 'webhooks:write',
     });
+  }
+
+  function expectedBasicAuthorization() {
+    return `Basic ${Buffer.from(
+      'rta_sendgrid_inbound:strong-test-password',
+    ).toString('base64')}`;
+  }
+
+  it('issues and validates a client-credentials bearer token', () => {
+    const response = issueToken();
 
     expect(response).toEqual(
       expect.objectContaining({
@@ -40,15 +51,20 @@ describe('SendGrid inbound OAuth security', () => {
       normalizeSendGridInboundAuthorization(
         `Bearer ${response.access_token}`,
       ),
-    ).toBe(
-      `Basic ${Buffer.from(
-        'rta_sendgrid_inbound:strong-test-password',
-      ).toString('base64')}`,
-    );
+    ).toBe(expectedBasicAuthorization());
   });
 
-  it('accepts OAuth client credentials through HTTP Basic auth', () => {
-    const authorization = `Basic ${Buffer.from(
+  it('accepts case-insensitive Bearer schemes and normal horizontal whitespace', () => {
+    const response = issueToken();
+    expect(
+      normalizeSendGridInboundAuthorization(
+        `  bearer\t  ${response.access_token}  `,
+      ),
+    ).toBe(expectedBasicAuthorization());
+  });
+
+  it('accepts OAuth client credentials through case-insensitive HTTP Basic auth', () => {
+    const authorization = `basic\t${Buffer.from(
       'rta_sendgrid_inbound:strong-test-password',
     ).toString('base64')}`;
     const response = issueSendGridInboundAccessToken(
@@ -79,11 +95,7 @@ describe('SendGrid inbound OAuth security', () => {
   });
 
   it('rejects a tampered bearer token with the OAuth invalid_token error', () => {
-    const response = issueSendGridInboundAccessToken({
-      grant_type: 'client_credentials',
-      client_id: 'rta_sendgrid_inbound',
-      client_secret: 'strong-test-password',
-    });
+    const response = issueToken();
     const replacement = response.access_token.endsWith('a') ? 'b' : 'a';
     const tampered = `${response.access_token.slice(0, -1)}${replacement}`;
 
@@ -91,36 +103,61 @@ describe('SendGrid inbound OAuth security', () => {
       normalizeSendGridInboundAuthorization(`Bearer ${tampered}`);
       throw new Error('Expected token validation to fail');
     } catch (error) {
-      expect(error).toBeInstanceOf(UnauthorizedException);
+      expect(error).toBeInstanceOf(SendGridInboundAuthorizationError);
       expect((error as UnauthorizedException).getResponse()).toEqual({
         error: 'invalid_token',
       });
+      expect((error as SendGridInboundAuthorizationError).reason).toBe(
+        'signature_mismatch',
+      );
     }
   });
 
   it('rejects expired bearer tokens', () => {
     const issuedAt = Date.now();
     const dateNow = jest.spyOn(Date, 'now').mockReturnValue(issuedAt);
-    const response = issueSendGridInboundAccessToken({
-      grant_type: 'client_credentials',
-      client_id: 'rta_sendgrid_inbound',
-      client_secret: 'strong-test-password',
-    });
+    const response = issueToken();
     dateNow.mockReturnValue(issuedAt + 60 * 60 * 1000 + 1_000);
 
-    expect(() =>
+    try {
       normalizeSendGridInboundAuthorization(
         `Bearer ${response.access_token}`,
-      ),
-    ).toThrow(UnauthorizedException);
+      );
+      throw new Error('Expected token validation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(SendGridInboundAuthorizationError);
+      expect((error as SendGridInboundAuthorizationError).reason).toBe(
+        'expired_token',
+      );
+    }
   });
 
-  it('preserves the existing Basic-auth path during migration', () => {
-    const authorization = `Basic ${Buffer.from(
+  it('preserves and canonicalizes the existing Basic-auth path', () => {
+    const encoded = Buffer.from(
       'rta_sendgrid_inbound:strong-test-password',
-    ).toString('base64')}`;
-    expect(normalizeSendGridInboundAuthorization(authorization)).toBe(
-      authorization,
+    ).toString('base64');
+    expect(normalizeSendGridInboundAuthorization(` basic   ${encoded} `)).toBe(
+      `Basic ${encoded}`,
     );
+  });
+
+  it('reports safe internal reasons for missing and unsupported authorization', () => {
+    for (const [authorization, reason] of [
+      ['', 'missing_authorization'],
+      ['Digest opaque-value', 'unsupported_scheme'],
+    ] as const) {
+      try {
+        normalizeSendGridInboundAuthorization(authorization);
+        throw new Error('Expected token validation to fail');
+      } catch (error) {
+        expect(error).toBeInstanceOf(SendGridInboundAuthorizationError);
+        expect((error as SendGridInboundAuthorizationError).reason).toBe(
+          reason,
+        );
+        expect((error as UnauthorizedException).getResponse()).toEqual({
+          error: 'invalid_token',
+        });
+      }
+    }
   });
 });
