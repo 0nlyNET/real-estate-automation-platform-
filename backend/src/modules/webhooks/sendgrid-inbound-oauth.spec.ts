@@ -99,15 +99,13 @@ describe('SendGrid inbound OAuth security', () => {
 
   it('rejects expired bearer tokens', () => {
     const issuedAt = Date.now();
-    jest.spyOn(Date, 'now').mockReturnValue(issuedAt);
+    const dateNow = jest.spyOn(Date, 'now').mockReturnValue(issuedAt);
     const response = issueSendGridInboundAccessToken({
       grant_type: 'client_credentials',
       client_id: 'rta_sendgrid_inbound',
       client_secret: 'strong-test-password',
     });
-    jest
-      .spyOn(Date, 'now')
-      .mockReturnValue(issuedAt + 60 * 60 * 1000 + 1_000);
+    dateNow.mockReturnValue(issuedAt + 60 * 60 * 1000 + 1_000);
 
     expect(() =>
       normalizeSendGridInboundAuthorization(
