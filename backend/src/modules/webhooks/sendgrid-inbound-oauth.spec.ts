@@ -84,7 +84,8 @@ describe('SendGrid inbound OAuth security', () => {
       client_id: 'rta_sendgrid_inbound',
       client_secret: 'strong-test-password',
     });
-    const tampered = `${response.access_token.slice(0, -1)}x`;
+    const replacement = response.access_token.endsWith('a') ? 'b' : 'a';
+    const tampered = `${response.access_token.slice(0, -1)}${replacement}`;
 
     try {
       normalizeSendGridInboundAuthorization(`Bearer ${tampered}`);
