@@ -1,6 +1,6 @@
 import { INestApplication, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import request from 'supertest';
+import request = require('supertest');
 import { issueSendGridInboundAccessToken } from './sendgrid-inbound-oauth';
 import { WebhooksController } from './webhooks.controller';
 import { WebhooksService } from './webhooks.service';
