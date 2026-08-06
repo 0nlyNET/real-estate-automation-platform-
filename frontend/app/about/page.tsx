@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { MarketingHeader } from "@/components/ui/marketing-header"
 import { Footer } from "@/components/ui/footer"
-import { ArrowRight, Target, Heart, Zap } from "lucide-react"
+import { ArrowRight, Heart, Linkedin, Mail, Target, Zap } from "lucide-react"
 
 const values = [
   {
@@ -69,8 +69,53 @@ export default function AboutPage() {
         </div>
       </section>
 
+      {/* Founder */}
+      <section className="border-y border-border bg-card/50 py-24">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <Card className="mx-auto max-w-4xl overflow-hidden border-border bg-card shadow-sm">
+            <CardContent className="grid gap-8 p-8 md:grid-cols-[1fr_auto] md:items-center md:p-10">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-primary">
+                  Founder & authorized representative
+                </p>
+                <h2 className="mt-3 text-3xl font-bold text-foreground">Jayden King</h2>
+                <div className="mt-5 space-y-4 text-muted-foreground">
+                  <p>
+                    Jayden King is the founder and authorized representative of RealtyTechAI, the business that
+                    operates the RealtyTechAI platform and managed lead-response service.
+                  </p>
+                  <p>
+                    RealtyTechAI is the current business name, formerly ONLY MOTION. This public record connects the
+                    current company name, the former name, and its authorized representative.
+                  </p>
+                </div>
+                <a
+                  href="mailto:jayden@realtytechai.app"
+                  className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-foreground transition-colors hover:text-primary"
+                >
+                  <Mail className="h-4 w-4" aria-hidden="true" />
+                  jayden@realtytechai.app
+                </a>
+              </div>
+
+              <Button asChild variant="outline" size="lg" className="w-full md:w-auto">
+                <a
+                  href="https://www.linkedin.com/in/jayden-king-9a3070368/"
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="View Jayden King on LinkedIn"
+                >
+                  <Linkedin className="mr-2 h-5 w-5" aria-hidden="true" />
+                  View LinkedIn
+                </a>
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
       {/* Values */}
-      <section className="border-t border-border bg-card/50 py-24">
+      <section className="py-24">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <h2 className="text-center text-3xl font-bold text-foreground">Our values</h2>
           <div className="mt-12 grid gap-8 md:grid-cols-3">
@@ -90,7 +135,7 @@ export default function AboutPage() {
       </section>
 
       {/* Product approach */}
-      <section className="py-24">
+      <section className="border-t border-border py-24">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <h2 className="text-center text-3xl font-bold text-foreground">How we build</h2>
           <p className="mx-auto mt-4 max-w-2xl text-center text-muted-foreground">
