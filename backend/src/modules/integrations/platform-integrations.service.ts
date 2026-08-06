@@ -504,10 +504,59 @@ export class PlatformIntegrationsService {
     if (!row || !payload?.fromEmail) {
       throw new BadRequestException('Assign a SendGrid sender to this client first');
     }
-    const result = await this.testPlatformSendGrid({
-      fromEmail: payload.fromEmail,
-      toEmail: dto.toEmail,
-    });
+    if (!payload?.apiKey) {
+      throw new BadRequestException('Platform SendGrid credentials are not available');
+    }
+
+    let result: { ok: boolean; error?: string };
+    try {
+      const fromEmail = email(payload.fromEmail, 'From email');
+      const toEmail = dto.toEmail ? email(dto.toEmail, 'Test recipient') : null;
+      const fromName = String(payload.fromName || '').trim() || 'RealtyTechAI';
+      const replyTo = payload.inboundAddress
+        ? email(payload.inboundAddress, 'Inbound reply address')
+        : fromEmail;
+
+      if (toEmail) {
+        const send = await fetch('https://api.sendgrid.com/v3/mail/send', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${payload.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            personalizations: [{ to: [{ email: toEmail }] }],
+            from: { email: fromEmail, name: fromName },
+            reply_to: { email: replyTo, name: fromName },
+            subject: `${fromName} email connection test`,
+            content: [
+              {
+                type: 'text/plain',
+                value: `This is a controlled email delivery test for ${fromName}. Replies to this message are routed to ${replyTo}.`,
+              },
+            ],
+          }),
+        });
+        if (!send.ok) {
+          const detail = await send.text().catch(() => '');
+          throw new Error(`SendGrid client test email failed (${send.status}): ${detail}`);
+        }
+      } else {
+        const response = await fetch('https://api.sendgrid.com/v3/user/profile', {
+          headers: { Authorization: `Bearer ${payload.apiKey}` },
+        });
+        if (!response.ok) {
+          throw new Error(`SendGrid credential test failed (${response.status})`);
+        }
+      }
+      result = { ok: true };
+    } catch (error: any) {
+      result = {
+        ok: false,
+        error: String(error?.message || 'SendGrid client test failed').slice(0, 1000),
+      };
+    }
+
     await this.saveTenantPayload(
       tenantId,
       'sendgrid',
