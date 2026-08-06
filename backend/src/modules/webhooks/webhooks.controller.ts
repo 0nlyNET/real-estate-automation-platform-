@@ -2,7 +2,9 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Headers,
+  HttpCode,
   Post,
   Query,
   Req,
@@ -44,6 +46,9 @@ export class WebhooksController {
   }
 
   @Post('sendgrid/oauth/token')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
   sendGridOauthToken(
     @Body() body: Record<string, unknown>,
     @Headers('authorization') authorization?: string,
