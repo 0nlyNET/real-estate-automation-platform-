@@ -1,5 +1,5 @@
-import SalesBookingSettings from "@/components/admin/sales-booking-settings"
+import { redirect } from "next/navigation"
 
-export default function AdminSalesBookingPage() {
-  return <SalesBookingSettings />
+export default function LegacyAdminSalesBookingPage() {
+  redirect("/admin/dashboard?view=settings")
 }
