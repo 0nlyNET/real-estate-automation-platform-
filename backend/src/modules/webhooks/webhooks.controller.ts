@@ -5,6 +5,7 @@ import {
   Header,
   Headers,
   HttpCode,
+  Logger,
   Post,
   Query,
   Req,
@@ -17,10 +18,14 @@ import { WebhooksService } from './webhooks.service';
 import {
   issueSendGridInboundAccessToken,
   normalizeSendGridInboundAuthorization,
+  SendGridInboundAuthorizationError,
 } from './sendgrid-inbound-oauth';
+import { operationalEvent } from '../../common/operational-log';
 
 @Controller('webhooks')
 export class WebhooksController {
+  private readonly logger = new Logger(WebhooksController.name);
+
   constructor(private readonly webhooks: WebhooksService) {}
 
   @Post('twilio/inbound')
@@ -71,10 +76,25 @@ export class WebhooksController {
     @Body() body: any,
     @Headers('authorization') authorization?: string,
   ) {
-    return this.webhooks.handleSendGridInbound(
-      body,
-      normalizeSendGridInboundAuthorization(authorization || ''),
-    );
+    try {
+      return this.webhooks.handleSendGridInbound(
+        body,
+        normalizeSendGridInboundAuthorization(authorization || ''),
+      );
+    } catch (error) {
+      if (error instanceof SendGridInboundAuthorizationError) {
+        this.logger.warn(
+          operationalEvent('invalid_webhook_signature', {
+            provider: 'sendgrid',
+            webhook: 'inbound',
+            reason: error.reason,
+            scheme: error.scheme || null,
+            authorizationPresent: Boolean(String(authorization || '').trim()),
+          }),
+        );
+      }
+      throw error;
+    }
   }
 
   @Get('facebook/lead-ads')
