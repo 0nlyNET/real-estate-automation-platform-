@@ -103,12 +103,19 @@ export class EntitlementService {
     const automationEnabled = workspaceSettings?.automationsEnabled === true;
     const globalAutomationPaused =
       process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true';
-    const automationAction = !['add_team_member', 'enable_automation'].includes(action);
+    // Human replies remain available during onboarding, workspace automation pauses,
+    // and the platform automation kill switch. Automated work remains fail-closed.
+    const automationAction = ![
+      'add_team_member',
+      'enable_automation',
+      'send_manual_sms',
+      'send_manual_email',
+    ].includes(action);
     const reasons: string[] = [];
     if (!billing.allowed && billing.reason) reasons.push(billing.reason);
     if (!lifecycleEligible)
       reasons.push(`Workspace lifecycle is ${tenant.lifecycleStatus || 'ONBOARDING'}`);
-    if (action !== 'add_team_member' && globalAutomationPaused)
+    if (automationAction && globalAutomationPaused)
       reasons.push('Platform automation is globally paused');
     if (automationAction && !automationEnabled)
       reasons.push('Workspace automation is disabled');
