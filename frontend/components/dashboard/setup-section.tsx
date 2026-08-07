@@ -8,7 +8,15 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
-type ReadinessItem = { key: string; label: string; passed: boolean; required: boolean }
+type ReadinessItem = {
+  key: string
+  label: string
+  passed: boolean
+  required: boolean
+  responsibleParty: "client" | "jayden" | "provider" | "platform"
+  statusMessage: string
+  nextAction?: string | null
+}
 type Readiness = {
   state: string
   ready: boolean
@@ -27,8 +35,10 @@ export function DashboardSetupSection() {
       .catch((cause) => setError(cause instanceof Error ? cause.message : "Readiness unavailable"))
   }, [])
 
-  const passed = readiness?.required.filter((item) => item.passed).length || 0
-  const total = readiness?.required.length || 0
+  const clientItems = readiness?.required.filter((item) => item.responsibleParty === "client") || []
+  const passed = clientItems.filter((item) => item.passed).length
+  const total = clientItems.length
+  const nextClientAction = readiness?.blockers.find((item) => item.responsibleParty === "client")
 
   return (
     <Card className="border-border/60">
@@ -49,17 +59,17 @@ export function DashboardSetupSection() {
         {readiness ? (
           <>
             <div className="grid gap-2 md:grid-cols-2">
-              {readiness.required.slice(0, 8).map((item) => (
+              {clientItems.slice(0, 8).map((item) => (
                 <div key={item.key} className="flex items-start gap-2 rounded-md border p-3 text-sm">
                   {item.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" /> : <Circle className="mt-0.5 h-4 w-4 text-muted-foreground" />}
-                  <span>{item.label}</span>
+                  <span><span className="block">{item.label}</span>{!item.passed && item.nextAction ? <span className="mt-1 block text-xs text-muted-foreground">{item.nextAction}</span> : null}</span>
                 </div>
               ))}
             </div>
             {readiness.blockers.length ? (
               <div className="flex items-start gap-2 rounded-md bg-amber-500/10 p-3 text-sm">
                 <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-600" />
-                <span>{readiness.blockers.length} setup check(s) remain. Nothing goes live until review is complete.</span>
+                <span>{nextClientAction?.nextAction || `${readiness.blockers.length} launch check(s) remain. RealtyTechAI will handle technical tests and provider review; nothing goes live early.`}</span>
               </div>
             ) : null}
             <div className="flex flex-wrap gap-2"><Button asChild><Link href="/app/onboarding">Continue setup</Link></Button><Button asChild variant="outline"><Link href="/app/integrations">Review connections</Link></Button></div>

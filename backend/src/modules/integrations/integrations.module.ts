@@ -12,12 +12,14 @@ import {
   PublicSalesBookingController,
 } from './sales-booking.controller';
 import { SalesBookingService } from './sales-booking.service';
+import { OnboardingModule } from '../onboarding/onboarding.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Credential, PlatformCredential]),
     CommonModule,
     OperationsModule,
+    OnboardingModule,
   ],
   controllers: [
     IntegrationsController,

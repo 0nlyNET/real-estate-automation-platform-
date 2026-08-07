@@ -165,6 +165,9 @@ function harness(
   const ai = {
     acceptInbound: jest.fn().mockResolvedValue({ status: "queued" }),
   };
+  const onboarding = {
+    recordAutomatedTestEvidence: jest.fn().mockResolvedValue({}),
+  };
   const service = new WebhooksService(
     dataSource as never,
     credentials as never,
@@ -172,6 +175,9 @@ function harness(
     sequences as never,
     {} as never,
     ai as never,
+    undefined,
+    undefined,
+    onboarding as never,
   );
   return {
     service,
@@ -184,6 +190,7 @@ function harness(
     compliance,
     sequences,
     ai,
+    onboarding,
     inboundRepository,
     messageRepository,
     leadRepository,
@@ -264,6 +271,10 @@ describe("Twilio inbound safety transaction", () => {
       item.tenantId,
     ]);
     expect(item.ai.acceptInbound).not.toHaveBeenCalled();
+    expect(item.onboarding.recordAutomatedTestEvidence).toHaveBeenCalledWith(
+      item.tenantId,
+      { inboundSms: true, stop: true },
+    );
     expect(item.leadEventRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: "sms_opt_out_received" }),
     );
@@ -298,6 +309,10 @@ describe("Twilio inbound safety transaction", () => {
         leadId: item.lead.id,
         channel: "sms",
       }),
+    );
+    expect(item.onboarding.recordAutomatedTestEvidence).toHaveBeenCalledWith(
+      item.tenantId,
+      { inboundSms: true, stop: false },
     );
   });
 

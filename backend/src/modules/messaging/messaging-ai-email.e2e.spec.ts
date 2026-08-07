@@ -347,6 +347,9 @@ describe('email reply to AI response end-to-end', () => {
       { createForTenant: jest.fn().mockResolvedValue({}) } as any,
       operations as any,
     );
+    const onboarding = {
+      recordAutomatedTestEvidence: jest.fn().mockResolvedValue({}),
+    };
     const webhooks = new WebhooksService(
       dataSource,
       credentials as any,
@@ -356,6 +359,7 @@ describe('email reply to AI response end-to-end', () => {
       ai,
       messageRepo as any,
       operations as any,
+      onboarding as any,
     );
     const messaging = new MessagingService(
       dataSource,
@@ -424,6 +428,10 @@ describe('email reply to AI response end-to-end', () => {
     });
     expect(lead.sequenceStatus).toBe('stopped');
     expect(sequences.stopForLead).toHaveBeenCalledWith(tenantId, leadId, 'reply');
+    expect(onboarding.recordAutomatedTestEvidence).toHaveBeenCalledWith(
+      tenantId,
+      { inboundEmail: true },
+    );
     expect(runs).toEqual([
       expect.objectContaining({
         triggeringMessageId: inbound.id,

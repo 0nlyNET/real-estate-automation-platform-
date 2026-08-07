@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, Optional } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import * as crypto from "crypto";
@@ -8,6 +8,7 @@ import { TenantQuietHours } from "../compliance/tenant-quiet-hours.entity";
 import { isValidIanaTimeZone, parseHHMM } from "../../common/time";
 import { EntitlementService } from "../entitlements/entitlement.service";
 import { isSafeBookingUrl } from "../../common/booking-link";
+import { OnboardingService } from "../onboarding/onboarding.service";
 
 @Injectable()
 export class SettingsService {
@@ -18,6 +19,7 @@ export class SettingsService {
     @InjectRepository(TenantQuietHours)
     private readonly quietHoursRepo: Repository<TenantQuietHours>,
     private readonly entitlements: EntitlementService,
+    @Optional() private readonly onboarding?: OnboardingService,
   ) {}
 
   private async findByTenantId(tenantId: string) {
@@ -164,6 +166,7 @@ export class SettingsService {
     }>,
   ) {
     const current = await this.getTenantSettingsEntity(tenantId);
+    let launchConfigurationChanged = false;
 
     if (updates.automationsEnabled === true) {
       await this.entitlements.assertAllowed(tenantId, "enable_automation");
@@ -186,6 +189,8 @@ export class SettingsService {
           "timeZone must be a valid IANA time zone",
         );
       }
+      launchConfigurationChanged ||=
+        current.timeZone !== timeZone || !current.timeZoneVerifiedAt;
       current.timeZone = timeZone;
       current.timeZoneVerifiedAt = new Date();
     }
@@ -193,14 +198,23 @@ export class SettingsService {
       typeof updates.quietHoursStart === "string" &&
       "quietHoursStart" in current
     )
-      (current as any).quietHoursStart = updates.quietHoursStart;
+      {
+        launchConfigurationChanged ||=
+          current.quietHoursStart !== updates.quietHoursStart;
+        (current as any).quietHoursStart = updates.quietHoursStart;
+      }
     if (typeof updates.quietHoursEnd === "string" && "quietHoursEnd" in current)
-      (current as any).quietHoursEnd = updates.quietHoursEnd;
+      {
+        launchConfigurationChanged ||=
+          current.quietHoursEnd !== updates.quietHoursEnd;
+        (current as any).quietHoursEnd = updates.quietHoursEnd;
+      }
     if (typeof updates.bookingLink === "string" && "bookingLink" in current) {
       const link = updates.bookingLink.trim();
       if (link && !isSafeBookingUrl(link))
         throw new BadRequestException("Booking link must be a full HTTPS URL");
       if (link !== String(current.bookingLink || "").trim()) {
+        launchConfigurationChanged = true;
         current.bookingLinkVerifiedAt = null;
         current.bookingLinkVerificationStatus = "unverified";
         current.bookingLinkVerificationExpiresAt = null;
@@ -217,11 +231,17 @@ export class SettingsService {
     if (
       typeof (updates as any).roundRobinEnabled === "boolean" &&
       "roundRobinEnabled" in current
-    )
+    ) {
+      launchConfigurationChanged ||=
+        current.roundRobinEnabled !== (updates as any).roundRobinEnabled;
       (current as any).roundRobinEnabled = (updates as any).roundRobinEnabled;
+    }
 
-    if ("roundRobinTeamId" in (updates as any) && "roundRobinTeamId" in current)
+    if ("roundRobinTeamId" in (updates as any) && "roundRobinTeamId" in current) {
+      launchConfigurationChanged ||=
+        current.roundRobinTeamId !== (updates as any).roundRobinTeamId;
       (current as any).roundRobinTeamId = (updates as any).roundRobinTeamId;
+    }
 
     const saved = await this.tenantSettingsRepo.save(current);
     if (
@@ -246,6 +266,12 @@ export class SettingsService {
           timezone: saved.timeZone,
         }),
       );
+    }
+    if (launchConfigurationChanged) {
+      await this.onboarding?.invalidateLaunchEvidence(tenantId, {
+        reason: "Workspace scheduling, booking, or routing settings changed",
+        retestEndToEnd: true,
+      });
     }
     return this.safeSettings(saved);
   }

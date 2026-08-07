@@ -15,6 +15,7 @@ import { PlatformManagedIntegrations1785024000001 } from './migrations/202607260
 import { StripeSetupFeeTracking1785801600001 } from './migrations/202608040001-stripe-setup-fee-tracking';
 import { FirstClientSafetyPipeline1785974400001 } from './migrations/202608060001-first-client-safety-pipeline';
 import { MessagingDeliveryReliability1786060800001 } from './migrations/202608070001-messaging-delivery-reliability';
+import { ClientReadinessObservability1786060800002 } from './migrations/202608070002-client-readiness-observability';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -31,6 +32,7 @@ const databaseMigrations = [
   StripeSetupFeeTracking1785801600001,
   FirstClientSafetyPipeline1785974400001,
   MessagingDeliveryReliability1786060800001,
+  ClientReadinessObservability1786060800002,
 ];
 
 function migrationOptions() {

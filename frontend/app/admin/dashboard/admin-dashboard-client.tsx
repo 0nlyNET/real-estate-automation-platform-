@@ -265,6 +265,10 @@ type ReadinessItem = {
   label: string
   passed: boolean
   required: boolean
+  category: string
+  responsibleParty: "client" | "jayden" | "provider" | "platform"
+  statusMessage: string
+  nextAction?: string | null
   verifiedAt?: string | null
   verifiedBy?: string | null
 }
@@ -275,6 +279,11 @@ type TenantReadiness = {
   ready: boolean
   blockers: ReadinessItem[]
   required: ReadinessItem[]
+  enabledServices: { sms: boolean; email: boolean; booking: boolean }
+  externalProviderApprovals: {
+    twilio: { required: boolean; status: string; recorded: boolean }
+    sendgrid: { required: boolean; status: string; recorded: boolean }
+  }
   lastUpdatedAt?: string
 }
 
@@ -421,16 +430,16 @@ const onboardingGroups: Array<{ label: string; keys: string[] }> = [
   { label: "Account created", keys: [] },
   {
     label: "Business information completed",
-    keys: ["business_identity", "contacts", "service_scope", "lead_handling", "timezone", "quiet_hours"],
+    keys: ["business_identity", "contacts", "service_scope", "lead_handling", "target_launch_date", "provider_owner", "timezone", "quiet_hours"],
   },
   { label: "Branding completed", keys: ["brand"] },
-  { label: "Lead source connected", keys: ["meta", "intake_api"] },
+  { label: "Lead source connected", keys: ["meta", "intake_api", "intake_api_test"] },
   { label: "Booking link verified", keys: ["booking_url"] },
   {
     label: "Message settings approved",
-    keys: ["consent_policy", "twilio", "sendgrid", "sms_template", "email_template"],
+    keys: ["consent_policy", "twilio", "sendgrid", "twilio_provider_approval", "sendgrid_provider_approval", "sms_template", "email_template"],
   },
-  { label: "Test lead completed", keys: ["test_lead", "inbound_sms", "stop", "provider_rejection"] },
+  { label: "Test lead completed", keys: ["test_lead", "inbound_sms", "inbound_email", "stop", "provider_rejection"] },
   { label: "Launch approved", keys: ["client_approval", "operator_approval", "billing_evidence", "global_pause"] },
 ]
 
@@ -528,6 +537,7 @@ export function AdminDashboardClient({
   const [supportFilter, setSupportFilter] = useState("open")
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [evidence, setEvidence] = useState<Record<string, string>>({})
+  const [technicalEvidence, setTechnicalEvidence] = useState<Record<string, Record<string, string>>>({})
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
 
   const [showCreateClient, setShowCreateClient] = useState(false)
@@ -857,6 +867,21 @@ export function AdminDashboardClient({
     } catch (cause) {
       setError(messageFor(cause, "Evidence could not be saved"))
     }
+  }
+
+  function updateTechnicalEvidence(key: string, value: string) {
+    if (!selectedTenant) return
+    setTechnicalEvidence((current) => ({
+      ...current,
+      [selectedTenant.id]: {
+        ...(current[selectedTenant.id] || {}),
+        [key]: value,
+      },
+    }))
+  }
+
+  function technicalEvidenceValue(key: string) {
+    return selectedTenant ? technicalEvidence[selectedTenant.id]?.[key] || "" : ""
   }
 
   async function assignClient(tenant: Tenant, assignedOperatorId: string) {
@@ -1827,8 +1852,10 @@ export function AdminDashboardClient({
                           <div>
                             <div>{item.label}</div>
                             <div className="mt-1 text-xs text-muted-foreground">
-                              {item.passed ? "Complete" : "Blocked"}
+                              {item.passed ? "Complete" : item.statusMessage}
                             </div>
+                            {!item.passed && item.nextAction ? <div className="mt-1 text-xs text-muted-foreground">Next: {item.nextAction}</div> : null}
+                            <div className="mt-1 text-[11px] uppercase tracking-wide text-muted-foreground">{item.category.replaceAll("_", " ")} · {item.responsibleParty === "provider" ? "external provider" : item.responsibleParty}</div>
                           </div>
                         </div>
                       ))}
@@ -1844,13 +1871,7 @@ export function AdminDashboardClient({
                   title="Launch review"
                   subtitle="Record controlled-test evidence and approvals without changing client-entered data."
                 >
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    <Button
-                      variant="outline"
-                      onClick={() => void recordEvidence({ providerRejectionTestedAt: new Date().toISOString() })}
-                    >
-                      Failure visibility tested
-                    </Button>
+                  <div className="grid gap-2 sm:grid-cols-2">
                     <Button
                       variant="outline"
                       onClick={() => void recordEvidence({ billingVerifiedAt: new Date().toISOString() })}
@@ -1861,6 +1882,112 @@ export function AdminDashboardClient({
                     <Button variant="outline" onClick={() => void recordEvidence({ operatorApproved: true })}>
                       Operator review approved
                     </Button>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <div className="space-y-2 rounded-md border p-3">
+                      <div className="text-sm font-medium">Controlled end-to-end test</div>
+                      <p className="text-xs text-muted-foreground">Reference the controlled test lead or test run after intake, routing, conversation storage, and outbound delivery are verified.</p>
+                      <Input
+                        placeholder="Test lead or run reference"
+                        value={technicalEvidenceValue("endToEnd")}
+                        onChange={(event) => updateTechnicalEvidence("endToEnd", event.target.value)}
+                      />
+                      <Button
+                        variant="outline"
+                        disabled={!technicalEvidenceValue("endToEnd").trim()}
+                        onClick={() => void recordEvidence({
+                          testLeadCompletedAt: new Date().toISOString(),
+                          providerTests: { endToEndTestReference: technicalEvidenceValue("endToEnd").trim() },
+                        })}
+                      >
+                        Record completed test
+                      </Button>
+                    </div>
+                    <div className="space-y-2 rounded-md border p-3">
+                      <div className="text-sm font-medium">Provider-failure visibility test</div>
+                      <p className="text-xs text-muted-foreground">Authenticated failure callbacks record this automatically. Use a reference only when backfilling a separately observed controlled test.</p>
+                      <Input
+                        placeholder="Failure event or test reference"
+                        value={technicalEvidenceValue("providerFailure")}
+                        onChange={(event) => updateTechnicalEvidence("providerFailure", event.target.value)}
+                      />
+                      <Button
+                        variant="outline"
+                        disabled={!technicalEvidenceValue("providerFailure").trim()}
+                        onClick={() => void recordEvidence({
+                          providerRejectionTestedAt: new Date().toISOString(),
+                          providerTests: { providerRejectionReference: technicalEvidenceValue("providerFailure").trim() },
+                        })}
+                      >
+                        Record observed failure
+                      </Button>
+                    </div>
+                    {readiness?.externalProviderApprovals.twilio.required ? (
+                      <div className="space-y-2 rounded-md border p-3">
+                        <div className="text-sm font-medium">Twilio external approval</div>
+                        <p className="text-xs text-muted-foreground">Current status: {readiness.externalProviderApprovals.twilio.status.replaceAll("_", " ")}. Record only the provider-issued registration, Trust Hub, or A2P reference.</p>
+                        <Input
+                          placeholder="Twilio approval or case reference"
+                          value={technicalEvidenceValue("twilioApproval")}
+                          onChange={(event) => updateTechnicalEvidence("twilioApproval", event.target.value)}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            disabled={!technicalEvidenceValue("twilioApproval").trim()}
+                            onClick={() => void recordEvidence({ providerTests: {
+                              twilioMessagingApprovalStatus: "approved",
+                              twilioApprovalReference: technicalEvidenceValue("twilioApproval").trim(),
+                            } })}
+                          >
+                            Record provider approval
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            disabled={!technicalEvidenceValue("twilioApproval").trim()}
+                            onClick={() => void recordEvidence({ providerTests: {
+                              twilioMessagingApprovalStatus: "blocked",
+                              twilioApprovalReference: technicalEvidenceValue("twilioApproval").trim(),
+                            } })}
+                          >
+                            Mark provider blocked
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {readiness?.externalProviderApprovals.sendgrid.required ? (
+                      <div className="space-y-2 rounded-md border p-3">
+                        <div className="text-sm font-medium">SendGrid external verification</div>
+                        <p className="text-xs text-muted-foreground">Current status: {readiness.externalProviderApprovals.sendgrid.status.replaceAll("_", " ")}. Record only the provider-issued sender or domain verification reference.</p>
+                        <Input
+                          placeholder="SendGrid verification reference"
+                          value={technicalEvidenceValue("sendgridApproval")}
+                          onChange={(event) => updateTechnicalEvidence("sendgridApproval", event.target.value)}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            disabled={!technicalEvidenceValue("sendgridApproval").trim()}
+                            onClick={() => void recordEvidence({ providerTests: {
+                              sendgridSenderVerificationStatus: "approved",
+                              sendgridApprovalReference: technicalEvidenceValue("sendgridApproval").trim(),
+                            } })}
+                          >
+                            Record provider verification
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            disabled={!technicalEvidenceValue("sendgridApproval").trim()}
+                            onClick={() => void recordEvidence({ providerTests: {
+                              sendgridSenderVerificationStatus: "blocked",
+                              sendgridApprovalReference: technicalEvidenceValue("sendgridApproval").trim(),
+                            } })}
+                          >
+                            Mark provider blocked
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Input
@@ -2527,7 +2654,7 @@ export function AdminDashboardClient({
                             <div className="mt-1 text-sm text-muted-foreground">
                               {state === "Complete"
                                 ? "All required checks in this step pass."
-                                : readiness.blockers.find((item) => group.keys.includes(item.key))?.label ||
+                                : readiness.blockers.find((item) => group.keys.includes(item.key))?.nextAction ||
                                   "This step still needs review."}
                             </div>
                           </div>

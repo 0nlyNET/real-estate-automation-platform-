@@ -61,6 +61,9 @@ export class OnboardingRecord {
   @Column({ name: 'inbound_sms_tested_at', type: 'timestamptz', nullable: true })
   inboundSmsTestedAt?: Date | null;
 
+  @Column({ name: 'inbound_email_tested_at', type: 'timestamptz', nullable: true })
+  inboundEmailTestedAt?: Date | null;
+
   @Column({ name: 'stop_tested_at', type: 'timestamptz', nullable: true })
   stopTestedAt?: Date | null;
 
@@ -90,6 +93,13 @@ export class OnboardingRecord {
 
   @Column({ name: 'target_launch_date', type: 'date', nullable: true })
   targetLaunchDate?: string | null;
+
+  @Column({
+    name: 'configuration_updated_at',
+    type: 'timestamptz',
+    default: () => 'CURRENT_TIMESTAMP',
+  })
+  configurationUpdatedAt!: Date;
 
   @Column({ name: 'assigned_onboarding_owner_id', type: 'uuid', nullable: true })
   assignedOnboardingOwnerId?: string | null;

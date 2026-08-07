@@ -1,5 +1,7 @@
 # RealtyTechAI client-readiness final report
 
+> Messaging, AI, webhook, and launch-readiness conclusions in this July 19 report are superseded by `docs/realtytechai-messaging-reliability-report.md` (August 7, 2026). In particular, SendGrid delivery events are now reconciled and ambiguous network results are not automatically resubmitted.
+
 Evidence date: July 19, 2026 UTC  
 Audited baseline: `0f4efffc105caf8d305a6d943a1ce220d47ec218` on `main`
 

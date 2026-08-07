@@ -71,6 +71,9 @@ describe('SendGrid delivery event webhook', () => {
     };
     const sequences = { stopForLead: jest.fn().mockResolvedValue(undefined) };
     const operations = { createTask: jest.fn().mockResolvedValue({}) };
+    const onboarding = {
+      recordAutomatedTestEvidence: jest.fn().mockResolvedValue({}),
+    };
     const service = new WebhooksService(
       dataSource as any,
       {} as any,
@@ -80,6 +83,7 @@ describe('SendGrid delivery event webhook', () => {
       {} as any,
       messageRepo as any,
       operations as any,
+      onboarding as any,
     );
     return {
       service,
@@ -90,6 +94,7 @@ describe('SendGrid delivery event webhook', () => {
       compliance,
       sequences,
       operations,
+      onboarding,
     };
   }
 
@@ -156,6 +161,10 @@ describe('SendGrid delivery event webhook', () => {
         tenantId: item.lead.tenantId,
         relatedEntityId: item.message.id,
       }),
+    );
+    expect(item.onboarding.recordAutomatedTestEvidence).toHaveBeenCalledWith(
+      item.lead.tenantId,
+      { providerRejection: true },
     );
   });
 
