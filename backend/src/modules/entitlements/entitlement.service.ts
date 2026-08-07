@@ -99,12 +99,17 @@ export class EntitlementService {
     }
     const workspaceSettings = await this.settings.findOne({ where: { tenantId } });
     const billing = billingEligibility(tenant, now);
-    const lifecycleEligible = tenant.lifecycleStatus === 'ACTIVE';
+    const manualReplyAction = ['send_manual_sms', 'send_manual_email'].includes(action);
+    const lifecycleEligible = manualReplyAction
+      ? ['ACTIVE', 'PAUSED', 'ONBOARDING'].includes(
+          String(tenant.lifecycleStatus || 'ONBOARDING'),
+        )
+      : tenant.lifecycleStatus === 'ACTIVE';
     const automationEnabled = workspaceSettings?.automationsEnabled === true;
     const globalAutomationPaused =
       process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true';
-    // Human replies remain available during onboarding, workspace automation pauses,
-    // and the platform automation kill switch. Automated work remains fail-closed.
+    // Authorized human replies are allowed for controlled testing during
+    // onboarding or a pause. Suspended/canceled workspaces remain fail-closed.
     const automationAction = ![
       'add_team_member',
       'enable_automation',

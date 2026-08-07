@@ -79,7 +79,7 @@ export default function ManagedIntegrations() {
   const [tenantTwilioNumber, setTenantTwilioNumber] = useState("")
   const [tenantTwilioTestTo, setTenantTwilioTestTo] = useState("")
   const [tenantFromEmail, setTenantFromEmail] = useState("")
-  const [tenantFromName, setTenantFromName] = useState("RealtyTechAI")
+  const [tenantFromName, setTenantFromName] = useState("")
   const [tenantInboundAddress, setTenantInboundAddress] = useState("")
   const [tenantEmailTestTo, setTenantEmailTestTo] = useState("")
 
@@ -97,7 +97,7 @@ export default function ManagedIntegrations() {
     setTenant(result)
     setTenantTwilioNumber(result.twilio.display?.fromNumber || "")
     setTenantFromEmail(result.sendgrid.display?.fromEmail || "")
-    setTenantFromName(result.sendgrid.display?.fromName || "RealtyTechAI")
+    setTenantFromName(result.sendgrid.display?.fromName || "")
     setTenantInboundAddress(result.sendgrid.display?.inboundAddress || "")
   }, [])
 
@@ -254,7 +254,7 @@ export default function ManagedIntegrations() {
           body: {
             fromEmail: tenantFromEmail,
             fromName: tenantFromName,
-            inboundAddress: tenantInboundAddress || undefined,
+            inboundAddress: tenantInboundAddress,
           },
         })
         await loadTenant(tenantId)
@@ -412,7 +412,7 @@ export default function ManagedIntegrations() {
                   <div className="space-y-2"><Label>Verified from email</Label><Input type="email" value={tenantFromEmail} onChange={(event) => setTenantFromEmail(event.target.value)} /></div>
                   <div className="space-y-2"><Label>Sender name</Label><Input value={tenantFromName} onChange={(event) => setTenantFromName(event.target.value)} /></div>
                   <div className="space-y-2"><Label>Inbound reply address</Label><Input type="email" value={tenantInboundAddress} onChange={(event) => setTenantInboundAddress(event.target.value)} placeholder="replies+client@reply.example.com" /></div>
-                  <Button onClick={assignSendGrid} disabled={Boolean(busy) || !tenantFromEmail}>Save assignment</Button>
+                  <Button onClick={assignSendGrid} disabled={Boolean(busy) || !tenantFromEmail || !tenantFromName || !tenantInboundAddress}>Save assignment</Button>
                   <div className="space-y-2 border-t pt-4"><Label>Test recipient</Label><Input type="email" value={tenantEmailTestTo} onChange={(event) => setTenantEmailTestTo(event.target.value)} /></div>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" onClick={testTenantSendGrid} disabled={Boolean(busy) || !tenant?.sendgrid.configured}>Test client email</Button>

@@ -151,6 +151,7 @@ function fixture(mode: 'draft' | 'controlled_autopilot' = 'draft') {
     },
     control: {
       getOrCreateState: jest.fn().mockResolvedValue(state),
+      markWaitingForHuman: jest.fn().mockResolvedValue(state),
     },
     tools: {
       execute: jest.fn(
@@ -371,6 +372,44 @@ describe('AI conversation workflow', () => {
     expect(first).toEqual([item.run.id]);
     expect(second).toEqual([]);
     expect(String(query.mock.calls[0][0])).toContain('FOR UPDATE SKIP LOCKED');
+    expect(String(query.mock.calls[0][0])).toContain('attempt_count < $4');
+  });
+
+  it('bounds crash recovery attempts and escalates an exhausted run instead of dropping it', async () => {
+    const item = fixture('controlled_autopilot');
+    item.dependencies.dataSource.transaction.mockImplementation(
+      async (callback) =>
+        callback({
+          query: jest.fn(async (sql: string) =>
+            sql.includes('AI_RUN_ATTEMPTS_EXHAUSTED')
+              ? [
+                  {
+                    id: item.run.id,
+                    tenantId: item.tenantId,
+                    leadId: item.lead.id,
+                  },
+                ]
+              : [],
+          ),
+        }),
+    );
+
+    await expect(item.service.processPendingRuns(10)).resolves.toEqual({
+      claimed: 0,
+      recovered: 1,
+    });
+    expect(item.dependencies.operations.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relatedEntityType: 'ai_run',
+        relatedEntityId: item.run.id,
+      }),
+    );
+    expect(item.dependencies.control.markWaitingForHuman).toHaveBeenCalledWith(
+      item.tenantId,
+      item.lead.id,
+      expect.stringContaining('interrupted repeatedly'),
+      'high',
+    );
   });
 
   it.each([

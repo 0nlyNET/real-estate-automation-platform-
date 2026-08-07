@@ -66,6 +66,7 @@ type EscalationContext = Pick<
 >;
 
 const AI_RUN_LEASE_SECONDS = 120;
+const MAX_AI_RUN_ATTEMPTS = 3;
 
 @Injectable()
 export class AiConversationService
@@ -222,11 +223,65 @@ export class AiConversationService
   }
 
   async processPendingRuns(limit = 10) {
-    const ids = await this.claimRuns(Math.min(Math.max(limit, 1), 50));
+    const boundedLimit = Math.min(Math.max(limit, 1), 50);
+    const recovered = await this.recoverExhaustedRuns(boundedLimit);
+    const ids = await this.claimRuns(boundedLimit);
     for (const id of ids) {
       await this.processRun(id);
     }
-    return { claimed: ids.length };
+    return { claimed: ids.length, recovered };
+  }
+
+  private async recoverExhaustedRuns(limit: number) {
+    const rows: Array<{ id: string; tenantId: string; leadId: string }> =
+      await this.dataSource.transaction(async (manager) =>
+        manager.query(
+          `WITH candidates AS (
+             SELECT id
+             FROM ai_runs
+             WHERE status IN ('queued', 'processing')
+               AND attempt_count >= $2
+               AND (
+                 status = 'queued'
+                 OR locked_at IS NULL
+                 OR locked_at < now() - ($1 * interval '1 second')
+               )
+             ORDER BY created_at ASC
+             FOR UPDATE SKIP LOCKED
+             LIMIT $3
+           )
+           UPDATE ai_runs AS run
+           SET status = 'failed',
+               error_code = 'AI_RUN_ATTEMPTS_EXHAUSTED',
+               sanitized_error = 'AI processing was interrupted repeatedly and requires human review.',
+               locked_at = NULL,
+               locked_by = NULL
+           FROM candidates
+           WHERE run.id = candidates.id
+           RETURNING run.id, run.tenant_id AS "tenantId", run.lead_id AS "leadId"`,
+          [AI_RUN_LEASE_SECONDS, MAX_AI_RUN_ATTEMPTS, limit],
+        ),
+      );
+    for (const row of rows) {
+      await this.operations.createTask({
+        tenantId: row.tenantId,
+        category: 'ai_provider_failure',
+        title: 'AI processing needs human follow-up',
+        description:
+          'AI processing was interrupted repeatedly. The inbound message remains stored and the conversation was escalated for human review.',
+        priority: 'high',
+        relatedEntityType: 'ai_run',
+        relatedEntityId: row.id,
+        dedupeOpen: true,
+      });
+      await this.control.markWaitingForHuman(
+        row.tenantId,
+        row.leadId,
+        'AI processing was interrupted repeatedly. Review the latest inbound message and respond personally.',
+        'high',
+      );
+    }
+    return rows.length;
   }
 
   private claimRuns(limit: number): Promise<string[]> {
@@ -236,6 +291,7 @@ export class AiConversationService
            SELECT id
            FROM ai_runs
            WHERE status IN ('queued', 'processing')
+             AND attempt_count < $4
              AND (
                status = 'queued'
                OR locked_at IS NULL
@@ -253,7 +309,7 @@ export class AiConversationService
          FROM candidates
          WHERE run.id = candidates.id
          RETURNING run.id`,
-        [AI_RUN_LEASE_SECONDS, limit, this.workerId],
+        [AI_RUN_LEASE_SECONDS, limit, this.workerId, MAX_AI_RUN_ATTEMPTS],
       );
       return rows.map((row) => row.id);
     });
@@ -790,7 +846,7 @@ export class AiConversationService
     requiresBookingLink: boolean,
   ) {
     return this.locks.withLock(run.tenantId, run.leadId, async () => {
-      const [state, settings, existing] = await Promise.all([
+      const [state, settings, existing, latestInboundEmail] = await Promise.all([
         this.states.findOne({
           where: { tenantId: run.tenantId, leadId: run.leadId },
         }),
@@ -798,6 +854,16 @@ export class AiConversationService
         this.messages.findOne({
           where: { idempotencyKey: `ai:${run.id}` },
         }),
+        channel === 'email'
+          ? this.messages.findOne({
+              where: {
+                leadId: run.leadId,
+                channel: 'email',
+                direction: 'inbound',
+              },
+              order: { createdAt: 'DESC' },
+            })
+          : Promise.resolve(null),
       ]);
       if (existing) return existing;
       if (
@@ -826,6 +892,14 @@ export class AiConversationService
           channel,
           direction: 'outbound',
           body,
+          subject:
+            channel === 'email'
+              ? replySubject(latestInboundEmail?.subject)
+              : null,
+          inReplyToProviderMessageId:
+            channel === 'email'
+              ? latestInboundEmail?.providerMessageId || null
+              : null,
           status: run.mode === 'draft' ? 'draft' : 'queued',
           scheduledAt:
             run.mode === 'draft' || scheduledAt <= now ? undefined : scheduledAt,
@@ -949,4 +1023,10 @@ export class AiConversationService
       entityId: lead.id,
     });
   }
+}
+
+function replySubject(subject?: string | null) {
+  const value = String(subject || '').trim().slice(0, 490);
+  if (!value) return 'Follow-up';
+  return /^re:/i.test(value) ? value : `Re: ${value}`;
 }

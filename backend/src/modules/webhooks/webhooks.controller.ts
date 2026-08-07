@@ -43,11 +43,11 @@ export class WebhooksController {
   }
 
   @Post('twilio/status')
-  twilioStatus(
+  async twilioStatus(
     @Body() body: Record<string, unknown>,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ) {
-    return this.webhooks.handleTwilioStatus(body, headers);
+    return await this.webhooks.handleTwilioStatus(body, headers);
   }
 
   @Post('sendgrid/oauth/token')
@@ -87,6 +87,33 @@ export class WebhooksController {
           operationalEvent('invalid_webhook_signature', {
             provider: 'sendgrid',
             webhook: 'inbound',
+            reason: error.reason,
+            scheme: error.scheme || null,
+            authorizationPresent: Boolean(String(authorization || '').trim()),
+          }),
+        );
+      }
+      throw error;
+    }
+  }
+
+  @Post('sendgrid/events')
+  @HttpCode(200)
+  async sendGridEvents(
+    @Body() body: unknown,
+    @Headers('authorization') authorization?: string,
+  ) {
+    try {
+      return await this.webhooks.handleSendGridEvents(
+        body,
+        normalizeSendGridInboundAuthorization(authorization || ''),
+      );
+    } catch (error) {
+      if (error instanceof SendGridInboundAuthorizationError) {
+        this.logger.warn(
+          operationalEvent('invalid_webhook_signature', {
+            provider: 'sendgrid',
+            webhook: 'events',
             reason: error.reason,
             scheme: error.scheme || null,
             authorizationPresent: Boolean(String(authorization || '').trim()),

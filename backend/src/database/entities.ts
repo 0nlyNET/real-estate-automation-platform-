@@ -38,6 +38,7 @@ import { PlatformAiControl } from '../modules/ai/platform-ai-control.entity';
 import { PlatformCredential } from '../modules/integrations/platform-credential.entity';
 import { LeadIngestionEvent } from '../modules/lead-ingestion/lead-ingestion-event.entity';
 import { TwilioInboundMessage } from '../modules/webhooks/twilio-inbound-message.entity';
+import { SendGridWebhookEvent } from '../modules/webhooks/sendgrid-webhook-event.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -53,6 +54,7 @@ export const databaseEntities = [
   PlatformCredential,
   LeadIngestionEvent,
   TwilioInboundMessage,
+  SendGridWebhookEvent,
   TenantSettings,
   RoutingRule,
   RoutingAssignmentLog,

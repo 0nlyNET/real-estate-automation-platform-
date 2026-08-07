@@ -40,6 +40,17 @@ export class Message extends BaseEntity {
   @Column({ name: 'body', type: 'text' })
   body!: string;
 
+  @Column({ name: 'subject', type: 'varchar', length: 500, nullable: true })
+  subject?: string | null;
+
+  @Column({
+    name: 'in_reply_to_provider_message_id',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
+  inReplyToProviderMessageId?: string | null;
+
   @Column({ name: 'provider_message_id', nullable: true })
   @Index('IDX_messages_provider_message_id', {
     unique: true,
