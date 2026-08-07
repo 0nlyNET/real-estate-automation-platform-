@@ -72,12 +72,12 @@ export class WebhooksController {
       },
     }),
   )
-  sendGridInbound(
+  async sendGridInbound(
     @Body() body: any,
     @Headers('authorization') authorization?: string,
   ) {
     try {
-      return this.webhooks.handleSendGridInbound(
+      return await this.webhooks.handleSendGridInbound(
         body,
         normalizeSendGridInboundAuthorization(authorization || ''),
       );

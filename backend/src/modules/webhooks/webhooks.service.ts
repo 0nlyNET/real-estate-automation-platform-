@@ -527,8 +527,35 @@ export class WebhooksService {
       return { status: 'ignored' } as const;
     }
     const integration = decryptIntegrationPayload(credential.encryptedValue);
+    if (extractEmailAddress(integration?.inboundAddress) !== to) {
+      this.logger.error(
+        operationalEvent('sendgrid_inbound_route_mismatch', {
+          tenantId: credential.tenant.id,
+          providerMessageId: rawMessageId,
+        }),
+      );
+      await this.operations?.createTask({
+        tenantId: credential.tenant.id,
+        category: 'messaging_failure',
+        title: 'Inbound email routing needs attention',
+        description:
+          'An authenticated inbound email matched a stored routing key, but the tenant inbound address configuration did not match.',
+        priority: 'high',
+        relatedEntityType: 'integration:sendgrid',
+        relatedEntityId: credential.tenant.id,
+        dedupeOpen: true,
+      });
+      return { status: 'ignored' } as const;
+    }
     if (!integration?.connected || integration?.error) {
-      throw new UnauthorizedException('SendGrid integration is not ready');
+      this.logger.warn(
+        operationalEvent('sendgrid_inbound_outbound_unavailable', {
+          tenantId: credential.tenant.id,
+          providerMessageId: rawMessageId,
+          connected: Boolean(integration?.connected),
+          hasProviderError: Boolean(integration?.error),
+        }),
+      );
     }
     const tenantId = credential.tenant.id;
     const stopKeyword =
@@ -562,7 +589,7 @@ export class WebhooksService {
       persisted.leadId,
       stopKeyword ? 'opt_out' : 'reply',
     );
-    if (!persisted.duplicate && persisted.messageId) {
+    if (!persisted.duplicate && !stopKeyword && persisted.messageId) {
       await this.queueAiSafely({
         tenantId,
         leadId: persisted.leadId,
@@ -918,10 +945,7 @@ export class WebhooksService {
     });
     const matches = legacy.filter((row) => {
       const payload = decryptIntegrationPayload(row.encryptedValue);
-      return (
-        Boolean(payload?.connected) &&
-        extractEmailAddress(payload?.inboundAddress) === routingKey
-      );
+      return extractEmailAddress(payload?.inboundAddress) === routingKey;
     });
     if (matches.length !== 1) return null;
     matches[0].routingKey = routingKey;

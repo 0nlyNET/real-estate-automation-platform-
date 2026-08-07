@@ -1,7 +1,10 @@
 import { INestApplication, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request = require('supertest');
-import { issueSendGridInboundAccessToken } from './sendgrid-inbound-oauth';
+import {
+  issueSendGridInboundAccessToken,
+  SendGridInboundAuthorizationError,
+} from './sendgrid-inbound-oauth';
 import { WebhooksController } from './webhooks.controller';
 import { WebhooksService } from './webhooks.service';
 
@@ -80,5 +83,27 @@ describe('WebhooksController SendGrid inbound authorization', () => {
     expect(rejectionLog).toContain('unsupported_scheme');
     expect(rejectionLog).toContain('digest');
     expect(rejectionLog).not.toContain('do-not-log-this-value');
+  });
+
+  it('awaits the service so asynchronous authorization failures are diagnosed safely', async () => {
+    const token = issueToken();
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    webhooks.handleSendGridInbound.mockRejectedValueOnce(
+      new SendGridInboundAuthorizationError('expired_token', 'bearer'),
+    );
+
+    await request(app.getHttpServer())
+      .post('/webhooks/sendgrid/inbound')
+      .set('Authorization', `Bearer ${token}`)
+      .field('from', 'Jordan Client <jordan@example.com>')
+      .expect(401);
+
+    const rejectionLog = warn.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.includes('invalid_webhook_signature'));
+    expect(rejectionLog).toContain('expired_token');
+    expect(rejectionLog).not.toContain(token);
   });
 });
