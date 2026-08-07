@@ -29,6 +29,7 @@ function harness(
     routed?: boolean;
     candidates?: Lead[];
     duplicate?: boolean;
+    duplicateOptOut?: boolean;
     failInboundMessage?: boolean;
     tenantId?: string;
     leadId?: string;
@@ -59,8 +60,10 @@ function harness(
             tenantId,
             leadId: lead.id,
             messageSid: body.MessageSid,
-            isOptOut: true,
-            processingResult: "opt_out_applied",
+            isOptOut: options.duplicateOptOut ?? true,
+            processingResult: (options.duplicateOptOut ?? true)
+              ? "opt_out_applied"
+              : "reply_recorded",
           })
         : null,
     ),
@@ -72,7 +75,15 @@ function harness(
     ),
   };
   const messageRepository = {
-    findOne: jest.fn().mockResolvedValue(null),
+    findOne: jest.fn().mockResolvedValue(
+      options.duplicate
+        ? Object.assign(new Message(), {
+            id: "message-inbound",
+            leadId: lead.id,
+            providerMessageId: body.MessageSid,
+          })
+        : null,
+    ),
     create: jest.fn((value) => Object.assign(new Message(), value)),
     save: jest.fn(async (value) => {
       if (options.failInboundMessage) throw new Error("message write failed");
@@ -300,6 +311,24 @@ describe("Twilio inbound safety transaction", () => {
     expect(item.messageRepository.save).not.toHaveBeenCalled();
     expect(item.leadRepository.save).not.toHaveBeenCalled();
     expect(item.optOutRepository.save).not.toHaveBeenCalled();
+  });
+
+  it("uses a repeated normal delivery to recover an interrupted AI enqueue without duplicating persistence", async () => {
+    const item = harness({ duplicate: true, duplicateOptOut: false });
+    await expect(
+      item.service.handleTwilioInbound(item.body, {
+        "x-twilio-signature": signature(item.body),
+      }),
+    ).resolves.toEqual({ status: "duplicate" });
+    expect(item.messageRepository.save).not.toHaveBeenCalled();
+    expect(item.sequences.stopForLead).toHaveBeenCalledWith(
+      item.tenantId,
+      item.lead.id,
+      "reply",
+    );
+    expect(item.ai.acceptInbound).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "message-inbound", channel: "sms" }),
+    );
   });
 
   it("resolves the tenant by inbound To before querying a shared sender number", async () => {

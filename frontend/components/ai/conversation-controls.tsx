@@ -29,7 +29,24 @@ export type ConversationAiView = {
   aiGeneratedSummary?: string | null
   informationCollected?: Record<string, unknown>
   recommendedNextAction?: string | null
+  latestAiRun?: {
+    id: string
+    triggeringMessageId: string
+    status: "queued" | "processing" | "drafted" | "response_queued" | "completed" | "blocked" | "failed"
+    errorCode?: string | null
+    errorMessage?: string | null
+    updatedAt: string
+  } | null
   drafts: AiDraft[]
+}
+
+function aiRunLabel(status: NonNullable<ConversationAiView["latestAiRun"]>["status"]) {
+  if (status === "queued") return "AI queued"
+  if (status === "processing") return "AI processing"
+  if (status === "response_queued") return "Response queued"
+  if (status === "drafted") return "Draft ready"
+  if (status === "blocked" || status === "failed") return "Human review"
+  return "AI complete"
 }
 
 function ownershipLabel(status: ConversationAiView["ownershipStatus"]) {
@@ -74,6 +91,11 @@ export function AiConversationControls({
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0)
     return () => window.clearTimeout(timer)
+  }, [load])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => void load(), 7_500)
+    return () => window.clearInterval(interval)
   }, [load])
 
   async function act(
@@ -154,6 +176,14 @@ export function AiConversationControls({
                   {conversation.escalationReason ||
                     conversation.aiPausedReason}
                 </p>
+              </div>
+            ) : null}
+            {conversation.latestAiRun ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm">
+                <Badge variant={conversation.latestAiRun.status === "failed" || conversation.latestAiRun.status === "blocked" ? "destructive" : "secondary"}>
+                  {aiRunLabel(conversation.latestAiRun.status)}
+                </Badge>
+                {conversation.latestAiRun.errorMessage ? <span className="text-muted-foreground">{conversation.latestAiRun.errorMessage}</span> : null}
               </div>
             ) : null}
             <div className="flex flex-wrap gap-2">

@@ -111,15 +111,21 @@ export class AiConversationControlService {
         ? 'ai_handling'
         : 'human_handling',
     );
-    const drafts = await this.messages.find({
-      where: {
-        leadId,
-        authorship: 'ai',
-        status: 'draft',
-      },
-      order: { createdAt: 'DESC' },
-      take: 10,
-    });
+    const [drafts, latestRun] = await Promise.all([
+      this.messages.find({
+        where: {
+          leadId,
+          authorship: 'ai',
+          status: 'draft',
+        },
+        order: { createdAt: 'DESC' },
+        take: 10,
+      }),
+      this.runs.findOne({
+        where: { tenantId, leadId },
+        order: { createdAt: 'DESC' },
+      }),
+    ]);
     return {
       leadId,
       ownershipStatus: state.ownershipStatus,
@@ -132,6 +138,16 @@ export class AiConversationControlService {
       aiGeneratedSummary: lead.conversationSummary || null,
       informationCollected: lead.qualificationData || {},
       recommendedNextAction: lead.recommendedNextAction || null,
+      latestAiRun: latestRun
+        ? {
+            id: latestRun.id,
+            triggeringMessageId: latestRun.triggeringMessageId,
+            status: latestRun.status,
+            errorCode: latestRun.errorCode || null,
+            errorMessage: latestRun.sanitizedError || null,
+            updatedAt: latestRun.updatedAt,
+          }
+        : null,
       drafts: drafts.map((message) => ({
         id: message.id,
         body: message.body,

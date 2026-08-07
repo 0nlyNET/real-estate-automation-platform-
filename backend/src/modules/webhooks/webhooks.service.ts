@@ -30,6 +30,7 @@ import { TwilioInboundMessage } from './twilio-inbound-message.entity';
 import { ComplianceOptOut } from '../compliance/compliance-optout.entity';
 import { LeadConsentRecord } from '../compliance/lead-consent-record.entity';
 import { ComplianceEvent } from '../compliance/compliance-event.entity';
+import { SendGridWebhookEvent } from './sendgrid-webhook-event.entity';
 
 export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
@@ -77,6 +78,7 @@ type PersistedInbound = {
     | 'lead_not_found'
     | 'ambiguous_lead';
   canceledJobs?: number;
+  inboundEventId?: string;
 };
 
 @Injectable()
@@ -471,12 +473,32 @@ export class WebhooksService {
         stopKeyword,
       }),
     );
+    const effectiveStopKeyword = persisted.stopKeyword ?? stopKeyword;
 
-    if (!persisted.leadId) return { status: 'ignored' } as const;
-    if (!persisted.duplicate && !stopKeyword) {
+    if (!persisted.leadId) {
+      await this.operations?.createTask({
+        tenantId,
+        category: 'messaging_failure',
+        title:
+          persisted.processingResult === 'ambiguous_lead'
+            ? 'Inbound SMS matched multiple leads'
+            : 'Inbound SMS sender was not matched',
+        description:
+          persisted.processingResult === 'ambiguous_lead'
+            ? 'An authenticated inbound SMS was stored for review but could not be attached because multiple workspace leads share the sender number.'
+            : 'An authenticated inbound SMS was stored for review but no workspace lead matched the sender number.',
+        priority: 'high',
+        relatedEntityType: 'twilio_inbound_message',
+        relatedEntityId:
+          persisted.inboundEventId || deterministicUuid(providerMessageId),
+        dedupeOpen: true,
+      });
+      return { status: 'ignored' } as const;
+    }
+    if (!effectiveStopKeyword) {
       await this.sequences.stopForLead(tenantId, persisted.leadId, 'reply');
     }
-    if (!persisted.duplicate && !stopKeyword && persisted.messageId) {
+    if (!effectiveStopKeyword && persisted.messageId) {
       await this.queueAiSafely({
         tenantId,
         leadId: persisted.leadId,
@@ -490,7 +512,7 @@ export class WebhooksService {
         tenantId,
         leadId: persisted.leadId,
         providerMessageId,
-        stopKeyword,
+        stopKeyword: effectiveStopKeyword,
         duplicate: persisted.duplicate,
         processingResult: persisted.processingResult,
         canceledJobs: persisted.canceledJobs || 0,
@@ -499,7 +521,7 @@ export class WebhooksService {
     return {
       status: persisted.duplicate
         ? 'duplicate'
-        : stopKeyword
+        : effectiveStopKeyword
           ? 'opted_out'
           : 'ok',
     } as const;
@@ -566,6 +588,7 @@ export class WebhooksService {
       this.persistEmailInbound(manager, {
         tenantId,
         from,
+        subject,
         text: [subject ? `Subject: ${subject}` : '', text]
           .filter(Boolean)
           .join('\n\n')
@@ -589,7 +612,7 @@ export class WebhooksService {
       persisted.leadId,
       stopKeyword ? 'opt_out' : 'reply',
     );
-    if (!persisted.duplicate && !stopKeyword && persisted.messageId) {
+    if (!stopKeyword && persisted.messageId) {
       await this.queueAiSafely({
         tenantId,
         leadId: persisted.leadId,
@@ -609,6 +632,240 @@ export class WebhooksService {
     return {
       status: persisted.duplicate ? 'duplicate' : 'ok',
     } as const;
+  }
+
+  async handleSendGridEvents(body: unknown, authorization: string) {
+    this.verifySendGridAuthorization(authorization);
+    if (!Array.isArray(body) || body.length === 0 || body.length > 1_000) {
+      throw new BadRequestException('SendGrid event payload must be a non-empty array');
+    }
+    let processed = 0;
+    let duplicates = 0;
+    let ignored = 0;
+    for (const value of body) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new BadRequestException('SendGrid event payload contains an invalid event');
+      }
+      const result = await this.persistSendGridEvent(
+        value as Record<string, unknown>,
+      );
+      if (result.status === 'duplicate') {
+        duplicates += 1;
+        continue;
+      }
+      if (result.status === 'ignored') ignored += 1;
+      else processed += 1;
+
+      if (result.deliveryFailed && result.message?.lead && this.operations) {
+        await this.operations.createTask({
+          tenantId: result.message.lead.tenantId,
+          category: 'messaging_failure',
+          title: 'SendGrid delivery failed',
+          description:
+            result.message.sanitizedErrorMessage ||
+            'SendGrid reported that the email could not be delivered.',
+          priority: 'high',
+          relatedEntityType: 'message',
+          relatedEntityId: result.message.id,
+          dedupeOpen: true,
+        });
+      }
+      if (result.optOut && result.message?.lead?.email) {
+        await this.compliance.addOptOut(
+          result.message.lead.tenantId,
+          'email',
+          result.message.lead.email,
+          'provider_unsubscribe_event',
+          'sendgrid_event_webhook',
+        );
+        await this.sequences.stopForLead(
+          result.message.lead.tenantId,
+          result.message.lead.id,
+          'opt_out',
+        );
+      }
+      if (
+        result.status === 'ignored' &&
+        result.deliveryEvent &&
+        this.operations
+      ) {
+        await this.operations.createTask({
+          category: 'messaging_failure',
+          title: 'Unmatched SendGrid delivery event',
+          description:
+            'An authenticated SendGrid delivery event could not be matched to an outbound RealtyTechAI message.',
+          priority: 'high',
+          relatedEntityType: 'sendgrid_webhook_event',
+          relatedEntityId: result.eventId,
+          dedupeOpen: true,
+        });
+      }
+    }
+    return { status: 'ok', processed, duplicates, ignored } as const;
+  }
+
+  private async persistSendGridEvent(event: Record<string, unknown>) {
+    const eventType = String(event.event || '').trim().toLowerCase();
+    const rawProviderMessageId = String(
+      event.sg_message_id || event['smtp-id'] || '',
+    )
+      .trim()
+      .replace(/[<>]/g, '')
+      .slice(0, 450);
+    if (!eventType) {
+      throw new BadRequestException('SendGrid event type is required');
+    }
+    const customArgs =
+      event.custom_args && typeof event.custom_args === 'object'
+        ? (event.custom_args as Record<string, unknown>)
+        : {};
+    const uniqueArgs =
+      event.unique_args && typeof event.unique_args === 'object'
+        ? (event.unique_args as Record<string, unknown>)
+        : {};
+    const internalMessageId = validUuid(
+      event.rta_message_id ||
+        customArgs.rta_message_id ||
+        uniqueArgs.rta_message_id,
+    );
+    const timestamp = Number(event.timestamp || 0);
+    const providerEventId = String(event.sg_event_id || '').trim().slice(0, 255) ||
+      crypto
+        .createHash('sha256')
+        .update(
+          [eventType, rawProviderMessageId, internalMessageId || '', timestamp]
+            .join(':'),
+        )
+        .digest('hex');
+    const occurredAt =
+      Number.isFinite(timestamp) && timestamp > 0
+        ? new Date(timestamp * 1_000)
+        : null;
+
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `sendgrid-event:${providerEventId}`,
+      ]);
+      const events = manager.getRepository(SendGridWebhookEvent);
+      const existing = await events.findOne({ where: { providerEventId } });
+      if (existing) {
+        return {
+          status: 'duplicate' as const,
+          eventId: existing.id,
+          deliveryEvent: isSendGridDeliveryEvent(eventType),
+        };
+      }
+      const messages = manager.getRepository(Message);
+      let message = internalMessageId
+        ? await messages.findOne({
+            where: { id: internalMessageId },
+            relations: ['lead'],
+          })
+        : null;
+      if (!message && rawProviderMessageId) {
+        message = await messages.findOne({
+          where: { providerMessageId: `sendgrid:${rawProviderMessageId}` },
+          relations: ['lead'],
+        });
+      }
+      if (!message && rawProviderMessageId) {
+        const matches = await messages
+          .createQueryBuilder('message')
+          .leftJoinAndSelect('message.lead', 'lead')
+          .where("message.provider_message_id LIKE 'sendgrid:%'")
+          .andWhere(
+            ":providerMessageId LIKE substring(message.provider_message_id from 10) || '%'",
+            { providerMessageId: rawProviderMessageId },
+          )
+          .take(2)
+          .getMany();
+        if (matches.length === 1) message = matches[0];
+      }
+      if (
+        message &&
+        (message.channel !== 'email' || message.direction !== 'outbound')
+      ) {
+        message = null;
+      }
+
+      const providerMessageId = rawProviderMessageId
+        ? `sendgrid:${rawProviderMessageId}`.slice(0, 500)
+        : message?.providerMessageId || null;
+      const savedEvent = await events.save(
+        events.create({
+          providerEventId,
+          tenantId: message?.lead?.tenantId || null,
+          messageId: message?.id || null,
+          eventType,
+          providerMessageId,
+          occurredAt,
+          processingResult: message ? 'updated' : 'ignored',
+          payloadMetadata: {
+            responseCode: safeProviderEventValue(event.response),
+            attempt: safeProviderEventValue(event.attempt),
+            tls: safeProviderEventValue(event.tls),
+          },
+        }),
+      );
+      if (!message) {
+        this.logger.warn(
+          operationalEvent('sendgrid_event_unmatched', {
+            providerEventId,
+            eventType,
+          }),
+        );
+        return {
+          status: 'ignored' as const,
+          eventId: savedEvent.id,
+          deliveryEvent: isSendGridDeliveryEvent(eventType),
+        };
+      }
+
+      const state = sendGridMessageState(eventType);
+      const currentRank = messageStatusRank(message.status);
+      const now = occurredAt || new Date();
+      message.providerStatus = eventType;
+      if (!message.providerMessageId && providerMessageId) {
+        message.providerMessageId = providerMessageId;
+      }
+      if (state && state.rank >= currentRank) {
+        message.status = state.status;
+        if (state.status === 'sent') message.sentAt = message.sentAt || now;
+        if (state.status === 'delivered') {
+          message.sentAt = message.sentAt || now;
+          message.deliveredAt = message.deliveredAt || now;
+        }
+        if (state.status === 'failed') {
+          message.failedAt = message.failedAt || now;
+          message.errorCode = `SENDGRID_${eventType.toUpperCase()}`.slice(0, 80);
+          message.sanitizedErrorMessage = sanitizeOperationalText(
+            event.reason || event.response || `SendGrid reported ${eventType}`,
+          ).slice(0, 1_000);
+        }
+      }
+      await messages.save(message);
+      const deliveryFailed = state?.status === 'failed';
+      const optOut = ['spamreport', 'unsubscribe', 'group_unsubscribe'].includes(
+        eventType,
+      );
+      this.logger.log(
+        operationalEvent('sendgrid_event_saved', {
+          tenantId: message.lead?.tenantId || null,
+          messageId: message.id,
+          providerEventId,
+          eventType,
+          messageStatus: message.status,
+        }),
+      );
+      return {
+        status: 'updated' as const,
+        eventId: savedEvent.id,
+        message,
+        deliveryFailed,
+        optOut,
+        deliveryEvent: isSendGridDeliveryEvent(eventType),
+      };
+    });
   }
 
   private async persistInbound(
@@ -643,14 +900,21 @@ export class WebhooksService {
       },
     });
     if (duplicateEvent) {
+      const duplicateMessage = duplicateEvent.leadId
+        ? await messageRepository.findOne({
+            where: { providerMessageId: input.providerMessageId },
+          })
+        : null;
       return {
         duplicate: true,
         tenantId: input.tenantId,
         leadId: duplicateEvent.leadId ?? undefined,
+        messageId: duplicateMessage?.id,
         channel: 'sms',
         stopKeyword: duplicateEvent.isOptOut,
         processingResult: duplicateEvent.processingResult,
         canceledJobs: 0,
+        inboundEventId: duplicateEvent.id,
       };
     }
 
@@ -686,6 +950,7 @@ export class WebhooksService {
         stopKeyword: input.stopKeyword,
         processingResult: legacyEvent.processingResult,
         canceledJobs: 0,
+        inboundEventId: legacyEvent.id,
       };
     }
 
@@ -744,6 +1009,7 @@ export class WebhooksService {
         stopKeyword: input.stopKeyword,
         processingResult,
         canceledJobs: 0,
+        inboundEventId: event.id,
       };
     }
 
@@ -928,6 +1194,7 @@ export class WebhooksService {
       stopKeyword: input.stopKeyword,
       processingResult,
       canceledJobs,
+      inboundEventId: inboundEvent.id,
     };
   }
 
@@ -998,6 +1265,7 @@ export class WebhooksService {
     input: {
       tenantId: string;
       from: string;
+      subject: string;
       text: string;
       providerMessageId: string;
       stopKeyword: boolean;
@@ -1052,6 +1320,7 @@ export class WebhooksService {
         channel: 'email',
         direction: 'inbound',
         body: input.text || '(No plain-text message body)',
+        subject: input.subject || null,
         providerMessageId: input.providerMessageId,
         status: 'received',
         providerStatus: 'received',
@@ -1188,6 +1457,47 @@ function twilioMessageState(status: string): { status: Message['status']; rank: 
   if (['failed', 'undelivered'].includes(status)) return { status: 'failed', rank: 4 };
   if (status === 'canceled') return { status: 'canceled', rank: 4 };
   return null;
+}
+
+function sendGridMessageState(
+  eventType: string,
+): { status: Message['status']; rank: number } | null {
+  if (eventType === 'processed') return { status: 'provider_accepted', rank: 2 };
+  if (eventType === 'delivered') return { status: 'delivered', rank: 5 };
+  if (['bounce', 'dropped', 'blocked'].includes(eventType)) {
+    return { status: 'failed', rank: 4 };
+  }
+  return null;
+}
+
+function isSendGridDeliveryEvent(eventType: string) {
+  return [
+    'processed',
+    'deferred',
+    'delivered',
+    'bounce',
+    'dropped',
+    'blocked',
+  ].includes(eventType);
+}
+
+function validUuid(value: unknown) {
+  const candidate = String(value || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    candidate,
+  )
+    ? candidate
+    : null;
+}
+
+function safeProviderEventValue(value: unknown) {
+  if (value === undefined || value === null) return null;
+  return sanitizeOperationalText(value).slice(0, 200);
+}
+
+function deterministicUuid(value: string) {
+  const hex = crypto.createHash('sha256').update(value).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 function messageStatusRank(status: Message['status']) {
