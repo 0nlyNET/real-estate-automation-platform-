@@ -16,7 +16,14 @@ describe('SendGrid inbound email webhook', () => {
     process.env = { ...original };
   });
 
-  function build(options?: { stop?: boolean; duplicate?: boolean }) {
+  function build(options?: {
+    stop?: boolean;
+    duplicate?: boolean;
+    integration?: {
+      connected: boolean;
+      error: string | null;
+    };
+  }) {
     const lead = Object.assign(new Lead(), {
       id: '00000000-0000-4000-8000-000000000020',
       tenantId: '00000000-0000-4000-8000-000000000001',
@@ -67,8 +74,8 @@ describe('SendGrid inbound email webhook', () => {
         provider: 'sendgrid',
         routingKey: 'replies@reply.lakeview.example',
         encryptedValue: JSON.stringify({
-          connected: true,
-          error: null,
+          connected: options?.integration?.connected ?? true,
+          error: options?.integration?.error ?? null,
           inboundAddress: 'replies@reply.lakeview.example',
         }),
         tenant: { id: lead.tenantId },
@@ -182,6 +189,28 @@ describe('SendGrid inbound email webhook', () => {
     );
     expect(
       item.compliance.addOptOut.mock.invocationCallOrder[0],
-    ).toBeLessThan(item.ai.acceptInbound.mock.invocationCallOrder[0]);
+    ).toBeDefined();
+    expect(item.ai.acceptInbound).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { connected: false, error: null },
+    { connected: false, error: 'Previous outbound provider test failed' },
+  ])(
+    'stores authenticated inbound replies even when outbound SendGrid is unavailable: %o',
+    async (integration) => {
+      const item = build({ integration });
+
+      await expect(
+        item.service.handleSendGridInbound(body, authorization()),
+      ).resolves.toEqual({ status: 'ok' });
+
+      expect(item.messageRepo.save).toHaveBeenCalled();
+      expect(item.sequences.stopForLead).toHaveBeenCalledWith(
+        item.lead.tenantId,
+        item.lead.id,
+        'reply',
+      );
+    },
+  );
 });
