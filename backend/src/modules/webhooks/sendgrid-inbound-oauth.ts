@@ -15,6 +15,27 @@ type InboundTokenPayload = {
   jti: string;
 };
 
+export type SendGridInboundAuthorizationFailureReason =
+  | 'missing_authorization'
+  | 'malformed_authorization'
+  | 'unsupported_scheme'
+  | 'credentials_unavailable'
+  | 'token_too_large'
+  | 'malformed_token'
+  | 'signature_mismatch'
+  | 'invalid_payload'
+  | 'invalid_claims'
+  | 'expired_token';
+
+export class SendGridInboundAuthorizationError extends UnauthorizedException {
+  constructor(
+    readonly reason: SendGridInboundAuthorizationFailureReason,
+    readonly scheme?: string,
+  ) {
+    super({ error: 'invalid_token' });
+  }
+}
+
 const TOKEN_TTL_SECONDS = 60 * 60;
 const CLOCK_SKEW_SECONDS = 60;
 
@@ -47,7 +68,9 @@ export function issueSendGridInboundAccessToken(
   };
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   const signature = sign(encodedPayload, expected.clientSecret);
-  const requestedScope = String(body.scope || '').trim();
+  const requestedScope = Array.isArray(body.scope)
+    ? body.scope.map((item) => String(item)).join(' ').trim()
+    : String(body.scope || '').trim();
 
   return {
     access_token: `${encodedPayload}.${signature}`,
@@ -58,41 +81,76 @@ export function issueSendGridInboundAccessToken(
 }
 
 export function normalizeSendGridInboundAuthorization(authorization = '') {
-  if (authorization.startsWith('Basic ')) return authorization;
-  if (!authorization.startsWith('Bearer ')) invalidToken();
-
-  const credentials = configuredCredentials('token');
-  const token = authorization.slice(7).trim();
-  if (!token || token.length > 4096) invalidToken();
-
-  const [encodedPayload, suppliedSignature, extra] = token.split('.');
-  if (!encodedPayload || !suppliedSignature || extra) invalidToken();
-  const expectedSignature = sign(encodedPayload, credentials.clientSecret);
-  if (!safeEqual(expectedSignature, suppliedSignature)) invalidToken();
-
-  let payload: InboundTokenPayload;
-  try {
-    payload = JSON.parse(base64UrlDecode(encodedPayload));
-  } catch {
-    invalidToken();
+  const parsed = parseAuthorizationHeader(authorization);
+  if (parsed.scheme === 'basic') {
+    return `Basic ${parsed.credentials}`;
+  }
+  if (parsed.scheme !== 'bearer') {
+    invalidToken('unsupported_scheme', parsed.scheme);
   }
 
+  const credentials = configuredCredentials('token');
+  const token = parsed.credentials;
+  if (token.length > 4096) invalidToken('token_too_large', 'bearer');
+
+  const [encodedPayload, suppliedSignature, extra] = token.split('.');
+  if (!encodedPayload || !suppliedSignature || extra) {
+    invalidToken('malformed_token', 'bearer');
+  }
+  const expectedSignature = sign(encodedPayload, credentials.clientSecret);
+  if (!safeEqual(expectedSignature, suppliedSignature)) {
+    invalidToken('signature_mismatch', 'bearer');
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(base64UrlDecode(encodedPayload));
+  } catch {
+    invalidToken('invalid_payload', 'bearer');
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    invalidToken('invalid_payload', 'bearer');
+  }
+  const payload = decoded as Partial<InboundTokenPayload>;
+  if (!Number.isInteger(payload.iat) || !Number.isInteger(payload.exp)) {
+    invalidToken('invalid_claims', 'bearer');
+  }
+
+  const issuedAt = payload.iat as number;
+  const expiresAt = payload.exp as number;
   const now = Math.floor(Date.now() / 1000);
+  if (expiresAt <= now) invalidToken('expired_token', 'bearer');
   if (
     payload.iss !== 'realtytechai' ||
     payload.aud !== 'sendgrid-inbound' ||
     !safeEqual(credentials.clientId, String(payload.sub || '')) ||
-    !Number.isInteger(payload.iat) ||
-    !Number.isInteger(payload.exp) ||
-    payload.iat > now + CLOCK_SKEW_SECONDS ||
-    payload.exp <= now
+    typeof payload.jti !== 'string' ||
+    !payload.jti ||
+    issuedAt > now + CLOCK_SKEW_SECONDS ||
+    expiresAt <= issuedAt ||
+    expiresAt - issuedAt > TOKEN_TTL_SECONDS + CLOCK_SKEW_SECONDS
   ) {
-    invalidToken();
+    invalidToken('invalid_claims', 'bearer');
   }
 
   return `Basic ${Buffer.from(
     `${credentials.clientId}:${credentials.clientSecret}`,
   ).toString('base64')}`;
+}
+
+function parseAuthorizationHeader(authorization: string) {
+  const trimmed = String(authorization || '').trim();
+  if (!trimmed) invalidToken('missing_authorization');
+
+  const match = /^([A-Za-z][A-Za-z0-9_-]*)[\t ]+(.+)$/.exec(trimmed);
+  if (!match) invalidToken('malformed_authorization');
+
+  const scheme = match[1].toLowerCase();
+  const credentials = match[2].trim();
+  if (!credentials || /\s/.test(credentials)) {
+    invalidToken('malformed_authorization', scheme);
+  }
+  return { scheme, credentials };
 }
 
 function configuredCredentials(errorKind: 'client' | 'token') {
@@ -104,7 +162,7 @@ function configuredCredentials(errorKind: 'client' | 'token') {
     if (errorKind === 'client') {
       throw new UnauthorizedException({ error: 'invalid_client' });
     }
-    invalidToken();
+    invalidToken('credentials_unavailable');
   }
   return { clientId, clientSecret };
 }
@@ -113,12 +171,10 @@ function extractClientCredentials(
   body: OAuthTokenBody,
   authorization: string,
 ) {
-  if (authorization.startsWith('Basic ')) {
+  const match = /^basic[\t ]+([^\s]+)$/i.exec(String(authorization || '').trim());
+  if (match) {
     try {
-      const decoded = Buffer.from(
-        authorization.slice(6).trim(),
-        'base64',
-      ).toString('utf8');
+      const decoded = Buffer.from(match[1], 'base64').toString('utf8');
       const separator = decoded.indexOf(':');
       if (separator >= 0) {
         return {
@@ -157,6 +213,9 @@ function safeEqual(expected: string, supplied: string) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-function invalidToken(): never {
-  throw new UnauthorizedException({ error: 'invalid_token' });
+function invalidToken(
+  reason: SendGridInboundAuthorizationFailureReason,
+  scheme?: string,
+): never {
+  throw new SendGridInboundAuthorizationError(reason, scheme);
 }
