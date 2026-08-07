@@ -60,6 +60,43 @@ describe('central service entitlements', () => {
     );
   });
 
+  it('allows human replies while automation is paused but keeps automated sends blocked', async () => {
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
+    const service = new EntitlementService(
+      { findOne: jest.fn().mockResolvedValue({ status: 'active', lifecycleStatus: 'ONBOARDING' }) } as any,
+      { findOne: jest.fn().mockResolvedValue({ automationsEnabled: false }) } as any,
+    );
+
+    await expect(service.evaluate('tenant-1', 'send_manual_email')).resolves.toMatchObject({
+      allowed: false,
+      billingEligible: true,
+      lifecycleEligible: false,
+      automationEnabled: false,
+      globalAutomationPaused: true,
+      reasons: expect.arrayContaining(['Workspace lifecycle is ONBOARDING']),
+    });
+
+    const activeService = new EntitlementService(
+      { findOne: jest.fn().mockResolvedValue({ status: 'active', lifecycleStatus: 'ACTIVE' }) } as any,
+      { findOne: jest.fn().mockResolvedValue({ automationsEnabled: false }) } as any,
+    );
+    await expect(activeService.evaluate('tenant-1', 'send_manual_email')).resolves.toMatchObject({
+      allowed: true,
+      billingEligible: true,
+      lifecycleEligible: true,
+      automationEnabled: false,
+      globalAutomationPaused: true,
+      reasons: [],
+    });
+    await expect(activeService.evaluate('tenant-1', 'send_automated_email')).resolves.toMatchObject({
+      allowed: false,
+      reasons: expect.arrayContaining([
+        'Platform automation is globally paused',
+        'Workspace automation is disabled',
+      ]),
+    });
+  });
+
   it('applies the platform kill switch even to otherwise eligible automation', async () => {
     process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
     const service = new EntitlementService(
