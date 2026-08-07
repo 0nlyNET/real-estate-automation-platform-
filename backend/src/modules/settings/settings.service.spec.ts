@@ -5,6 +5,7 @@ import { BadRequestException } from "@nestjs/common";
 describe("SettingsService intake keys", () => {
   let saved: TenantSettings | null;
   let service: SettingsService;
+  let onboarding: { invalidateLaunchEvidence: jest.Mock };
 
   beforeEach(() => {
     saved = Object.assign(new TenantSettings(), {
@@ -28,11 +29,13 @@ describe("SettingsService intake keys", () => {
       }),
     };
 
+    onboarding = { invalidateLaunchEvidence: jest.fn().mockResolvedValue({}) };
     service = new SettingsService(
       tenantSettingsRepo as any,
       { findOne: jest.fn() } as any,
       { findOne: jest.fn(), create: jest.fn(), save: jest.fn() } as any,
       { assertAllowed: jest.fn() } as any,
+      onboarding as any,
     );
   });
 
@@ -75,6 +78,10 @@ describe("SettingsService intake keys", () => {
       }),
     ).resolves.toMatchObject({ timeZone: "America/Los_Angeles" });
     expect(saved?.timeZoneVerifiedAt).toBeInstanceOf(Date);
+    expect(onboarding.invalidateLaunchEvidence).toHaveBeenCalledWith(
+      "tenant-1",
+      expect.objectContaining({ retestEndToEnd: true }),
+    );
   });
 
   it("expires booking-link verification and resets it when the URL changes", async () => {
@@ -94,5 +101,9 @@ describe("SettingsService intake keys", () => {
       bookingLinkVerifiedAt: null,
       bookingLinkVerificationExpiresAt: null,
     });
+    expect(onboarding.invalidateLaunchEvidence).toHaveBeenCalledWith(
+      "tenant-1",
+      expect.objectContaining({ retestEndToEnd: true }),
+    );
   });
 });

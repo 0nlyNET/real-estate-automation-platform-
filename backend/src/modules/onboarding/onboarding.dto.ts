@@ -63,6 +63,9 @@ export class OperatorOnboardingEvidenceDto {
   inboundSmsTestedAt?: string | null;
 
   @IsOptional() @IsDateString()
+  inboundEmailTestedAt?: string | null;
+
+  @IsOptional() @IsDateString()
   stopTestedAt?: string | null;
 
   @IsOptional() @IsDateString()

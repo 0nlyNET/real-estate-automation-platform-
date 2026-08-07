@@ -33,6 +33,9 @@ describe('Twilio delivery status callbacks', () => {
       }),
     };
     const operations = { createTask: jest.fn().mockResolvedValue({}) };
+    const onboarding = {
+      recordAutomatedTestEvidence: jest.fn().mockResolvedValue({}),
+    };
     const service = new WebhooksService(
       {} as any,
       credentials as any,
@@ -42,8 +45,9 @@ describe('Twilio delivery status callbacks', () => {
       { acceptInbound: jest.fn() } as any,
       messages as any,
       operations as any,
+      onboarding as any,
     );
-    return { service, message, messages, operations };
+    return { service, message, messages, operations, onboarding };
   }
 
   function signed(body: Record<string, unknown>) {
@@ -78,7 +82,7 @@ describe('Twilio delivery status callbacks', () => {
   });
 
   it('records a delivery failure, sanitizes its visible reason, and opens an operation', async () => {
-    const { service, message, operations } = setup();
+    const { service, message, operations, onboarding } = setup();
     const body = {
       MessageSid: 'SM123',
       MessageStatus: 'undelivered',
@@ -94,6 +98,10 @@ describe('Twilio delivery status callbacks', () => {
     });
     expect(operations.createTask).toHaveBeenCalledWith(
       expect.objectContaining({ category: 'messaging_failure', relatedEntityId: 'message-1' }),
+    );
+    expect(onboarding.recordAutomatedTestEvidence).toHaveBeenCalledWith(
+      'tenant-1',
+      { providerRejection: true },
     );
   });
 

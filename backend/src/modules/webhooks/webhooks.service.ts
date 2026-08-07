@@ -31,6 +31,7 @@ import { ComplianceOptOut } from '../compliance/compliance-optout.entity';
 import { LeadConsentRecord } from '../compliance/lead-consent-record.entity';
 import { ComplianceEvent } from '../compliance/compliance-event.entity';
 import { SendGridWebhookEvent } from './sendgrid-webhook-event.entity';
+import { OnboardingService } from '../onboarding/onboarding.service';
 
 export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
@@ -98,6 +99,8 @@ export class WebhooksService {
     private readonly messagesRepo?: Repository<Message>,
     @Optional()
     private readonly operations?: OperationsService,
+    @Optional()
+    private readonly onboarding?: OnboardingService,
   ) {}
 
   async handleTwilioStatus(
@@ -169,6 +172,11 @@ export class WebhooksService {
       }
       if (next.status === 'canceled') message.canceledAt = message.canceledAt || now;
       await this.messagesRepo.save(message);
+      if (next.status === 'failed') {
+        await this.recordReadinessEvidenceSafely(message.lead.tenantId, {
+          providerRejection: true,
+        });
+      }
       if (next.status === 'failed' && this.operations) {
         this.logger.warn(
           operationalEvent('provider_delivery_failed', {
@@ -495,6 +503,10 @@ export class WebhooksService {
       });
       return { status: 'ignored' } as const;
     }
+    await this.recordReadinessEvidenceSafely(tenantId, {
+      inboundSms: true,
+      stop: effectiveStopKeyword,
+    });
     if (!effectiveStopKeyword) {
       await this.sequences.stopForLead(tenantId, persisted.leadId, 'reply');
     }
@@ -598,6 +610,9 @@ export class WebhooksService {
       }),
     );
     if (!persisted.leadId) return { status: 'ignored' } as const;
+    await this.recordReadinessEvidenceSafely(tenantId, {
+      inboundEmail: true,
+    });
     if (stopKeyword) {
       await this.compliance.addOptOut(
         tenantId,
@@ -655,6 +670,13 @@ export class WebhooksService {
       }
       if (result.status === 'ignored') ignored += 1;
       else processed += 1;
+
+      if (result.deliveryFailed && result.message?.lead) {
+        await this.recordReadinessEvidenceSafely(
+          result.message.lead.tenantId,
+          { providerRejection: true },
+        );
+      }
 
       if (result.deliveryFailed && result.message?.lead && this.operations) {
         await this.operations.createTask({
@@ -1400,6 +1422,33 @@ export class WebhooksService {
         relatedEntityId: event.messageId,
         dedupeOpen: true,
       });
+    }
+  }
+
+  private async recordReadinessEvidenceSafely(
+    tenantId: string,
+    evidence: {
+      inboundSms?: boolean;
+      inboundEmail?: boolean;
+      stop?: boolean;
+      providerRejection?: boolean;
+    },
+  ) {
+    if (!this.onboarding) return;
+    try {
+      await this.onboarding.recordAutomatedTestEvidence(tenantId, evidence);
+    } catch (error: unknown) {
+      this.logger.error(
+        operationalEvent('readiness_evidence_record_failed', {
+          tenantId,
+          evidenceKeys: Object.entries(evidence)
+            .filter(([, enabled]) => enabled)
+            .map(([key]) => key),
+          error: sanitizeOperationalText(
+            error instanceof Error ? error.message : String(error),
+          ),
+        }),
+      );
     }
   }
 }

@@ -86,4 +86,332 @@ describe('operator-controlled workspace activation', () => {
       expect.objectContaining({ category: 'launch_approval' }),
     );
   });
+
+  it('requires exact runtime routing, verified settings, and external provider evidence', async () => {
+    const now = new Date('2026-08-07T00:00:00.000Z');
+    const record = Object.assign(new OnboardingRecord(), {
+      id: 'onboarding-1',
+      tenantId: 'tenant-1',
+      businessIdentity: {
+        legalBusinessName: 'Lakeview Realty LLC',
+        publicBusinessName: 'Lakeview Realty',
+        primaryMarket: 'Austin, TX',
+      },
+      contacts: Object.fromEntries(
+        [
+          'accountOwner',
+          'billingContact',
+          'operationsContact',
+          'supportContact',
+          'approvalContact',
+          'escalationContact',
+        ].map((key) => [key, `${key}@lakeview.example`]),
+      ),
+      serviceScope: {
+        selectedPackage: 'RealtyTechAI managed service',
+        includedChannels: ['sms', 'email'],
+        leadSources: ['website'],
+        expectedLeadVolume: '50',
+        reportingFrequency: 'weekly',
+      },
+      leadHandling: {
+        businessHours: 'Mon-Fri 9-5',
+        routingRules: 'Alex',
+        escalationBehavior: 'After 15 minutes',
+        followUpTiming: 'Immediately',
+      },
+      brandCommunication: {
+        brandName: 'Lakeview Realty',
+        brandVoice: 'Warm and concise',
+        requiredSignature: 'Alex at Lakeview Realty',
+        approvedPhoneIdentity: '+14155550100',
+        approvedEmailIdentity: 'agent@lakeview.example',
+        fairHousingReviewAcknowledged: true,
+      },
+      consentConfiguration: {
+        exactConsentLanguage: 'I agree to receive messages.',
+        consentCollectionMethod: 'Website checkbox',
+        sourceOwnership: 'authorized',
+        optOutProcess: 'STOP or unsubscribe',
+        consentPolicyVersion: 'v1',
+        purchasedOrColdListsExcluded: true,
+        clientResponsibilityAcknowledged: true,
+      },
+      integrationConfiguration: {
+        providerAccountOwner: 'Lakeview Realty',
+        authorizationStatus: 'authorized',
+      },
+      providerTests: {
+        twilioMessagingApprovalStatus: 'approved',
+        twilioApprovalReference: 'provider-reference-1',
+        twilioApprovalRecordedAt: now.toISOString(),
+        sendgridSenderVerificationStatus: 'approved',
+        sendgridApprovalReference: 'provider-reference-2',
+        sendgridApprovalRecordedAt: now.toISOString(),
+        endToEndTestReference: 'controlled-run-1',
+        providerRejectionReference: 'controlled-failure-1',
+      },
+      verifiedItems: {},
+      smsEnabled: true,
+      emailEnabled: true,
+      bookingEnabled: false,
+      targetLaunchDate: '2026-08-15',
+      consentPolicyAcknowledgedAt: now,
+      testLeadCompletedAt: now,
+      inboundSmsTestedAt: now,
+      inboundEmailTestedAt: now,
+      stopTestedAt: now,
+      providerRejectionTestedAt: now,
+      billingVerifiedAt: now,
+      clientApprovedAt: now,
+      clientApprovalEvidence: 'approval-reference',
+      operatorApprovedAt: now,
+      operatorApprovedById: '00000000-0000-4000-8000-000000000099',
+      activationStatus: 'incomplete',
+      configurationUpdatedAt: now,
+      updatedAt: now,
+    });
+    const workspaceSettings: any = {
+      tenantId: 'tenant-1',
+      timeZone: 'America/Chicago',
+      timeZoneVerifiedAt: now,
+      quietHoursStart: '21:00',
+      quietHoursEnd: '08:00',
+    };
+    const credentialRows: any[] = [
+      {
+        provider: 'twilio',
+        routingKey: '+14155550100',
+        encryptedValue: JSON.stringify({
+          connected: true,
+          accountSid: 'AC-test',
+          authToken: 'test-token',
+          fromNumber: '+14155550100',
+          lastSync: now.toISOString(),
+          error: null,
+        }),
+      },
+      {
+        provider: 'sendgrid',
+        routingKey: 'replies@reply.lakeview.example',
+        encryptedValue: JSON.stringify({
+          connected: true,
+          apiKey: 'test-key',
+          fromEmail: 'agent@lakeview.example',
+          fromName: 'Lakeview Realty',
+          inboundAddress: 'replies@reply.lakeview.example',
+          lastSync: now.toISOString(),
+          error: null,
+        }),
+      },
+    ];
+    const records = {
+      findOne: jest.fn().mockResolvedValue(record),
+      save: jest.fn(async (value) => value),
+    };
+    const tenants = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'tenant-1',
+        status: 'active',
+        lifecycleStatus: 'ONBOARDING',
+      }),
+    };
+    const stepsBuilder: any = {};
+    for (const method of [
+      'innerJoin',
+      'where',
+      'andWhere',
+      'select',
+      'addSelect',
+      'groupBy',
+    ]) {
+      stepsBuilder[method] = jest.fn(() => stepsBuilder);
+    }
+    stepsBuilder.getRawMany = jest
+      .fn()
+      .mockResolvedValue([
+        { channel: 'sms', count: '1' },
+        { channel: 'email', count: '1' },
+      ]);
+    const service = new OnboardingService(
+      records as any,
+      tenants as any,
+      { findOne: jest.fn().mockImplementation(async () => workspaceSettings) } as any,
+      { find: jest.fn().mockImplementation(async () => credentialRows) } as any,
+      { createQueryBuilder: jest.fn(() => stepsBuilder) } as any,
+      { createTask: jest.fn() } as any,
+    );
+
+    await expect(service.readiness('tenant-1')).resolves.toMatchObject({
+      ready: true,
+      activationStatus: 'ready',
+      providerDiagnostics: {
+        twilio: { runtimeReady: true },
+        sendgrid: { runtimeReady: true },
+      },
+    });
+
+    workspaceSettings.timeZoneVerifiedAt = null;
+    workspaceSettings.bookingLink = 'https://calendar.example.com/lakeview';
+    workspaceSettings.bookingLinkVerificationStatus = 'unverified';
+    record.bookingEnabled = true;
+    (record as OnboardingRecord).inboundEmailTestedAt = null;
+    credentialRows[1].routingKey = 'wrong-route@reply.lakeview.example';
+    const blocked = await service.readiness('tenant-1');
+    expect(blocked.ready).toBe(false);
+    expect(blocked.blockers.map((item) => item.key)).toEqual(
+      expect.arrayContaining([
+        'timezone',
+        'booking_url',
+        'sendgrid',
+        'inbound_email',
+      ]),
+    );
+    expect(blocked.remainingActions.providerConfiguration).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'sendgrid' })]),
+    );
+    expect(blocked.remainingActions.controlledLiveTests).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'inbound_email' })]),
+    );
+  });
+
+  it('records authenticated webhook evidence once without replacing operator evidence', async () => {
+    const record = Object.assign(new OnboardingRecord(), {
+      tenantId: 'tenant-1',
+      verifiedItems: {
+        billing: { verifiedAt: '2026-08-01T00:00:00.000Z', verifiedBy: 'owner' },
+      },
+      inboundSmsTestedAt: null,
+      inboundEmailTestedAt: null,
+      stopTestedAt: null,
+      providerRejectionTestedAt: null,
+    });
+    const records = {
+      findOne: jest.fn().mockResolvedValue(record),
+      save: jest.fn(async (value) => value),
+    };
+    const service = new OnboardingService(
+      records as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundSms: true,
+      stop: true,
+    });
+    const firstSmsEvidence = record.inboundSmsTestedAt;
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundSms: true,
+      inboundEmail: true,
+      providerRejection: true,
+    });
+    expect(record).toMatchObject({
+      inboundSmsTestedAt: firstSmsEvidence,
+      inboundEmailTestedAt: expect.any(Date),
+      stopTestedAt: expect.any(Date),
+      providerRejectionTestedAt: expect.any(Date),
+      verifiedItems: {
+        billing: { verifiedBy: 'owner' },
+        inbound_sms: { verifiedBy: 'system:webhook' },
+        inbound_email: { verifiedBy: 'system:webhook' },
+        stop: { verifiedBy: 'system:webhook' },
+        provider_rejection: { verifiedBy: 'system:webhook' },
+      },
+    });
+    expect(records.save).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates stale launch and provider evidence when messaging identity changes', async () => {
+    const approvedAt = new Date('2026-08-07T00:00:00.000Z');
+    const record = Object.assign(new OnboardingRecord(), {
+      id: 'onboarding-1',
+      tenantId: 'tenant-1',
+      businessIdentity: {},
+      contacts: {},
+      serviceScope: {},
+      leadHandling: {},
+      brandCommunication: {
+        brandName: 'Old Brand',
+        approvedPhoneIdentity: '+14155550100',
+        approvedEmailIdentity: 'old@example.com',
+      },
+      consentConfiguration: {},
+      integrationConfiguration: {},
+      providerTests: {
+        twilioMessagingApprovalStatus: 'approved',
+        twilioApprovalReference: 'twilio-old',
+        twilioApprovalRecordedAt: approvedAt.toISOString(),
+        sendgridSenderVerificationStatus: 'approved',
+        sendgridApprovalReference: 'sendgrid-old',
+        sendgridApprovalRecordedAt: approvedAt.toISOString(),
+        endToEndTestReference: 'old-run',
+        providerRejectionReference: 'old-failure',
+      },
+      verifiedItems: {
+        activation: { verifiedAt: approvedAt.toISOString() },
+        inbound_sms: { verifiedBy: 'system:webhook' },
+      },
+      smsEnabled: true,
+      emailEnabled: true,
+      bookingEnabled: false,
+      activationStatus: 'ready',
+      clientApprovedAt: approvedAt,
+      clientApprovalEvidence: 'old-client-approval',
+      operatorApprovedAt: approvedAt,
+      operatorApprovedById: '00000000-0000-4000-8000-000000000099',
+      testLeadCompletedAt: approvedAt,
+      inboundSmsTestedAt: approvedAt,
+      inboundEmailTestedAt: approvedAt,
+      stopTestedAt: approvedAt,
+      providerRejectionTestedAt: approvedAt,
+      configurationUpdatedAt: approvedAt,
+      updatedAt: approvedAt,
+    });
+    const records = {
+      findOne: jest.fn().mockResolvedValue(record),
+      save: jest.fn(async (value) => value),
+    };
+    const service = new OnboardingService(
+      records as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await service.updateClientInput('tenant-1', {
+      brandCommunication: {
+        ...record.brandCommunication,
+        brandName: 'New Brand',
+        approvedEmailIdentity: 'new@example.com',
+      },
+    });
+
+    expect(record).toMatchObject({
+      activationStatus: 'incomplete',
+      clientApprovedAt: null,
+      clientApprovalEvidence: null,
+      operatorApprovedAt: null,
+      operatorApprovedById: null,
+      testLeadCompletedAt: null,
+      inboundSmsTestedAt: null,
+      inboundEmailTestedAt: null,
+      stopTestedAt: null,
+      providerRejectionTestedAt: null,
+    });
+    expect(record.configurationUpdatedAt.getTime()).toBeGreaterThan(
+      approvedAt.getTime(),
+    );
+    expect(record.providerTests).not.toHaveProperty(
+      'twilioMessagingApprovalStatus',
+    );
+    expect(record.providerTests).not.toHaveProperty(
+      'sendgridSenderVerificationStatus',
+    );
+    expect(record.verifiedItems).not.toHaveProperty('activation');
+  });
 });
