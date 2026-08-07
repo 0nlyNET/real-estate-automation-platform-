@@ -60,27 +60,16 @@ describe('central service entitlements', () => {
     );
   });
 
-  it('allows human replies while automation is paused but keeps automated sends blocked', async () => {
+  it('allows controlled human replies during onboarding or pause while automation stays blocked', async () => {
     process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
+    const tenant = { status: 'active', lifecycleStatus: 'ONBOARDING' };
+    const tenants = { findOne: jest.fn().mockImplementation(async () => tenant) };
     const service = new EntitlementService(
-      { findOne: jest.fn().mockResolvedValue({ status: 'active', lifecycleStatus: 'ONBOARDING' }) } as any,
+      tenants as any,
       { findOne: jest.fn().mockResolvedValue({ automationsEnabled: false }) } as any,
     );
 
     await expect(service.evaluate('tenant-1', 'send_manual_email')).resolves.toMatchObject({
-      allowed: false,
-      billingEligible: true,
-      lifecycleEligible: false,
-      automationEnabled: false,
-      globalAutomationPaused: true,
-      reasons: expect.arrayContaining(['Workspace lifecycle is ONBOARDING']),
-    });
-
-    const activeService = new EntitlementService(
-      { findOne: jest.fn().mockResolvedValue({ status: 'active', lifecycleStatus: 'ACTIVE' }) } as any,
-      { findOne: jest.fn().mockResolvedValue({ automationsEnabled: false }) } as any,
-    );
-    await expect(activeService.evaluate('tenant-1', 'send_manual_email')).resolves.toMatchObject({
       allowed: true,
       billingEligible: true,
       lifecycleEligible: true,
@@ -88,12 +77,28 @@ describe('central service entitlements', () => {
       globalAutomationPaused: true,
       reasons: [],
     });
-    await expect(activeService.evaluate('tenant-1', 'send_automated_email')).resolves.toMatchObject({
+
+    tenant.lifecycleStatus = 'PAUSED';
+    await expect(service.evaluate('tenant-1', 'send_manual_sms')).resolves.toMatchObject({
+      allowed: true,
+      lifecycleEligible: true,
+      reasons: [],
+    });
+
+    await expect(service.evaluate('tenant-1', 'send_automated_email')).resolves.toMatchObject({
       allowed: false,
       reasons: expect.arrayContaining([
+        'Workspace lifecycle is PAUSED',
         'Platform automation is globally paused',
         'Workspace automation is disabled',
       ]),
+    });
+
+    tenant.lifecycleStatus = 'SUSPENDED';
+    await expect(service.evaluate('tenant-1', 'send_manual_email')).resolves.toMatchObject({
+      allowed: false,
+      lifecycleEligible: false,
+      reasons: expect.arrayContaining(['Workspace lifecycle is SUSPENDED']),
     });
   });
 

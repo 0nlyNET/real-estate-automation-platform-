@@ -14,6 +14,8 @@ import { LeadsModule } from '../leads/leads.module';
 import { AiModule } from '../ai/ai.module';
 import { TwilioInboundMessage } from './twilio-inbound-message.entity';
 import { TelephonyController } from './telephony.controller';
+import { SendGridWebhookEvent } from './sendgrid-webhook-event.entity';
+import { OnboardingModule } from '../onboarding/onboarding.module';
 
 @Module({
   imports: [
@@ -23,11 +25,13 @@ import { TelephonyController } from './telephony.controller';
       Message,
       LeadEvent,
       TwilioInboundMessage,
+      SendGridWebhookEvent,
     ]),
     ComplianceModule,
     SequencesModule,
     LeadsModule,
     AiModule,
+    OnboardingModule,
   ],
   controllers: [WebhooksController, TelephonyController],
   providers: [WebhooksService],

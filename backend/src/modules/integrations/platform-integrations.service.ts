@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as crypto from 'crypto';
 import { Repository } from 'typeorm';
@@ -6,6 +6,8 @@ import { normalizePhoneE164 } from '../../common/phone';
 import { Credential } from '../settings/credential.entity';
 import { decryptIntegrationPayload } from './integrations.service';
 import { PlatformCredential } from './platform-credential.entity';
+import { OnboardingService } from '../onboarding/onboarding.service';
+import { sanitizeOperationalText } from '../../common/operational-log';
 
 export type ManagedMessagingProvider = 'twilio' | 'sendgrid';
 
@@ -77,6 +79,7 @@ export class PlatformIntegrationsService {
     private readonly platformCredentials: Repository<PlatformCredential>,
     @InjectRepository(Credential)
     private readonly tenantCredentials: Repository<Credential>,
+    @Optional() private readonly onboarding?: OnboardingService,
   ) {}
 
   private async platformRow(provider: ManagedMessagingProvider) {
@@ -222,7 +225,10 @@ export class PlatformIntegrationsService {
   }
 
   private async propagateTwilio(platform: TwilioPlatformPayload) {
-    const rows = await this.tenantCredentials.find({ where: { provider: 'twilio' } });
+    const rows = await this.tenantCredentials.find({
+      where: { provider: 'twilio' },
+      relations: ['tenant'],
+    });
     for (const row of rows) {
       const current = decryptIntegrationPayload(row.encryptedValue) || {};
       row.encryptedValue = encryptPayload({
@@ -236,11 +242,18 @@ export class PlatformIntegrationsService {
         lastSync: nowIso(),
       });
       await this.tenantCredentials.save(row);
+      await this.onboarding?.invalidateLaunchEvidence(row.tenant.id, {
+        reason: 'Platform Twilio credentials changed',
+        retestMessaging: true,
+      });
     }
   }
 
   private async propagateSendGrid(platform: SendGridPlatformPayload) {
-    const rows = await this.tenantCredentials.find({ where: { provider: 'sendgrid' } });
+    const rows = await this.tenantCredentials.find({
+      where: { provider: 'sendgrid' },
+      relations: ['tenant'],
+    });
     for (const row of rows) {
       const current = decryptIntegrationPayload(row.encryptedValue) || {};
       row.encryptedValue = encryptPayload({
@@ -253,6 +266,10 @@ export class PlatformIntegrationsService {
         lastSync: nowIso(),
       });
       await this.tenantCredentials.save(row);
+      await this.onboarding?.invalidateLaunchEvidence(row.tenant.id, {
+        reason: 'Platform SendGrid credentials changed',
+        retestMessaging: true,
+      });
     }
   }
 
@@ -306,7 +323,9 @@ export class PlatformIntegrationsService {
       });
       return { ok: true };
     } catch (error: any) {
-      const message = String(error?.message || 'Twilio test failed').slice(0, 1000);
+      const message = sanitizeOperationalText(
+        error?.message || 'Twilio test failed',
+      );
       await this.savePlatformPayload('twilio', {
         ...payload,
         configured: true,
@@ -364,7 +383,9 @@ export class PlatformIntegrationsService {
       });
       return { ok: true };
     } catch (error: any) {
-      const message = String(error?.message || 'SendGrid test failed').slice(0, 1000);
+      const message = sanitizeOperationalText(
+        error?.message || 'SendGrid test failed',
+      );
       await this.savePlatformPayload('sendgrid', {
         ...payload,
         configured: true,
@@ -420,6 +441,18 @@ export class PlatformIntegrationsService {
     }
     const fromNumber = normalizePhoneE164(dto.fromNumber);
     if (!fromNumber) throw new BadRequestException('Twilio phone number is invalid');
+    const existing = await this.tenantRow(tenantId, 'twilio');
+    const current = existing
+      ? decryptIntegrationPayload(existing.encryptedValue)
+      : null;
+    if (
+      normalizePhoneE164(current?.fromNumber) === fromNumber &&
+      existing?.routingKey === fromNumber &&
+      current?.accountSid === platform.accountSid &&
+      current?.authToken === platform.authToken
+    ) {
+      return this.tenantSummary(tenantId);
+    }
     await this.saveTenantPayload(
       tenantId,
       'twilio',
@@ -435,6 +468,11 @@ export class PlatformIntegrationsService {
       },
       fromNumber,
     );
+    await this.onboarding?.invalidateLaunchEvidence(tenantId, {
+      reason: 'Client Twilio sender assignment changed',
+      retestMessaging: true,
+      twilioApproval: true,
+    });
     return this.tenantSummary(tenantId);
   }
 
@@ -450,6 +488,30 @@ export class PlatformIntegrationsService {
     const inboundAddress = dto.inboundAddress
       ? email(dto.inboundAddress, 'Inbound address')
       : null;
+    const fromName = String(dto.fromName || '').trim();
+    if (!fromName) {
+      throw new BadRequestException('Client sender name is required');
+    }
+    if (!inboundAddress) {
+      throw new BadRequestException(
+        'A unique inbound reply address is required',
+      );
+    }
+    const existing = await this.tenantRow(tenantId, 'sendgrid');
+    const current = existing
+      ? decryptIntegrationPayload(existing.encryptedValue)
+      : null;
+    if (
+      String(current?.fromEmail || '').trim().toLowerCase() === fromEmail &&
+      String(current?.fromName || '').trim() === fromName &&
+      String(current?.inboundAddress || '').trim().toLowerCase() ===
+        inboundAddress &&
+      String(existing?.routingKey || '').trim().toLowerCase() ===
+        inboundAddress &&
+      current?.apiKey === platform.apiKey
+    ) {
+      return this.tenantSummary(tenantId);
+    }
     await this.saveTenantPayload(
       tenantId,
       'sendgrid',
@@ -459,13 +521,18 @@ export class PlatformIntegrationsService {
         managedByPlatform: true,
         apiKey: platform.apiKey,
         fromEmail,
-        fromName: String(dto.fromName || '').trim() || 'RealtyTechAI',
+        fromName,
         inboundAddress,
         lastSync: nowIso(),
         error: null,
       },
       inboundAddress,
     );
+    await this.onboarding?.invalidateLaunchEvidence(tenantId, {
+      reason: 'Client SendGrid sender or inbound routing assignment changed',
+      retestMessaging: true,
+      sendgridApproval: true,
+    });
     return this.tenantSummary(tenantId);
   }
 
@@ -512,10 +579,14 @@ export class PlatformIntegrationsService {
     try {
       const fromEmail = email(payload.fromEmail, 'From email');
       const toEmail = dto.toEmail ? email(dto.toEmail, 'Test recipient') : null;
-      const fromName = String(payload.fromName || '').trim() || 'RealtyTechAI';
-      const replyTo = payload.inboundAddress
-        ? email(payload.inboundAddress, 'Inbound reply address')
-        : fromEmail;
+      const fromName = String(payload.fromName || '').trim();
+      if (!fromName) {
+        throw new BadRequestException('Client sender name is required');
+      }
+      const replyTo = email(
+        payload.inboundAddress,
+        'Inbound reply address',
+      );
 
       if (toEmail) {
         const send = await fetch('https://api.sendgrid.com/v3/mail/send', {
@@ -553,7 +624,9 @@ export class PlatformIntegrationsService {
     } catch (error: any) {
       result = {
         ok: false,
-        error: String(error?.message || 'SendGrid client test failed').slice(0, 1000),
+        error: sanitizeOperationalText(
+          error?.message || 'SendGrid client test failed',
+        ),
       };
     }
 
@@ -574,14 +647,25 @@ export class PlatformIntegrationsService {
 
   async removeTenantProvider(tenantId: string, provider: ManagedMessagingProvider) {
     const row = await this.tenantRow(tenantId, provider);
-    if (row) await this.tenantCredentials.remove(row);
+    if (row) {
+      await this.tenantCredentials.remove(row);
+      await this.onboarding?.invalidateLaunchEvidence(tenantId, {
+        reason: `Client ${provider} assignment was removed`,
+        retestMessaging: true,
+        twilioApproval: provider === 'twilio',
+        sendgridApproval: provider === 'sendgrid',
+      });
+    }
     return { ok: true };
   }
 
   async removePlatformProvider(provider: ManagedMessagingProvider) {
     const row = await this.platformRow(provider);
     if (row) await this.platformCredentials.remove(row);
-    const tenantRows = await this.tenantCredentials.find({ where: { provider } });
+    const tenantRows = await this.tenantCredentials.find({
+      where: { provider },
+      relations: ['tenant'],
+    });
     for (const tenantRow of tenantRows) {
       const payload = decryptIntegrationPayload(tenantRow.encryptedValue) || {};
       const sanitized = { ...payload };
@@ -600,6 +684,12 @@ export class PlatformIntegrationsService {
         lastSync: nowIso(),
       });
       await this.tenantCredentials.save(tenantRow);
+      if (tenantRow.tenant?.id) {
+        await this.onboarding?.invalidateLaunchEvidence(tenantRow.tenant.id, {
+          reason: `Platform ${provider} credentials were removed`,
+          retestMessaging: true,
+        });
+      }
     }
     return { ok: true };
   }

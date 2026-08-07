@@ -11,13 +11,22 @@ import { WebhooksService } from './webhooks.service';
 describe('WebhooksController SendGrid inbound authorization', () => {
   const original = { ...process.env };
   let app: INestApplication;
-  let webhooks: { handleSendGridInbound: jest.Mock };
+  let webhooks: {
+    handleSendGridInbound: jest.Mock;
+    handleSendGridEvents: jest.Mock;
+  };
 
   beforeEach(async () => {
     process.env.SENDGRID_INBOUND_USERNAME = 'rta_sendgrid_inbound';
     process.env.SENDGRID_INBOUND_PASSWORD = 'strong-test-password';
     webhooks = {
       handleSendGridInbound: jest.fn().mockResolvedValue({ status: 'ok' }),
+      handleSendGridEvents: jest.fn().mockResolvedValue({
+        status: 'ok',
+        processed: 1,
+        duplicates: 0,
+        ignored: 0,
+      }),
     };
     const moduleRef = await Test.createTestingModule({
       controllers: [WebhooksController],
@@ -105,5 +114,28 @@ describe('WebhooksController SendGrid inbound authorization', () => {
       .find((message) => message.includes('invalid_webhook_signature'));
     expect(rejectionLog).toContain('expired_token');
     expect(rejectionLog).not.toContain(token);
+  });
+
+  it('authenticates SendGrid delivery events with the same OAuth bearer flow', async () => {
+    const token = issueToken();
+    const payload = [
+      {
+        event: 'delivered',
+        sg_event_id: 'event-123',
+        sg_message_id: 'message-123',
+      },
+    ];
+    await request(app.getHttpServer())
+      .post('/webhooks/sendgrid/events')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload)
+      .expect(200)
+      .expect({ status: 'ok', processed: 1, duplicates: 0, ignored: 0 });
+    expect(webhooks.handleSendGridEvents).toHaveBeenCalledWith(
+      payload,
+      `Basic ${Buffer.from(
+        'rta_sendgrid_inbound:strong-test-password',
+      ).toString('base64')}`,
+    );
   });
 });

@@ -144,6 +144,7 @@ describe('SendGrid inbound email webhook', () => {
         channel: 'email',
         direction: 'inbound',
         providerMessageId: 'sendgrid:email-123@example.com',
+        subject: 'Austin search',
       }),
     );
     expect(item.ai.acceptInbound).toHaveBeenCalledWith(
@@ -163,12 +164,17 @@ describe('SendGrid inbound email webhook', () => {
     expect(item.messageRepo.save).not.toHaveBeenCalled();
   });
 
-  it('deduplicates a repeated provider Message-ID without another AI job', async () => {
+  it('deduplicates persistence and idempotently recovers AI queueing after a repeated delivery', async () => {
     const item = build({ duplicate: true });
     await expect(
       item.service.handleSendGridInbound(body, authorization()),
     ).resolves.toEqual({ status: 'duplicate' });
-    expect(item.ai.acceptInbound).not.toHaveBeenCalled();
+    expect(item.messageRepo.save).not.toHaveBeenCalled();
+    expect(item.ai.acceptInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: '00000000-0000-4000-8000-000000000030',
+      }),
+    );
   });
 
   it('records an email opt-out before any model job can run', async () => {

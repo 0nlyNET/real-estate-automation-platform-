@@ -26,8 +26,15 @@ type RecordData = {
   bookingEnabled: boolean
   targetLaunchDate?: string | null
 }
-type ReadinessItem = { key: string; label: string; passed: boolean }
-type Readiness = { ready: boolean; state: string; blockers: ReadinessItem[]; required: ReadinessItem[] }
+type ReadinessItem = {
+  key: string
+  label: string
+  passed: boolean
+  responsibleParty: "client" | "jayden" | "provider" | "platform"
+  statusMessage: string
+  nextAction?: string | null
+}
+type Readiness = { ready: boolean; state: string; activationStatus: string; blockers: ReadinessItem[]; required: ReadinessItem[] }
 type Settings = { timeZone: string; quietHoursStart: string; quietHoursEnd: string; bookingLink?: string }
 
 const empty: RecordData = {
@@ -152,10 +159,8 @@ export default function OnboardingPage() {
       },
     }
     try {
-      await Promise.all([
-        apiFetch("/onboarding", { method: "PUT", body: normalized }),
-        apiFetch("/settings/tenant", { method: "PUT", body: settings }),
-      ])
+      await apiFetch("/onboarding", { method: "PUT", body: normalized })
+      await apiFetch("/settings/tenant", { method: "PUT", body: settings })
       setData(normalized)
       await load()
       setMessage("Saved. Your RealtyTechAI setup team can see these updates.")
@@ -192,7 +197,7 @@ export default function OnboardingPage() {
           <Card className="mt-4">
             <CardContent className="p-4 text-sm">
               <div className="font-medium">Overall status</div>
-              <div className="mt-1 text-muted-foreground">{readiness?.ready ? "Ready for final activation" : readiness?.state?.replaceAll("_", " ") || "Loading…"}</div>
+              <div className="mt-1 text-muted-foreground">{readiness?.ready ? "Ready for final activation" : readiness?.activationStatus?.replaceAll("_", " ") || "Loading…"}</div>
               <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                 {readiness?.ready ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <Circle className="h-4 w-4" />}
                 {readiness?.blockers?.length || 0} setup checks remaining
@@ -287,7 +292,7 @@ export default function OnboardingPage() {
                     </ol>
                   </div>
                   {readiness?.blockers?.length ? (
-                    <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">See remaining review checks ({readiness.blockers.length})</summary><div className="mt-3 grid gap-2 md:grid-cols-2">{readiness.blockers.map((item) => <div key={item.key} className="flex gap-2 text-sm text-muted-foreground"><Circle className="mt-0.5 h-4 w-4 shrink-0" />{item.label}</div>)}</div></details>
+                    <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">See remaining review checks ({readiness.blockers.length})</summary><div className="mt-3 grid gap-2 md:grid-cols-2">{readiness.blockers.map((item) => <div key={item.key} className="flex gap-2 rounded-md border p-3 text-sm text-muted-foreground"><Circle className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block font-medium text-foreground">{item.label}</span><span className="mt-1 block text-xs">Owner: {item.responsibleParty === "client" ? "you" : item.responsibleParty === "provider" ? "external provider" : "RealtyTechAI"}</span>{item.nextAction ? <span className="mt-1 block text-xs">{item.nextAction}</span> : null}</span></div>)}</div></details>
                   ) : null}
                 </>
               ) : null}

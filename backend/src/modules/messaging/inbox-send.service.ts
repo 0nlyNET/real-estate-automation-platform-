@@ -1,4 +1,9 @@
-import { BadGatewayException, ConflictException, Injectable, ForbiddenException, Logger, Optional } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  ForbiddenException,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as crypto from 'crypto';
@@ -6,14 +11,9 @@ import * as crypto from 'crypto';
 import { Lead } from '../leads/lead.entity';
 import { Message } from './message.entity';
 import { Credential } from '../settings/credential.entity';
-import { sendTwilioSms } from '../../common/providers';
 import { ComplianceService } from '../compliance/compliance.service';
 import { EntitlementService } from '../entitlements/entitlement.service';
 import { OperationsService } from '../operations/operations.service';
-import {
-  operationalEvent,
-  sanitizeOperationalText,
-} from '../../common/operational-log';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   AiConversationControlService,
@@ -72,8 +72,6 @@ function normalizeE164(v?: string | null) {
 
 @Injectable()
 export class InboxSendService {
-  private readonly logger = new Logger(InboxSendService.name);
-
   constructor(
     @InjectRepository(Lead)
     private readonly leadsRepo: Repository<Lead>,
@@ -135,8 +133,15 @@ export class InboxSendService {
     const accountSid = payload?.accountSid ? String(payload.accountSid) : null;
     const authToken = payload?.authToken ? String(payload.authToken) : null;
     const fromNumber = normalizeE164(payload?.fromNumber);
+    const messagingServiceSid = String(payload?.messagingServiceSid || '').trim();
 
-    if (!match || !connected || !accountSid || !authToken || !fromNumber) {
+    if (
+      !match ||
+      !connected ||
+      !accountSid ||
+      !authToken ||
+      (!fromNumber && !messagingServiceSid)
+    ) {
       throw new ForbiddenException('Twilio is not connected for this tenant');
     }
     const statusCallback = String(process.env.TWILIO_STATUS_CALLBACK_URL || '').trim();
@@ -169,7 +174,7 @@ export class InboxSendService {
         msg.channel = 'sms';
         msg.direction = 'outbound';
         msg.body = compliantText;
-        msg.status = 'sending';
+        msg.status = 'queued';
         msg.attemptCount = 0;
         msg.sentAt = null;
         msg.authorship = 'human';
@@ -178,105 +183,20 @@ export class InboxSendService {
         msg.idempotencyKey = `manual:${tenantId}:${lead.id}:${crypto.randomUUID()}`;
 
         const saved = await this.messagesRepo.save(msg as any);
-
-        try {
-          const resp = await sendTwilioSms({
-            accountSid,
-            authToken,
-            to,
-            from: fromNumber,
-            body: compliantText,
-            statusCallback,
-          });
-
-          const sid = resp.sid ? String(resp.sid) : undefined;
-
-          (saved as any).providerMessageId = sid;
-          (saved as any).status = 'provider_accepted';
-          (saved as any).providerStatus = resp.status || 'accepted';
-          (saved as any).attemptCount = ((saved as any).attemptCount || 0) + 1;
-          (saved as any).providerAcceptedAt = new Date();
-          await this.messagesRepo.save(saved as any);
-
-          (lead as any).lastActivityAt = new Date();
-          (lead as any).lastContactedAt = new Date();
-          await this.leadsRepo.save(lead as any);
-
-          this.logger.log(
-            operationalEvent('manual_sms_provider_accepted', {
-              tenantId,
-              leadId: lead.id,
-              providerMessageId: sid || null,
-            }),
-          );
-
-          return {
-            status: 'provider_accepted',
-            message: {
-              id: (saved as any).id,
-              leadId: (saved as any).leadId,
-              channel: (saved as any).channel,
-              direction: (saved as any).direction,
-              body: (saved as any).body,
-              status: (saved as any).status,
-              authorship: 'human',
-              providerMessageId: (saved as any).providerMessageId || null,
-              createdAt: (saved as any).createdAt,
-            },
-          };
-        } catch (e: any) {
-          const errMsg = sanitizeOperationalText(
-            e?.message || 'Twilio send failed',
-          );
-
-          (saved as any).status = 'failed';
-          (saved as any).failedAt = new Date();
-          (saved as any).errorCode = 'PROVIDER_SEND_FAILED';
-          (saved as any).sanitizedErrorMessage = String(errMsg).slice(0, 1000);
-          (saved as any).attemptCount = ((saved as any).attemptCount || 0) + 1;
-          (saved as any).lastError = String(errMsg);
-          await this.messagesRepo.save(saved as any);
-
-          this.logger.warn(
-            operationalEvent('provider_send_failed', {
-              provider: 'twilio',
-              tenantId,
-              leadId: lead.id,
-              messageId: saved.id,
-              error: errMsg,
-            }),
-          );
-
-          await this.operations.createTask({
-            tenantId,
-            category: 'messaging_failure',
-            title: 'Manual SMS failed',
-            description: String(errMsg).slice(0, 1000),
-            priority: 'high',
-            relatedEntityType: 'message',
-            relatedEntityId: saved.id,
-            dedupeOpen: true,
-          });
-          await this.notifications?.createForTenant({
-            tenantId,
-            assignedUserId: lead.assignedToUserId,
-            eventType: 'message.failed',
-            category: 'leads',
-            severity: 'warning',
-            title: `A message to ${lead.fullName} did not send`,
-            message:
-              'Open the conversation and try again or contact the lead another way.',
-            deduplicationKey: `message-failed:${saved.id}`,
-            actionUrl: `/app/inbox?leadId=${lead.id}`,
-            entityType: 'message',
-            entityId: saved.id,
-          });
-          throw new BadGatewayException({
-            code: 'PROVIDER_SEND_FAILED',
-            message: 'Twilio did not accept the message',
-            messageId: saved.id,
-          });
-        }
+        return {
+          status: 'queued',
+          message: {
+            id: (saved as any).id,
+            leadId: (saved as any).leadId,
+            channel: (saved as any).channel,
+            direction: (saved as any).direction,
+            body: (saved as any).body,
+            status: (saved as any).status,
+            authorship: 'human',
+            providerMessageId: null,
+            createdAt: (saved as any).createdAt,
+          },
+        };
       },
     );
   }
@@ -333,12 +253,23 @@ export class InboxSendService {
       lead.id,
       actor,
       async () => {
+        const latestInbound = await this.messagesRepo.findOne({
+          where: {
+            leadId: lead.id,
+            channel: 'email',
+            direction: 'inbound',
+          },
+          order: { createdAt: 'DESC' },
+        });
         const message = await this.messagesRepo.save(
           this.messagesRepo.create({
             leadId: lead.id,
             channel: 'email',
             direction: 'outbound',
             body: `${text}\n\nUnsubscribe: {{unsubscribeUrl}}`,
+            subject: replySubject(latestInbound?.subject),
+            inReplyToProviderMessageId:
+              latestInbound?.providerMessageId || null,
             status: 'queued',
             attemptCount: 0,
             idempotencyKey: `manual-email:${tenantId}:${lead.id}:${crypto.randomUUID()}`,
@@ -361,4 +292,10 @@ export class InboxSendService {
       },
     );
   }
+}
+
+function replySubject(subject?: string | null) {
+  const value = String(subject || '').trim().slice(0, 490);
+  if (!value) return 'Follow-up';
+  return /^re:/i.test(value) ? value : `Re: ${value}`;
 }
