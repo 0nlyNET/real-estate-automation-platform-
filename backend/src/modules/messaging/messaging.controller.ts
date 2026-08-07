@@ -53,7 +53,7 @@ export class MessagingController {
       {
         userId: req.user?.sub,
         role: req.user?.role as UserRole,
-        scope: scope === 'shared' ? 'shared' : 'mine',
+        scope: scope === 'mine' ? 'mine' : 'shared',
       },
     );
   }

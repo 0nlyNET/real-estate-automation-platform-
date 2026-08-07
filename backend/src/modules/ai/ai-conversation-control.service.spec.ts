@@ -6,6 +6,7 @@ import { ConversationAiState } from './conversation-ai-state.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
 import { BrokerageKnowledge } from './brokerage-knowledge.entity';
 import { PlatformAiControl } from './platform-ai-control.entity';
+import { AiRun } from './ai-run.entity';
 
 function updateQuery() {
   const query: any = {
@@ -71,6 +72,7 @@ function build() {
       save: jest.fn(async (value) => value),
     },
     runs: {
+      findOne: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     },
     messages: {
@@ -244,6 +246,31 @@ describe('AI conversation ownership', () => {
       ),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(fixture.repositories.messages.find).not.toHaveBeenCalled();
+  });
+
+  it('exposes the latest durable AI processing state for the conversation UI', async () => {
+    const fixture = build();
+    fixture.repositories.runs.findOne.mockResolvedValue(
+      Object.assign(new AiRun(), {
+        id: '00000000-0000-4000-8000-000000000060',
+        tenantId: fixture.tenantId,
+        leadId: fixture.lead.id,
+        triggeringMessageId: '00000000-0000-4000-8000-000000000040',
+        status: 'processing',
+        updatedAt: new Date('2026-08-07T12:00:00.000Z'),
+      }),
+    );
+    await expect(
+      fixture.service.getConversation(fixture.tenantId, fixture.lead.id, {
+        userId: fixture.userId,
+        role: 'agent',
+      }),
+    ).resolves.toMatchObject({
+      latestAiRun: {
+        status: 'processing',
+        triggeringMessageId: '00000000-0000-4000-8000-000000000040',
+      },
+    });
   });
 
   it('does not allow an AI send after a conversation becomes human-controlled', async () => {

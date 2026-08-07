@@ -7,9 +7,18 @@ type SendGridEmail = {
   subject: string;
   text: string;
   html?: string;
+  customArgs?: Record<string, string>;
+  headers?: Record<string, string>;
 };
 
-export async function sendSendGridEmail(message: SendGridEmail): Promise<void> {
+export type ProviderRequestError = Error & {
+  status: number;
+  definitiveRejection: true;
+};
+
+export async function sendSendGridEmail(
+  message: SendGridEmail,
+): Promise<{ messageId?: string; status: 'accepted' }> {
   const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
     headers: {
@@ -17,7 +26,15 @@ export async function sendSendGridEmail(message: SendGridEmail): Promise<void> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      personalizations: [{ to: [{ email: message.to }] }],
+      personalizations: [
+        {
+          to: [{ email: message.to }],
+          ...(message.customArgs
+            ? { custom_args: message.customArgs }
+            : {}),
+          ...(message.headers ? { headers: message.headers } : {}),
+        },
+      ],
       from: { email: message.fromEmail, name: message.fromName || 'RealtyTechAI' },
       ...(message.replyTo ? { reply_to: { email: message.replyTo } } : {}),
       subject: message.subject,
@@ -30,10 +47,17 @@ export async function sendSendGridEmail(message: SendGridEmail): Promise<void> {
   });
 
   if (!response.ok) {
-    const error = new Error(`SendGrid request failed [HTTP ${response.status}]`) as Error & { status: number };
+    const error = new Error(
+      `SendGrid request failed [HTTP ${response.status}]`,
+    ) as ProviderRequestError;
     error.status = response.status;
+    error.definitiveRejection = true;
     throw error;
   }
+  return {
+    messageId: response.headers.get('x-message-id')?.trim() || undefined,
+    status: 'accepted',
+  };
 }
 
 type TwilioSms = {
@@ -65,8 +89,11 @@ export async function sendTwilioSms(message: TwilioSms): Promise<{ sid?: string;
 
   const payload = await response.json().catch(() => ({})) as { sid?: string; status?: string; message?: string };
   if (!response.ok) {
-    const error = new Error(`${payload.message || 'Twilio request failed'} [HTTP ${response.status}]`) as Error & { status: number };
+    const error = new Error(
+      `${payload.message || 'Twilio request failed'} [HTTP ${response.status}]`,
+    ) as ProviderRequestError;
     error.status = response.status;
+    error.definitiveRejection = true;
     throw error;
   }
   return { sid: payload.sid, status: payload.status };

@@ -450,6 +450,15 @@ export class PlatformIntegrationsService {
     const inboundAddress = dto.inboundAddress
       ? email(dto.inboundAddress, 'Inbound address')
       : null;
+    const fromName = String(dto.fromName || '').trim();
+    if (!fromName) {
+      throw new BadRequestException('Client sender name is required');
+    }
+    if (!inboundAddress) {
+      throw new BadRequestException(
+        'A unique inbound reply address is required',
+      );
+    }
     await this.saveTenantPayload(
       tenantId,
       'sendgrid',
@@ -459,7 +468,7 @@ export class PlatformIntegrationsService {
         managedByPlatform: true,
         apiKey: platform.apiKey,
         fromEmail,
-        fromName: String(dto.fromName || '').trim() || 'RealtyTechAI',
+        fromName,
         inboundAddress,
         lastSync: nowIso(),
         error: null,
@@ -512,10 +521,14 @@ export class PlatformIntegrationsService {
     try {
       const fromEmail = email(payload.fromEmail, 'From email');
       const toEmail = dto.toEmail ? email(dto.toEmail, 'Test recipient') : null;
-      const fromName = String(payload.fromName || '').trim() || 'RealtyTechAI';
-      const replyTo = payload.inboundAddress
-        ? email(payload.inboundAddress, 'Inbound reply address')
-        : fromEmail;
+      const fromName = String(payload.fromName || '').trim();
+      if (!fromName) {
+        throw new BadRequestException('Client sender name is required');
+      }
+      const replyTo = email(
+        payload.inboundAddress,
+        'Inbound reply address',
+      );
 
       if (toEmail) {
         const send = await fetch('https://api.sendgrid.com/v3/mail/send', {

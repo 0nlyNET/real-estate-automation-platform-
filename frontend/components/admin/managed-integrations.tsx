@@ -79,7 +79,7 @@ export default function ManagedIntegrations() {
   const [tenantTwilioNumber, setTenantTwilioNumber] = useState("")
   const [tenantTwilioTestTo, setTenantTwilioTestTo] = useState("")
   const [tenantFromEmail, setTenantFromEmail] = useState("")
-  const [tenantFromName, setTenantFromName] = useState("RealtyTechAI")
+  const [tenantFromName, setTenantFromName] = useState("")
   const [tenantInboundAddress, setTenantInboundAddress] = useState("")
   const [tenantEmailTestTo, setTenantEmailTestTo] = useState("")
 
@@ -97,7 +97,7 @@ export default function ManagedIntegrations() {
     setTenant(result)
     setTenantTwilioNumber(result.twilio.display?.fromNumber || "")
     setTenantFromEmail(result.sendgrid.display?.fromEmail || "")
-    setTenantFromName(result.sendgrid.display?.fromName || "RealtyTechAI")
+    setTenantFromName(result.sendgrid.display?.fromName || "")
     setTenantInboundAddress(result.sendgrid.display?.inboundAddress || "")
   }, [])
 
@@ -254,7 +254,7 @@ export default function ManagedIntegrations() {
           body: {
             fromEmail: tenantFromEmail,
             fromName: tenantFromName,
-            inboundAddress: tenantInboundAddress || undefined,
+            inboundAddress: tenantInboundAddress,
           },
         })
         await loadTenant(tenantId)

@@ -18,7 +18,7 @@ import { Credential } from '../settings/credential.entity';
 import { decryptIntegrationPayload } from '../integrations/integrations.service';
 import { ComplianceService } from '../compliance/compliance.service';
 import { sendSendGridEmail, sendTwilioSms } from '../../common/providers';
-import { UserRole, hasAtLeastRole } from '../../common/rbac';
+import { UserRole } from '../../common/rbac';
 import { OperationsService } from '../operations/operations.service';
 import { operationalEvent } from '../../common/operational-log';
 import { ClientOperationsService } from '../client-operations/client-operations.service';
@@ -27,7 +27,13 @@ import { AiConversationControlService } from '../ai/ai-conversation-control.serv
 import { MessageSafetyService } from './message-safety.service';
 
 type ProviderConfig = {
-  sendgrid?: { apiKey?: string; fromEmail?: string; fromName?: string };
+  sendgrid?: {
+    apiKey?: string;
+    fromEmail?: string;
+    fromName?: string;
+    inboundAddress?: string;
+    routingKey?: string | null;
+  };
   twilio?: {
     accountSid?: string;
     authToken?: string;
@@ -94,27 +100,21 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       relations: ['tenant'],
     });
     const values = new Map(
-      rows.map((row) => [row.provider, decryptIntegrationPayload(row.encryptedValue)]),
+      rows.map((row) => [
+        row.provider,
+        {
+          ...(decryptIntegrationPayload(row.encryptedValue) || {}),
+          routingKey: row.routingKey || null,
+        },
+      ]),
     );
     const sendgrid = values.get('sendgrid');
     const twilio = values.get('twilio');
     return {
-      sendgrid: sendgrid?.connected ? sendgrid : undefined,
-      twilio: twilio?.connected ? twilio : undefined,
+      sendgrid:
+        sendgrid?.connected && !sendgrid?.error ? sendgrid : undefined,
+      twilio: twilio?.connected && !twilio?.error ? twilio : undefined,
     };
-  }
-
-  async handleTwilioSmsWebhook(req: any) {
-    return this.handleInboundSms(req?.body || {});
-  }
-
-  async handleSendgridInboundWebhook(req: any) {
-    const body = req?.body || {};
-    return this.handleInboundEmail({
-      from: body.from || body.From || body.sender,
-      text: body.text || body.Text || body.email || body.body || body.Body || '',
-      subject: body.subject || body.Subject || '',
-    });
   }
 
   async process(body: any) {
@@ -132,13 +132,13 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     ctx?: { userId?: string; role?: UserRole; scope?: 'shared' | 'mine' },
   ) {
     const tenantId = this.requireTenant(tenantIdRaw);
-    const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : true;
+    const assignedOnly = ctx?.scope === 'mine' && Boolean(ctx.userId);
     const rows = await this.messageRepository
       .createQueryBuilder('message')
       .leftJoinAndSelect('message.lead', 'lead')
       .where('lead.tenantId = :tenantId', { tenantId })
       .andWhere(
-        (!canSeeAll || ctx?.scope === 'mine') && ctx?.userId
+        assignedOnly
           ? 'lead.assignedToUserId = :userId'
           : '1=1',
         { userId: ctx?.userId },
@@ -154,6 +154,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       leadName: message.lead?.fullName || null,
       leadEmail: message.lead?.email || null,
       leadPhone: message.lead?.phone || null,
+      assignedToUserId: message.lead?.assignedToUserId || null,
+      isAssignedToViewer:
+        Boolean(ctx?.userId) && message.lead?.assignedToUserId === ctx?.userId,
       lastMessageId: message.id,
       lastMessageAt: message.createdAt,
       lastMessageBody: message.body,
@@ -174,15 +177,11 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
   async getThreadMessages(
     tenantIdRaw: string,
     leadId: string,
-    ctx?: { userId?: string; role?: UserRole },
+    _ctx?: { userId?: string; role?: UserRole },
   ) {
     const tenantId = this.requireTenant(tenantIdRaw);
     const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } });
     if (!lead) throw new ForbiddenException('Lead not found');
-    const canSeeAll = ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : false;
-    if (!canSeeAll && lead.assignedToUserId !== ctx?.userId) {
-      throw new ForbiddenException('Lead is not assigned to this user');
-    }
     const messages = await this.messageRepository.find({
       where: { leadId },
       order: { createdAt: 'ASC' },
@@ -193,6 +192,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       channel: message.channel,
       direction: message.direction,
       body: message.body,
+      subject: message.subject || null,
       status: message.status,
       providerStatus: message.providerStatus || null,
       errorCode: message.errorCode || null,
@@ -218,6 +218,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
 
   async processPendingOutbound(opts?: { limit?: number; leadId?: string }) {
     const limit = Math.min(Math.max(opts?.limit || 25, 1), 100);
+    const recovered = await this.recoverUncertainSubmissions(limit, opts?.leadId);
     const ids = await this.claimMessages(limit, opts?.leadId);
     for (const id of ids) {
       const message = await this.messageRepository.findOne({
@@ -227,7 +228,59 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       if (!message) continue;
       await this.trySend(message);
     }
-    return { claimed: ids.length };
+    return { claimed: ids.length, recovered };
+  }
+
+  private async recoverUncertainSubmissions(
+    limit: number,
+    leadId?: string,
+  ): Promise<number> {
+    const ids = await this.dataSource.transaction(
+      async (manager): Promise<string[]> => {
+        const rows: Array<{ id: string }> = await manager.query(
+          `WITH candidates AS (
+             SELECT id
+             FROM messages
+             WHERE direction = 'outbound'
+               AND status = 'sending'
+               AND provider_submission_started_at IS NOT NULL
+               AND ($4::uuid IS NULL OR "leadId" = $4::uuid)
+               AND (locked_at IS NULL OR locked_at < now() - ($1 * interval '1 second'))
+             ORDER BY provider_submission_started_at ASC
+             FOR UPDATE SKIP LOCKED
+             LIMIT $2
+           )
+           UPDATE messages AS message
+           SET locked_at = now(), locked_by = $3
+           FROM candidates
+           WHERE message.id = candidates.id
+           RETURNING message.id`,
+          [MESSAGE_LEASE_SECONDS, limit, this.workerId, leadId || null],
+        );
+        return rows.map((row) => row.id);
+      },
+    );
+    for (const id of ids) {
+      const message = await this.messageRepository.findOne({
+        where: { id, lockedBy: this.workerId },
+        relations: ['lead'],
+      });
+      if (!message) continue;
+      await this.failPermanently(
+        message,
+        'PROVIDER_RESULT_UNKNOWN',
+        'The provider request started, but RealtyTechAI did not receive a definitive result. The message was not retried to prevent duplicate delivery.',
+      );
+      if (message.authorship === 'ai' && message.lead) {
+        await this.aiControl.markWaitingForHuman(
+          message.lead.tenantId,
+          message.lead.id,
+          'An AI response has an unknown provider result. Check the conversation before replying personally to avoid a duplicate.',
+          'high',
+        );
+      }
+    }
+    return ids.length;
   }
 
   private claimMessages(limit: number, leadId?: string): Promise<string[]> {
@@ -238,6 +291,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
            FROM messages
            WHERE direction = 'outbound'
              AND status IN ('created', 'queued', 'pending', 'scheduled', 'sending')
+             AND (status <> 'sending' OR provider_submission_started_at IS NULL)
              AND ($4::uuid IS NULL OR "leadId" = $4::uuid)
              AND (scheduled_at IS NULL OR scheduled_at <= now())
              AND (next_attempt_at IS NULL OR next_attempt_at <= now())
@@ -275,7 +329,6 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         message.attemptCount = (message.attemptCount || 0) + 1;
         message.lastAttemptedAt = new Date();
         message.lastError = null as any;
-        message.providerSubmissionStartedAt = message.lastAttemptedAt;
         await this.messageRepository.save(message);
         const result = await send();
         const acceptedAt = new Date();
@@ -288,6 +341,22 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         message.lockedBy = null;
         message.nextAttemptAt = null;
         await this.messageRepository.save(message);
+        if (!result.providerMessageId) {
+          message.errorCode = 'PROVIDER_ID_MISSING';
+          message.sanitizedErrorMessage =
+            'The provider accepted the request without returning a message identifier. Delivery tracking may be incomplete.';
+          await this.messageRepository.save(message);
+          await this.operations.createTask({
+            tenantId: lead.tenantId,
+            category: 'messaging_failure',
+            title: `${message.channel.toUpperCase()} provider ID is missing`,
+            description: message.sanitizedErrorMessage,
+            priority: 'high',
+            relatedEntityType: 'message',
+            relatedEntityId: message.id,
+            dedupeOpen: true,
+          });
+        }
         lead.lastContactedAt = acceptedAt;
         lead.lastActivityAt = acceptedAt;
         if (!lead.firstContactSentAt) lead.firstContactSentAt = acceptedAt;
@@ -347,33 +416,44 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     } catch (error: any) {
       const raw = String(error?.message || error || 'Provider request failed');
       const sanitized = sanitizeProviderError(raw);
-      if (message.authorship === 'ai') {
-        await this.failPermanently(
-          message,
-          'AI_PROVIDER_SEND_FAILED',
-          sanitized,
-        );
-        await this.aiControl.markWaitingForHuman(
-          lead.tenantId,
-          lead.id,
-          'The AI response provider failed. Review the inbound message and respond personally.',
-          'high',
-        );
-        return;
-      }
-      if (isTransientProviderError(error, raw) && message.attemptCount < MAX_SEND_ATTEMPTS) {
+      const definitiveRejection = isDefinitiveProviderRejection(error);
+      if (
+        definitiveRejection &&
+        isTransientProviderError(error) &&
+        message.attemptCount < MAX_SEND_ATTEMPTS
+      ) {
         const delayMinutes = [1, 5, 15][message.attemptCount - 1] || 15;
         message.status = 'queued';
         message.errorCode = 'TRANSIENT_PROVIDER_ERROR';
         message.lastError = sanitized;
         message.sanitizedErrorMessage = sanitized;
         message.nextAttemptAt = new Date(Date.now() + delayMinutes * 60_000);
+        message.providerSubmissionStartedAt = null;
         message.lockedAt = null;
         message.lockedBy = null;
         await this.messageRepository.save(message);
         return;
       }
-      await this.failPermanently(message, 'PROVIDER_SEND_FAILED', sanitized);
+      const uncertain = isUncertainProviderResult(error, raw);
+      const code = uncertain
+        ? 'PROVIDER_RESULT_UNKNOWN'
+        : message.authorship === 'ai'
+          ? 'AI_PROVIDER_SEND_FAILED'
+          : 'PROVIDER_SEND_FAILED';
+      const reason = uncertain
+        ? 'The provider request may have been accepted, but its result could not be confirmed. RealtyTechAI did not retry it to prevent duplicate delivery.'
+        : sanitized;
+      await this.failPermanently(message, code, reason);
+      if (message.authorship === 'ai') {
+        await this.aiControl.markWaitingForHuman(
+          lead.tenantId,
+          lead.id,
+          uncertain
+            ? 'The AI response provider result is unknown. Check the conversation before responding personally to avoid a duplicate.'
+            : 'The AI response provider failed. Review the inbound message and respond personally.',
+          'high',
+        );
+      }
     }
   }
 
@@ -406,8 +486,21 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     const config = await this.getProviderConfig(lead.tenantId);
     const apiKey = config.sendgrid?.apiKey;
     const fromEmail = config.sendgrid?.fromEmail;
+    const replyTo = normalizeEmail(config.sendgrid?.inboundAddress);
     if (!lead.email) throw new Error('Missing lead email');
     if (!apiKey || !fromEmail) throw new Error('Missing SendGrid credentials');
+    if (!replyTo) {
+      throw new Error('Missing valid SendGrid inbound reply address');
+    }
+    if (normalizeEmail(config.sendgrid?.routingKey || undefined) !== replyTo) {
+      throw new Error('SendGrid inbound routing key does not match Reply-To');
+    }
+    const configuredFromName = String(config.sendgrid?.fromName || '').trim();
+    const tenant = configuredFromName
+      ? null
+      : await this.tenantRepository.findOne({ where: { id: lead.tenantId } });
+    const fromName = configuredFromName || String(tenant?.name || '').trim();
+    if (!fromName) throw new Error('Missing tenant email sender name');
     const token = this.complianceService.createUnsubscribeToken(lead.tenantId, lead.id, lead.email);
     const appUrl = String(process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || '').replace(/\/$/, '');
     if (!appUrl) throw new Error('Missing FRONTEND_URL for email unsubscribe links');
@@ -416,15 +509,35 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       throw new Error('Approved email template is missing unsubscribe placeholder');
     }
     const text = message.body.replace(/\{\{\s*unsubscribeUrl\s*\}\}/gi, unsubscribeUrl);
-    await sendSendGridEmail({
+    await this.markProviderSubmissionStarted(message);
+    const response = await sendSendGridEmail({
       apiKey,
       to: lead.email,
       fromEmail,
-      fromName: config.sendgrid?.fromName || 'RealtyTechAI',
-      subject: 'Follow-up',
+      fromName,
+      replyTo,
+      subject: message.subject || `Follow-up from ${fromName}`,
       text,
+      customArgs: { rta_message_id: message.id },
+      ...(message.inReplyToProviderMessageId
+        ? {
+            headers: {
+              'In-Reply-To': emailMessageIdHeader(
+                message.inReplyToProviderMessageId,
+              ),
+              References: emailMessageIdHeader(
+                message.inReplyToProviderMessageId,
+              ),
+            },
+          }
+        : {}),
     });
-    return { providerStatus: 'accepted' };
+    return {
+      providerMessageId: response.messageId
+        ? `sendgrid:${response.messageId}`
+        : undefined,
+      providerStatus: response.status,
+    };
   }
 
   private async sendSms(message: Message) {
@@ -439,6 +552,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     if (!from && !messagingServiceSid) throw new Error('Missing Twilio sender configuration');
     const statusCallback = String(process.env.TWILIO_STATUS_CALLBACK_URL || '').trim();
     if (!statusCallback) throw new Error('Missing TWILIO_STATUS_CALLBACK_URL');
+    await this.markProviderSubmissionStarted(message);
     const response = await sendTwilioSms({
       accountSid,
       authToken,
@@ -447,8 +561,12 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       statusCallback,
       ...(messagingServiceSid ? { messagingServiceSid } : { from: from as string }),
     });
-    if (!response.sid) throw new Error('Twilio accepted the request without a message SID');
     return { providerMessageId: response.sid, providerStatus: response.status || 'accepted' };
+  }
+
+  private async markProviderSubmissionStarted(message: Message) {
+    message.providerSubmissionStartedAt = new Date();
+    await this.messageRepository.save(message);
   }
 
   private async skipMessage(message: Message, code: string, reason: string) {
@@ -522,84 +640,6 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async handleInboundSms(payload: { From?: string; Body?: string }) {
-    const from = normalizePhone(payload.From);
-    if (!from) return { status: 'ignored' } as const;
-    const lead = await this.leadRepository.findOne({
-      where: { phone: from },
-      relations: ['tenant'],
-      order: { createdAt: 'DESC' },
-    });
-    if (!lead) return { status: 'no_lead' } as const;
-    const inbound = await this.createMessage({
-      lead,
-      leadId: lead.id,
-      channel: 'sms',
-      direction: 'inbound',
-      body: payload.Body || '',
-      status: 'received',
-      providerStatus: 'received',
-    });
-    await this.markReply(lead, inbound, 'sms');
-    return { status: 'ok' } as const;
-  }
-
-  async handleInboundEmail(payload: { from?: string; text?: string; subject?: string }) {
-    const from = normalizeEmail(payload.from);
-    if (!from) return { status: 'ignored' } as const;
-    const lead = await this.leadRepository.findOne({
-      where: { email: from },
-      relations: ['tenant'],
-      order: { createdAt: 'DESC' },
-    });
-    if (!lead) return { status: 'no_lead' } as const;
-    const inbound = await this.createMessage({
-      lead,
-      leadId: lead.id,
-      channel: 'email',
-      direction: 'inbound',
-      body: payload.text || '',
-      status: 'received',
-      providerStatus: 'received',
-    });
-    await this.markReply(lead, inbound, 'email', payload.subject);
-    return { status: 'ok' } as const;
-  }
-
-  private async markReply(lead: Lead, message: Message, channel: string, subject?: string) {
-    const now = new Date();
-    if (!lead.firstResponseReceivedAt) {
-      lead.firstResponseReceivedAt = now;
-      if (lead.firstContactSentAt) {
-        lead.firstResponseTimeSec = Math.max(
-          0,
-          Math.floor((now.getTime() - lead.firstContactSentAt.getTime()) / 1000),
-        );
-      }
-    }
-    lead.lastActivityAt = now;
-    lead.sequenceStatus = 'stopped';
-    await this.leadRepository.save(lead);
-    await this.logLeadEvent(lead, 'lead_replied', {
-      channel,
-      messageId: message.id,
-      subject,
-    });
-    await this.sequencesService.stopForLead(lead.tenantId, lead.id, 'reply');
-    try {
-      await this.clientOperations?.processInboundReply(lead, message.body, message.id);
-    } catch (error: any) {
-      this.logger.error(
-        operationalEvent('lead_qualification_failed', {
-          tenantId: lead.tenantId,
-          leadId: lead.id,
-          messageId: message.id,
-          error: error?.message || String(error),
-        }),
-      );
-    }
-  }
-
   async createMessage(data: Partial<Message>) {
     const message = this.messageRepository.create({
       ...data,
@@ -626,13 +666,22 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
   }
 }
 
-function isTransientProviderError(error: any, message: string) {
+function isTransientProviderError(error: any) {
   const status = Number(error?.status || error?.statusCode || 0);
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function isDefinitiveProviderRejection(error: any) {
   return (
-    status === 408 ||
-    status === 429 ||
-    status >= 500 ||
-    /timeout|timed out|network|ECONN|EAI_AGAIN|HTTP (408|429|5\d\d)/i.test(message)
+    error?.definitiveRejection === true ||
+    Number(error?.status || error?.statusCode || 0) > 0
+  );
+}
+
+function isUncertainProviderResult(error: any, message: string) {
+  if (isDefinitiveProviderRejection(error)) return false;
+  return /abort|timeout|timed out|network|fetch failed|ECONN|EAI_AGAIN|socket/i.test(
+    message,
   );
 }
 
@@ -643,15 +692,18 @@ function sanitizeProviderError(message: string) {
     .slice(0, 1_000);
 }
 
-function normalizePhone(value?: string) {
-  let digits = String(value || '').replace(/\D/g, '');
-  if (digits.length === 10) digits = `1${digits}`;
-  return digits || null;
-}
-
 function normalizeEmail(value?: string) {
   const raw = String(value || '').trim().toLowerCase();
   const match = raw.match(/<([^>]+)>/);
   const email = (match?.[1] || raw).trim();
   return email.includes('@') ? email : null;
+}
+
+function emailMessageIdHeader(providerMessageId: string) {
+  const value = String(providerMessageId || '')
+    .replace(/^sendgrid:/, '')
+    .replace(/[<>\r\n]/g, '')
+    .trim()
+    .slice(0, 450);
+  return `<${value}>`;
 }
