@@ -235,7 +235,7 @@ SALES_INBOX_EMAIL=realtytechai@gmail.com
 2. Build with `npm ci` and `npm run build`.
 3. Start with `npm run start:prod`.
 4. Use one replica while migrations run.
-5. Set the health-check path to `/health/readiness`. If system email/Stripe are intentionally absent as complete integrations, readiness permits `not_configured`; partial or unsafe configuration returns HTTP 503.
+5. Set Railway's deployment health-check path to `/health/live`. Monitor `/health/readiness` separately; it remains HTTP 503 while provider approvals or other launch requirements are incomplete, and tenant activation stays blocked.
 6. Confirm Railway Postgres backups and deployment/crash notifications before accepting client data.
 
 ### Vercel frontend

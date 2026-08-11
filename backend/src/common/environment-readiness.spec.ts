@@ -57,6 +57,40 @@ describe('production configuration contract', () => {
     expect(report.systemEmail.status).toBe('not_configured');
   });
 
+  it('boots with safe core configuration while provider approvals remain launch blockers', () => {
+    Object.assign(process.env, {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgres://configured-but-never-returned',
+      FRONTEND_URL: 'https://app.example.com',
+      PUBLIC_APP_URL: 'https://app.example.com',
+      PUBLIC_API_URL: 'https://api.example.com',
+      PLATFORM_ADMIN_EMAILS: 'operator@example.com',
+      GLOBAL_AUTOMATIONS_DISABLED: 'true',
+      BILLING_GRACE_DAYS: '0',
+      TYPEORM_SYNC: 'false',
+      JWT_SECRET: 'x'.repeat(32),
+      INTEGRATIONS_ENCRYPTION_KEY: Buffer.alloc(32, 8).toString('base64'),
+    });
+    for (const name of [
+      'SENDGRID_SENDING_DOMAIN',
+      'SENDGRID_REPLY_DOMAIN',
+      'TWILIO_PRIMARY_CUSTOMER_PROFILE_SID',
+      'TWILIO_SECONDARY_PROFILE_POLICY_SID',
+      'TWILIO_A2P_TRUST_PRODUCT_POLICY_SID',
+      'EXTERNAL_UPTIME_MONITOR_URL',
+    ]) delete process.env[name];
+
+    expect(() => assertProductionEnvironment()).not.toThrow();
+    const report = environmentReadiness();
+    expect(report.platform.status).toBe('down');
+    expect(report.platform.issues).toEqual(
+      expect.arrayContaining([
+        'TWILIO_PRIMARY_CUSTOMER_PROFILE_SID is missing',
+        'EXTERNAL_UPTIME_MONITOR_URL is missing',
+      ]),
+    );
+  });
+
   it('allows system email to be intentionally deferred but rejects partial setup', () => {
     process.env.NODE_ENV = 'production';
     for (const name of [
