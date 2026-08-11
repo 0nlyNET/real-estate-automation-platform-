@@ -145,7 +145,10 @@ export class MessageSafetyService {
         block("CLIENT_SUSPENDED", "Client services are suspended");
       } else if (tenant.lifecycleStatus === "PAUSED") {
         block("CLIENT_PAUSED", "Client services are paused");
-      } else if (tenant.lifecycleStatus !== "ACTIVE") {
+      } else if (
+        tenant.lifecycleStatus !== "ACTIVE" &&
+        !(tenant.lifecycleStatus === "TESTING" && Boolean(lead?.testRunId))
+      ) {
         block(
           "CLIENT_INACTIVE",
           `Client lifecycle is ${tenant.lifecycleStatus || "not active"}`,
@@ -175,6 +178,7 @@ export class MessageSafetyService {
       input.clientId,
       action,
       now,
+      { controlledTest: Boolean(lead?.testRunId) },
     );
     for (const reason of entitlement.reasons) {
       if (/globally paused/i.test(reason)) {

@@ -18,6 +18,7 @@ describe('provider HTTP adapters', () => {
         replyTo: 'replies@reply.lakeview.example',
         subject: 'Follow-up',
         text: 'Hello',
+        categories: ['lead_follow_up'],
         customArgs: { rta_message_id: 'message-123' },
         headers: { 'In-Reply-To': '<inbound-123@example.com>' },
       }),
@@ -30,6 +31,7 @@ describe('provider HTTP adapters', () => {
     expect(payload).toMatchObject({
       from: { email: 'agent@lakeview.example', name: 'Lakeview Realty' },
       reply_to: { email: 'replies@reply.lakeview.example' },
+      categories: ['lead_follow_up'],
       personalizations: [
         {
           custom_args: { rta_message_id: 'message-123' },

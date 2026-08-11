@@ -72,6 +72,7 @@ describe('channel consent and durable opt-outs', () => {
       consentRepo as any,
       leadRepo as any,
       messageRepo as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
     );
     return { service, lead, optOuts, consentRows, consentRepo, messageBuilder };
   }

@@ -19,6 +19,11 @@ import { AiModule } from '../ai/ai.module';
 import { Appointment } from '../client-operations/appointment.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { MessageSafetyService } from './message-safety.service';
+import { LimitsModule } from '../limits/limits.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
+import { SendDecision } from './send-decision.entity';
+import { SendDecisionService } from './send-decision.service';
+import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
 
 @Module({
   imports: [
@@ -30,15 +35,24 @@ import { MessageSafetyService } from './message-safety.service';
       Credential,
       TenantSettings,
       Appointment,
+      SendDecision,
+      SequenceEnrollment,
     ]),
     SequencesModule,
     ComplianceModule,
     ClientOperationsModule,
     SettingsModule,
     AiModule,
+    LimitsModule,
+    IntegrationsModule,
   ],
   controllers: [MessagingController],
-  providers: [MessagingService, InboxSendService, MessageSafetyService],
+  providers: [
+    MessagingService,
+    InboxSendService,
+    MessageSafetyService,
+    SendDecisionService,
+  ],
   exports: [MessagingService, MessageSafetyService],
 })
 export class MessagingModule {}

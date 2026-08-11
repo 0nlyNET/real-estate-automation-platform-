@@ -9,7 +9,7 @@ export default function TermsPage() {
       <main className="py-24">
         <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
           <h1 className="text-4xl font-bold tracking-tight text-foreground">Terms of Service</h1>
-          <p className="mt-4 text-muted-foreground">Effective July 19, 2026</p>
+          <p className="mt-4 text-muted-foreground">Effective August 11, 2026</p>
 
           <div className="mt-12 space-y-8 text-muted-foreground">
             <section>
@@ -77,7 +77,9 @@ export default function TermsPage() {
               <p className="mt-4">
                 Clients retain their rights in submitted business and lead data. The RealtyTechAI service, interface,
                 and original software remain the operator&apos;s materials. Users may not misuse the service, probe or
-                disrupt security, impersonate others, violate law, or attempt unauthorized access.
+                disrupt security, impersonate others, violate law, or attempt unauthorized access. The separate{" "}
+                <Link className="text-primary hover:underline" href="/acceptable-use">Acceptable Use Policy</Link>{" "}
+                applies to all service activity.
               </p>
             </section>
 

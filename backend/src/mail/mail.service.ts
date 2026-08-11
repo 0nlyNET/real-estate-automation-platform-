@@ -22,6 +22,7 @@ export class MailService {
       fromName,
       subject: params.subject,
       text: params.text,
+      categories: ['transactional'],
       ...(params.html ? { html: params.html } : {}),
     });
   }

@@ -83,6 +83,7 @@ export class EntitlementService {
     tenantId: string,
     action: ProtectedServiceAction,
     now = new Date(),
+    options?: { controlledTest?: boolean },
   ): Promise<EntitlementDecision> {
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) {
@@ -100,11 +101,13 @@ export class EntitlementService {
     const workspaceSettings = await this.settings.findOne({ where: { tenantId } });
     const billing = billingEligibility(tenant, now);
     const manualReplyAction = ['send_manual_sms', 'send_manual_email'].includes(action);
+    const controlledTesting =
+      tenant.lifecycleStatus === 'TESTING' && options?.controlledTest === true;
     const lifecycleEligible = manualReplyAction
       ? ['ACTIVE', 'PAUSED', 'ONBOARDING'].includes(
           String(tenant.lifecycleStatus || 'ONBOARDING'),
-        )
-      : tenant.lifecycleStatus === 'ACTIVE';
+        ) || controlledTesting
+      : tenant.lifecycleStatus === 'ACTIVE' || controlledTesting;
     const automationEnabled = workspaceSettings?.automationsEnabled === true;
     const globalAutomationPaused =
       process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true';
@@ -122,7 +125,7 @@ export class EntitlementService {
       reasons.push(`Workspace lifecycle is ${tenant.lifecycleStatus || 'ONBOARDING'}`);
     if (automationAction && globalAutomationPaused)
       reasons.push('Platform automation is globally paused');
-    if (automationAction && !automationEnabled)
+    if (automationAction && !automationEnabled && !controlledTesting)
       reasons.push('Workspace automation is disabled');
 
     return {
@@ -136,8 +139,12 @@ export class EntitlementService {
     };
   }
 
-  async assertAllowed(tenantId: string, action: ProtectedServiceAction) {
-    const decision = await this.evaluate(tenantId, action);
+  async assertAllowed(
+    tenantId: string,
+    action: ProtectedServiceAction,
+    options?: { controlledTest?: boolean },
+  ) {
+    const decision = await this.evaluate(tenantId, action, new Date(), options);
     if (!decision.allowed) {
       throw new ForbiddenException({
         code: 'SERVICE_NOT_ENTITLED',

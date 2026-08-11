@@ -12,6 +12,7 @@ import { Lead } from '../leads/lead.entity';
 import { Message } from '../messaging/message.entity';
 import { ConsentEvidenceDto, LeadConsentDto } from './consent.dto';
 import { isOptOutMessage } from '../../common/opt-out';
+import { CommunicationSuppression } from './communication-suppression.entity';
 
 function normalizePhone(v: string) {
   let digits = (v || '').replace(/\D/g, '');
@@ -40,6 +41,8 @@ export class ComplianceService {
     private readonly leadRepo: Repository<Lead>,
     @InjectRepository(Message)
     private readonly messageRepo: Repository<Message>,
+    @InjectRepository(CommunicationSuppression)
+    private readonly suppressionRepo: Repository<CommunicationSuppression>,
   ) {}
 
   async recordLeadConsent(
@@ -128,6 +131,13 @@ export class ComplianceService {
     }
     if (await this.isOptedOut(tenantId, channel, destination)) {
       return { allowed: false, code: 'RECIPIENT_OPTED_OUT', reason: 'Recipient opted out' };
+    }
+    if (await this.isDeliverySuppressed(tenantId, channel, destination)) {
+      return {
+        allowed: false,
+        code: 'RECIPIENT_SUPPRESSED',
+        reason: 'Recipient destination is suppressed after a permanent delivery failure',
+      };
     }
     const evidence = await this.consentRepo.findOne({
       where: { tenantId, leadId: lead.id, channel },
@@ -240,6 +250,78 @@ export class ComplianceService {
         .execute();
     }
 
+    return saved;
+  }
+
+  async isDeliverySuppressed(
+    tenantId: string,
+    channel: 'sms' | 'email',
+    value: string,
+  ) {
+    const normalized = channel === 'sms' ? normalizePhone(value) : normalizeEmail(value);
+    const row = await this.suppressionRepo.findOne({
+      where: { tenantId, channel, value: normalized } as any,
+    });
+    return Boolean(row && (row.permanent || !row.expiresAt || row.expiresAt > new Date()));
+  }
+
+  async addDeliverySuppression(
+    tenantId: string,
+    channel: 'sms' | 'email',
+    value: string,
+    reason: string,
+    source = 'provider_webhook',
+  ) {
+    const normalized = channel === 'sms' ? normalizePhone(value) : normalizeEmail(value);
+    let row = await this.suppressionRepo.findOne({
+      where: { tenantId, channel, value: normalized } as any,
+    });
+    row = this.suppressionRepo.create({
+      id: row?.id,
+      tenantId,
+      channel,
+      value: normalized,
+      reason,
+      source,
+      permanent: true,
+      expiresAt: null,
+      lastObservedAt: new Date(),
+    });
+    const saved = await this.suppressionRepo.save(row);
+    await this.recordEvent(tenantId, {
+      type: 'deliverability_suppression_recorded',
+      channel,
+      to: normalized,
+      payload: { reason, source },
+    });
+
+    const leads = await this.leadRepo.find({
+      where:
+        channel === 'sms'
+          ? ({ tenantId, phone: normalized } as any)
+          : ({ tenantId, email: normalized } as any),
+    });
+    const leadIds = leads.map((lead) => lead.id);
+    if (leadIds.length) {
+      await this.messageRepo
+        .createQueryBuilder()
+        .update(Message)
+        .set({
+          status: 'canceled',
+          canceledAt: new Date(),
+          errorCode: 'RECIPIENT_SUPPRESSED',
+          sanitizedErrorMessage: 'Canceled after permanent delivery failure',
+          lockedAt: null,
+          lockedBy: null,
+        })
+        .where('"leadId" IN (:...leadIds)', { leadIds })
+        .andWhere('channel = :channel', { channel })
+        .andWhere('direction = :direction', { direction: 'outbound' })
+        .andWhere('status IN (:...statuses)', {
+          statuses: ['created', 'queued', 'pending', 'scheduled'],
+        })
+        .execute();
+    }
     return saved;
   }
 

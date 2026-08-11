@@ -1,4 +1,15 @@
-import { IsBoolean, IsEmail, IsOptional, IsString, IsUUID, Length } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Length,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class CreateClientDto {
   @IsString()
@@ -45,4 +56,36 @@ export class SuspendClientDto {
   @IsString()
   @Length(1, 2000)
   internalNote?: string;
+}
+
+export class UsagePolicyDto {
+  @IsInt() @Min(1)
+  maxSmsPerHour!: number;
+
+  @IsInt() @Min(1)
+  maxSmsPerDay!: number;
+
+  @IsInt() @Min(1)
+  maxEmailsPerHour!: number;
+
+  @IsInt() @Min(1)
+  maxEmailsPerDay!: number;
+
+  @IsInt() @Min(1)
+  maxAiCallsPerDay!: number;
+
+  @IsInt() @Min(1)
+  maxLeadsPerHour!: number;
+
+  @IsInt() @Min(50) @Max(99)
+  warningPercentage!: number;
+
+  @IsNumber() @Min(0)
+  warningCostThresholdUsd!: number;
+
+  @IsNumber() @Min(0.0001)
+  hardCostThresholdUsd!: number;
+
+  @IsBoolean()
+  enabled!: boolean;
 }

@@ -61,6 +61,13 @@ function harness(keyTenants: Record<string, string> = { "key-a": "tenant-a" }) {
   const tenantSettingsRepository = {
     update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
+  const tenantRepository = {
+    count: jest.fn().mockResolvedValue(1),
+    findOne: jest.fn(async ({ where }) => ({
+      id: where.id,
+      lifecycleStatus: 'ACTIVE',
+    })),
+  };
   const manager = {
     query: jest.fn().mockResolvedValue([]),
     getRepository: jest.fn((entity) => {
@@ -68,6 +75,7 @@ function harness(keyTenants: Record<string, string> = { "key-a": "tenant-a" }) {
       if (entity === Lead) return leadRepository;
       if (entity === LeadEvent) return leadEventRepository;
       if (entity === TenantSettings) return tenantSettingsRepository;
+      if (entity.name === 'Tenant') return tenantRepository;
       throw new Error(`Unexpected repository: ${String(entity)}`);
     }),
   };
@@ -101,7 +109,7 @@ function harness(keyTenants: Record<string, string> = { "key-a": "tenant-a" }) {
     dataSource as never,
     settingsRepository as never,
     { findOne: jest.fn(), find: jest.fn() } as never,
-    { count: jest.fn().mockResolvedValue(1) } as never,
+    tenantRepository as never,
     new ZillowLeadAdapter(),
     new RealtorLeadAdapter(),
   );

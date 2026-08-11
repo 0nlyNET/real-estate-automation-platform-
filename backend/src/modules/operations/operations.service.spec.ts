@@ -76,4 +76,37 @@ describe('OperationsService queue ordering and filters', () => {
       }),
     );
   });
+
+  it('automatically resolves a recovered incident and preserves recovery evidence', async () => {
+    const task: any = {
+      id: 'task-1',
+      tenantId: 'tenant-1',
+      category: 'provider_configuration',
+      relatedEntityType: 'tenant',
+      relatedEntityId: 'tenant-1',
+      status: 'open',
+      completedAt: null,
+      evidenceNote: null,
+    };
+    const repo = {
+      find: jest.fn().mockResolvedValue([task]),
+      save: jest.fn(async (value) => value),
+    };
+    const service = new OperationsService(repo as any);
+
+    await expect(
+      service.resolveRecoverableTasks({
+        tenantId: 'tenant-1',
+        category: 'provider_configuration',
+        relatedEntityType: 'tenant',
+        relatedEntityId: 'tenant-1',
+        evidenceNote: 'Provider reconciliation completed automatically.',
+      }),
+    ).resolves.toBe(1);
+    expect(task).toMatchObject({
+      status: 'resolved',
+      evidenceNote: 'Provider reconciliation completed automatically.',
+    });
+    expect(task.completedAt).toBeInstanceOf(Date);
+  });
 });

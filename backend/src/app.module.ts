@@ -37,6 +37,10 @@ import { RealtorComModule } from './modules/realtor-com/realtor-com.module';
 import { ServiceControlModule } from './modules/service-control/service-control.module';
 import { AiModule } from './modules/ai/ai.module';
 import { LeadIngestionModule } from './modules/lead-ingestion/lead-ingestion.module';
+import { LimitsModule } from './modules/limits/limits.module';
+import { DurableJobsModule } from './modules/durable-jobs/durable-jobs.module';
+import { TestingModule } from './modules/testing/testing.module';
+import { OffboardingModule } from './modules/offboarding/offboarding.module';
 
 @Module({
   imports: [
@@ -46,6 +50,7 @@ import { LeadIngestionModule } from './modules/lead-ingestion/lead-ingestion.mod
     }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     TypeOrmModule.forRoot(buildDatabaseOptions()),
+    DurableJobsModule,
     TenantsModule,
     UsersModule,
     AuthModule,
@@ -74,6 +79,9 @@ import { LeadIngestionModule } from './modules/lead-ingestion/lead-ingestion.mod
     ClientOperationsModule,
     AiModule,
     LeadIngestionModule,
+    LimitsModule,
+    TestingModule,
+    OffboardingModule,
   ],
   controllers: [AppController],
   providers: [

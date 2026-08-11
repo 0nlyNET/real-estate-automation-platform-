@@ -25,6 +25,9 @@ import { ClientOperationsService } from '../client-operations/client-operations.
 import { NotificationsService } from '../notifications/notifications.service';
 import { AiConversationControlService } from '../ai/ai-conversation-control.service';
 import { MessageSafetyService } from './message-safety.service';
+import { LimitsService } from '../limits/limits.service';
+import { ProviderConfigService } from '../integrations/provider-config.service';
+import { SendDecisionService } from './send-decision.service';
 
 type ProviderConfig = {
   sendgrid?: {
@@ -37,6 +40,7 @@ type ProviderConfig = {
   twilio?: {
     accountSid?: string;
     authToken?: string;
+    authUsername?: string;
     fromNumber?: string;
     messagingServiceSid?: string;
   };
@@ -70,6 +74,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     private readonly aiControl: AiConversationControlService,
     @Optional() private readonly clientOperations?: ClientOperationsService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly limits?: LimitsService,
+    @Optional() private readonly providerConfig?: ProviderConfigService,
+    @Optional() private readonly sendDecisions?: SendDecisionService,
   ) {}
 
   onModuleInit(): void {
@@ -94,7 +101,22 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     return tenantId;
   }
 
-  private async getProviderConfig(tenantId: string): Promise<ProviderConfig> {
+  private async getProviderConfig(
+    tenantId: string,
+    options?: { allowTesting?: boolean },
+  ): Promise<ProviderConfig> {
+    if (this.providerConfig) {
+      const [twilio, sendgrid] = await Promise.all([
+        this.providerConfig.resolveTwilio(tenantId, options),
+        this.providerConfig.resolveSendGrid(tenantId, options),
+      ]);
+      return {
+        twilio: twilio || undefined,
+        sendgrid: sendgrid || undefined,
+      };
+    }
+    // Temporary compatibility for pre-migration tests and installations. New
+    // production configuration always resolves platform-owned resources above.
     const rows = await this.credentialRepository.find({
       where: { tenant: { id: tenantId } as any },
       relations: ['tenant'],
@@ -384,7 +406,59 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
             communicationType: message.communicationType || message.channel,
             requiresBookingLink: message.requiresBookingLink === true,
           });
-          if (!safety.allowed) return false;
+          if (!safety.allowed) {
+            await this.sendDecisions?.record({
+              message: current,
+              safety,
+              decision: 'blocked',
+            });
+            return false;
+          }
+
+          const usage = await this.limits?.reserveUsage({
+            tenantId: lead.tenantId,
+            metric: message.channel === 'email' ? 'email' : 'sms',
+            idempotencyKey: `message:${message.id}`,
+          });
+          if (usage && !usage.ok) {
+            await this.sendDecisions?.record({
+              message: current,
+              safety,
+              usage,
+              decision: 'blocked',
+            });
+            await this.skipMessage(
+              message,
+              usage.code,
+              usage.message,
+            );
+            return false;
+          }
+
+          const provider = await this.getProviderConfig(lead.tenantId, {
+            allowTesting: Boolean(lead.testRunId),
+          });
+          const providerIdentity = message.channel === 'sms'
+            ? {
+                provider: 'twilio',
+                accountSid: provider.twilio?.accountSid || null,
+                authUsername: provider.twilio?.authUsername || null,
+                messagingServiceSid: provider.twilio?.messagingServiceSid || null,
+                fromNumber: provider.twilio?.fromNumber || null,
+              }
+            : {
+                provider: 'sendgrid',
+                fromEmail: provider.sendgrid?.fromEmail || null,
+                fromName: provider.sendgrid?.fromName || null,
+                inboundAddress: provider.sendgrid?.inboundAddress || null,
+              };
+          await this.sendDecisions?.record({
+            message: current,
+            safety,
+            usage: usage || { ok: true, limiter: 'not_configured' },
+            providerIdentity,
+            decision: 'allowed',
+          });
 
           if (message.authorship === 'ai') {
             const exclusive = await this.aiControl.runAiSendExclusive(
@@ -404,6 +478,13 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
           } else {
             await sendAndPersistAcceptance();
           }
+          await this.sendDecisions?.record({
+            message,
+            safety,
+            usage: usage || { ok: true, limiter: 'not_configured' },
+            providerIdentity,
+            decision: 'submitted',
+          });
           return true;
         },
       );
@@ -483,7 +564,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
 
   private async sendEmail(message: Message) {
     const lead = message.lead;
-    const config = await this.getProviderConfig(lead.tenantId);
+    const config = await this.getProviderConfig(lead.tenantId, {
+      allowTesting: Boolean(lead.testRunId),
+    });
     const apiKey = config.sendgrid?.apiKey;
     const fromEmail = config.sendgrid?.fromEmail;
     const replyTo = normalizeEmail(config.sendgrid?.inboundAddress);
@@ -518,6 +601,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       replyTo,
       subject: message.subject || `Follow-up from ${fromName}`,
       text,
+      categories: ['lead_follow_up'],
       customArgs: { rta_message_id: message.id },
       ...(message.inReplyToProviderMessageId
         ? {
@@ -542,9 +626,12 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
 
   private async sendSms(message: Message) {
     const lead = message.lead;
-    const config = await this.getProviderConfig(lead.tenantId);
+    const config = await this.getProviderConfig(lead.tenantId, {
+      allowTesting: Boolean(lead.testRunId),
+    });
     const accountSid = config.twilio?.accountSid;
     const authToken = config.twilio?.authToken;
+    const authUsername = config.twilio?.authUsername;
     const from = config.twilio?.fromNumber;
     const messagingServiceSid = config.twilio?.messagingServiceSid;
     if (!lead.phone) throw new Error('Missing lead phone');
@@ -556,6 +643,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     const response = await sendTwilioSms({
       accountSid,
       authToken,
+      authUsername,
       to: `+${String(lead.phone).replace(/^\+/, '')}`,
       body: message.body,
       statusCallback,

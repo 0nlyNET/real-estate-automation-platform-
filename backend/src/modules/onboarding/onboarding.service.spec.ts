@@ -59,7 +59,6 @@ describe('operator-controlled workspace activation', () => {
         'contacts',
         'consent_policy',
         'test_lead',
-        'provider_rejection',
         'client_approval',
         'operator_approval',
         'billing_evidence',
@@ -97,16 +96,20 @@ describe('operator-controlled workspace activation', () => {
         publicBusinessName: 'Lakeview Realty',
         primaryMarket: 'Austin, TX',
       },
-      contacts: Object.fromEntries(
-        [
-          'accountOwner',
-          'billingContact',
-          'operationsContact',
-          'supportContact',
-          'approvalContact',
-          'escalationContact',
-        ].map((key) => [key, `${key}@lakeview.example`]),
-      ),
+      contacts: {
+        ...Object.fromEntries(
+          [
+            'accountOwner',
+            'billingContact',
+            'operationsContact',
+            'supportContact',
+            'approvalContact',
+            'escalationContact',
+          ].map((key) => [key, `${key}@lakeview.example`]),
+        ),
+        controlledTestPhone: '+14155550123',
+        controlledTestEmail: 'controlled@lakeview.example',
+      },
       serviceScope: {
         selectedPackage: 'RealtyTechAI managed service',
         includedChannels: ['sms', 'email'],
@@ -136,6 +139,11 @@ describe('operator-controlled workspace activation', () => {
         consentPolicyVersion: 'v1',
         purchasedOrColdListsExcluded: true,
         clientResponsibilityAcknowledged: true,
+        lawfulLeadCollectionCertified: true,
+        termsAcceptedVersion: '2026-08-11',
+        privacyAcceptedVersion: '2026-08-11',
+        acceptableUseAcceptedVersion: '2026-08-11',
+        dataRetentionAcceptedVersion: '2026-08-11',
       },
       integrationConfiguration: {
         providerAccountOwner: 'Lakeview Realty',
@@ -213,7 +221,7 @@ describe('operator-controlled workspace activation', () => {
       findOne: jest.fn().mockResolvedValue({
         id: 'tenant-1',
         status: 'active',
-        lifecycleStatus: 'ONBOARDING',
+        lifecycleStatus: 'TESTING',
       }),
     };
     const stepsBuilder: any = {};
@@ -240,6 +248,20 @@ describe('operator-controlled workspace activation', () => {
       { find: jest.fn().mockImplementation(async () => credentialRows) } as any,
       { createQueryBuilder: jest.fn(() => stepsBuilder) } as any,
       { createTask: jest.fn() } as any,
+      undefined,
+      undefined,
+      {
+        getTenantPolicy: jest.fn().mockResolvedValue({
+          enabled: true,
+          maxSmsPerHour: 60,
+          maxSmsPerDay: 500,
+          maxEmailsPerHour: 120,
+          maxEmailsPerDay: 1000,
+          maxAiCallsPerDay: 200,
+          hardCostThresholdUsd: '30.0000',
+        }),
+        getPlatformPolicy: jest.fn().mockResolvedValue({ enabled: true }),
+      } as any,
     );
 
     await expect(service.readiness('tenant-1')).resolves.toMatchObject({
@@ -292,21 +314,44 @@ describe('operator-controlled workspace activation', () => {
     };
     const service = new OnboardingService(
       records as any,
+      {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'tenant-1',
+          lifecycleStatus: 'TESTING',
+        }),
+      } as any,
       {} as any,
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'test-run-1',
+          tenantId: 'tenant-1',
+          status: 'running',
+          expiresAt: new Date(Date.now() + 60_000),
+          checks: {},
+        }),
+        save: jest.fn(async (value) => value),
+      } as any,
     );
     await service.recordAutomatedTestEvidence('tenant-1', {
       inboundSms: true,
       stop: true,
+      testRunId: 'test-run-1',
     });
     const firstSmsEvidence = record.inboundSmsTestedAt;
     await service.recordAutomatedTestEvidence('tenant-1', {
       inboundSms: true,
       inboundEmail: true,
       providerRejection: true,
+      testRunId: 'test-run-1',
     });
     expect(record).toMatchObject({
       inboundSmsTestedAt: firstSmsEvidence,

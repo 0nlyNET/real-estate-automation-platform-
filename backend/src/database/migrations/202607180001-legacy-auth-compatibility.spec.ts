@@ -15,6 +15,7 @@ import { ServiceSuspension1784764800001 } from "./202607230001-service-suspensio
 import { ControlledAiLeadAgent1784937600001 } from "./202607250001-controlled-ai-lead-agent";
 import { StripeSetupFeeTracking1785801600001 } from "./202608040001-stripe-setup-fee-tracking";
 import { FirstClientSafetyPipeline1785974400001 } from "./202608060001-first-client-safety-pipeline";
+import { ManagedProviderArchitecture1786492800001 } from "./202608120001-managed-provider-architecture";
 import { TenantSettings } from "../../modules/settings/tenant-settings.entity";
 
 function memoryDatabase() {
@@ -99,6 +100,7 @@ describe("legacy auth compatibility migration", () => {
         ControlledAiLeadAgent1784937600001,
         StripeSetupFeeTracking1785801600001,
         FirstClientSafetyPipeline1785974400001,
+        ManagedProviderArchitecture1786492800001,
       ],
       migrationsRun: true,
       migrationsTableName: "app_migrations",

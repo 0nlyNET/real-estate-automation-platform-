@@ -56,6 +56,19 @@ export class ProspectApplication {
   @Column({ name: 'notification_error', type: 'text', nullable: true })
   notificationError?: string | null;
 
+  @Index({ unique: true })
+  @Column({ name: 'converted_tenant_id', type: 'uuid', nullable: true })
+  convertedTenantId?: string | null;
+
+  @Column({ name: 'conversion_status', default: 'not_started' })
+  conversionStatus!: 'not_started' | 'created' | 'failed';
+
+  @Column({ name: 'converted_at', type: 'timestamptz', nullable: true })
+  convertedAt?: Date | null;
+
+  @Column({ name: 'conversion_error', type: 'text', nullable: true })
+  conversionError?: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

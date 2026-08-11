@@ -30,6 +30,7 @@ import { ConversationAiState } from './conversation-ai-state.entity';
 import { OpenAiProvider } from './openai.provider';
 import { PlatformAiControl } from './platform-ai-control.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
+import { LimitsModule } from '../limits/limits.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
     EntitlementsModule,
     ClientOperationsModule,
     SequencesModule,
+    LimitsModule,
   ],
   controllers: [AiController, AdminAiController],
   providers: [

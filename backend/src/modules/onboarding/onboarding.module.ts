@@ -9,6 +9,11 @@ import { Credential } from '../settings/credential.entity';
 import { SequenceStep } from '../sequences/sequence-step.entity';
 import { OperationsModule } from '../operations/operations.module';
 import { CommonModule } from '../../common/common.module';
+import { LimitsModule } from '../limits/limits.module';
+import { AuditModule } from '../audit/audit.module';
+import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
+import { TestRun } from '../testing/test-run.entity';
 
 @Module({
   imports: [
@@ -18,9 +23,14 @@ import { CommonModule } from '../../common/common.module';
       TenantSettings,
       Credential,
       SequenceStep,
+      TenantMessagingResource,
+      TenantEmailIdentity,
+      TestRun,
     ]),
     OperationsModule,
     CommonModule,
+    LimitsModule,
+    AuditModule,
   ],
   controllers: [OnboardingController],
   providers: [OnboardingService],

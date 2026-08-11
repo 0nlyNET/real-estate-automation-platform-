@@ -10,12 +10,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { apiFetch } from "@/lib/api"
 import { fetchMe, type Me } from "@/lib/me"
-import { AlertTriangle, CheckCircle2, KeyRound, Mail, MessageSquareText, RefreshCw, ShieldCheck, Trash2 } from "lucide-react"
+import { AlertTriangle, CheckCircle2, KeyRound, Mail, MessageSquareText, RefreshCw, ShieldCheck } from "lucide-react"
 
 type ProviderStatus = {
   configured: boolean
   connected: boolean
-  status: "disconnected" | "configured" | "connected" | "error"
+  status: "disconnected" | "configured" | "connected" | "error" | "pending" | "provisioning" | "testing" | "ready" | "blocked" | "failed"
   error: string | null
   lastSync: string | null
   accountSid?: string | null
@@ -26,6 +26,11 @@ type ProviderStatus = {
     fromEmail?: string | null
     fromName?: string | null
     inboundAddress?: string | null
+    complianceStatus?: string | null
+    customerProfileSid?: string | null
+    brandSid?: string | null
+    campaignSid?: string | null
+    reputationStatus?: string | null
   }
 }
 
@@ -46,9 +51,9 @@ type Tenant = {
 }
 
 function statusBadge(status?: ProviderStatus | null) {
-  if (status?.status === "connected") return <Badge>Connected</Badge>
-  if (status?.status === "configured") return <Badge variant="outline">Test required</Badge>
-  if (status?.status === "error") return <Badge variant="destructive">Needs attention</Badge>
+  if (status?.status === "connected" || status?.status === "ready") return <Badge>Connected</Badge>
+  if (["configured", "pending", "provisioning", "testing"].includes(status?.status || "")) return <Badge variant="outline">{status?.status === "provisioning" ? "Provisioning" : "Test required"}</Badge>
+  if (["error", "blocked", "failed"].includes(status?.status || "")) return <Badge variant="destructive">Needs attention</Badge>
   return <Badge variant="secondary">Not configured</Badge>
 }
 
@@ -76,12 +81,12 @@ export default function ManagedIntegrations() {
   const [platformSendgridFrom, setPlatformSendgridFrom] = useState("")
   const [platformSendgridTo, setPlatformSendgridTo] = useState("")
 
-  const [tenantTwilioNumber, setTenantTwilioNumber] = useState("")
   const [tenantTwilioTestTo, setTenantTwilioTestTo] = useState("")
-  const [tenantFromEmail, setTenantFromEmail] = useState("")
-  const [tenantFromName, setTenantFromName] = useState("")
-  const [tenantInboundAddress, setTenantInboundAddress] = useState("")
   const [tenantEmailTestTo, setTenantEmailTestTo] = useState("")
+  const [twilioComplianceStatus, setTwilioComplianceStatus] = useState<"pending" | "approved" | "blocked">("pending")
+  const [twilioCustomerProfileSid, setTwilioCustomerProfileSid] = useState("")
+  const [twilioBrandSid, setTwilioBrandSid] = useState("")
+  const [twilioCampaignSid, setTwilioCampaignSid] = useState("")
 
   const selectedTenant = useMemo(
     () => tenants.find((item) => item.id === tenantId) || null,
@@ -95,10 +100,11 @@ export default function ManagedIntegrations() {
     }
     const result = await apiFetch<TenantSummary>(`/admin/tenants/${id}/integrations`)
     setTenant(result)
-    setTenantTwilioNumber(result.twilio.display?.fromNumber || "")
-    setTenantFromEmail(result.sendgrid.display?.fromEmail || "")
-    setTenantFromName(result.sendgrid.display?.fromName || "")
-    setTenantInboundAddress(result.sendgrid.display?.inboundAddress || "")
+    const status = result.twilio.display?.complianceStatus
+    if (status === "approved" || status === "blocked" || status === "pending") setTwilioComplianceStatus(status)
+    setTwilioCustomerProfileSid(result.twilio.display?.customerProfileSid || "")
+    setTwilioBrandSid(result.twilio.display?.brandSid || "")
+    setTwilioCampaignSid(result.twilio.display?.campaignSid || "")
   }, [])
 
   const load = useCallback(async () => {
@@ -154,7 +160,7 @@ export default function ManagedIntegrations() {
         setTwilioAuthToken("")
         setPlatform(await apiFetch<PlatformSummary>("/admin/platform-integrations"))
       },
-      "Platform Twilio credentials saved. Existing client assignments now require a new test.",
+      "Platform Twilio credentials saved. Reconcile any client that still needs resources.",
     )
 
   const testPlatformTwilio = () =>
@@ -189,7 +195,7 @@ export default function ManagedIntegrations() {
         setSendgridApiKey("")
         setPlatform(await apiFetch<PlatformSummary>("/admin/platform-integrations"))
       },
-      "Platform SendGrid API key saved. Existing client assignments now require a new test.",
+      "Platform SendGrid API key saved. Reconcile any client that still needs an identity.",
     )
 
   const testPlatformSendGrid = () =>
@@ -212,17 +218,33 @@ export default function ManagedIntegrations() {
       platformSendgridTo ? "Platform SendGrid test email sent." : "Platform SendGrid credentials verified.",
     )
 
-  const assignTwilio = () =>
+  const reconcileTenant = () =>
     run(
-      "tenant-twilio-save",
+      "tenant-provisioning-reconcile",
       async () => {
-        await apiFetch(`/admin/tenants/${tenantId}/integrations/twilio`, {
-          method: "PUT",
-          body: { fromNumber: tenantTwilioNumber },
+        const result = await apiFetch<{ ok: boolean; errors: string[] }>(`/admin/tenants/${tenantId}/provisioning/reconcile`, { method: "POST" })
+        if (!result.ok) throw new Error(result.errors.join("; ") || "Provisioning needs attention")
+        await loadTenant(tenantId)
+      },
+      `Managed providers reconciled for ${selectedTenant?.name || "client"}.`,
+    )
+
+  const saveTwilioCompliance = () =>
+    run(
+      "tenant-twilio-compliance",
+      async () => {
+        await apiFetch(`/admin/tenants/${tenantId}/provisioning/twilio-compliance`, {
+          method: "PATCH",
+          body: {
+            status: twilioComplianceStatus,
+            customerProfileSid: twilioCustomerProfileSid || undefined,
+            brandSid: twilioBrandSid || undefined,
+            campaignSid: twilioCampaignSid || undefined,
+          },
         })
         await loadTenant(tenantId)
       },
-      `Twilio number assigned to ${selectedTenant?.name || "client"}. Run the client test next.`,
+      "Twilio compliance status saved. Record only provider-confirmed approval.",
     )
 
   const testTenantTwilio = () =>
@@ -245,23 +267,6 @@ export default function ManagedIntegrations() {
       tenantTwilioTestTo ? "Client Twilio test SMS sent." : "Client Twilio assignment verified.",
     )
 
-  const assignSendGrid = () =>
-    run(
-      "tenant-sendgrid-save",
-      async () => {
-        await apiFetch(`/admin/tenants/${tenantId}/integrations/sendgrid`, {
-          method: "PUT",
-          body: {
-            fromEmail: tenantFromEmail,
-            fromName: tenantFromName,
-            inboundAddress: tenantInboundAddress,
-          },
-        })
-        await loadTenant(tenantId)
-      },
-      `SendGrid sender assigned to ${selectedTenant?.name || "client"}. Run the client test next.`,
-    )
-
   const testTenantSendGrid = () =>
     run(
       "tenant-sendgrid-test",
@@ -274,18 +279,6 @@ export default function ManagedIntegrations() {
         await loadTenant(tenantId)
       },
       tenantEmailTestTo ? "Client SendGrid test email sent." : "Client SendGrid assignment verified.",
-    )
-
-  const removeTenantProvider = (provider: "twilio" | "sendgrid") =>
-    run(
-      `tenant-${provider}-remove`,
-      async () => {
-        await apiFetch(`/admin/tenants/${tenantId}/integrations/${provider}`, {
-          method: "DELETE",
-        })
-        await loadTenant(tenantId)
-      },
-      `${provider === "twilio" ? "Twilio" : "SendGrid"} removed from ${selectedTenant?.name || "client"}.`,
     )
 
   if (loading) {
@@ -313,7 +306,7 @@ export default function ManagedIntegrations() {
         <div>
           <h1 className="text-2xl font-semibold">Managed messaging integrations</h1>
           <p className="text-sm text-muted-foreground">
-            Save platform secrets once, then assign non-secret routing details to each client.
+            Save platform secrets once; RealtyTechAI provisions and reconciles each client automatically.
           </p>
         </div>
         <Button variant="outline" onClick={() => void load()} disabled={Boolean(busy)}>
@@ -377,8 +370,8 @@ export default function ManagedIntegrations() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Client routing assignments</CardTitle>
-          <p className="text-sm text-muted-foreground">Assign a dedicated phone number and email identity without giving the client access to provider secrets.</p>
+          <CardTitle>Client managed resources</CardTitle>
+          <p className="text-sm text-muted-foreground">Provision a dedicated Twilio subaccount, Messaging Service, phone number, and random SendGrid reply identity.</p>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
@@ -390,17 +383,24 @@ export default function ManagedIntegrations() {
           </div>
 
           {tenantId ? (
-            <div className="grid gap-4 xl:grid-cols-2">
+            <div className="space-y-4">
+              <Button onClick={reconcileTenant} disabled={Boolean(busy)}>Provision / reconcile managed providers</Button>
+              <div className="grid gap-4 xl:grid-cols-2">
               <Card>
                 <CardHeader className="flex flex-row items-start justify-between gap-4"><CardTitle className="text-base">Client Twilio</CardTitle>{statusBadge(tenant?.twilio)}</CardHeader>
                 <CardContent className="space-y-4">
                   {tenant?.twilio.error ? <Alert variant="destructive"><AlertDescription>{tenant.twilio.error}</AlertDescription></Alert> : null}
-                  <div className="space-y-2"><Label>Assigned sending number</Label><Input value={tenantTwilioNumber} onChange={(event) => setTenantTwilioNumber(event.target.value)} placeholder="+19296395472" /></div>
-                  <Button onClick={assignTwilio} disabled={Boolean(busy) || !tenantTwilioNumber}>Save assignment</Button>
+                  <div className="space-y-2"><Label>Assigned sending number</Label><Input readOnly value={tenant?.twilio.display?.fromNumber || "Provisioning not complete"} /></div>
+                  <div className="space-y-2"><Label>Provider-confirmed messaging compliance</Label><select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={twilioComplianceStatus} onChange={(event) => setTwilioComplianceStatus(event.target.value as "pending" | "approved" | "blocked")}><option value="pending">Pending</option><option value="approved">Approved</option><option value="blocked">Blocked</option></select></div>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="space-y-2"><Label>Customer profile SID</Label><Input value={twilioCustomerProfileSid} onChange={(event) => setTwilioCustomerProfileSid(event.target.value)} placeholder="BU…" /></div>
+                    <div className="space-y-2"><Label>Brand SID</Label><Input value={twilioBrandSid} onChange={(event) => setTwilioBrandSid(event.target.value)} placeholder="BN…" /></div>
+                    <div className="space-y-2"><Label>Campaign SID</Label><Input value={twilioCampaignSid} onChange={(event) => setTwilioCampaignSid(event.target.value)} placeholder="CM…" /></div>
+                  </div>
+                  <Button variant="outline" onClick={saveTwilioCompliance} disabled={Boolean(busy) || !tenant?.twilio.configured}>Save compliance status</Button>
                   <div className="space-y-2 border-t pt-4"><Label>Test recipient</Label><Input value={tenantTwilioTestTo} onChange={(event) => setTenantTwilioTestTo(event.target.value)} placeholder="+1…" /></div>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" onClick={testTenantTwilio} disabled={Boolean(busy) || !tenant?.twilio.configured}>Test client SMS</Button>
-                    {tenant?.twilio.configured ? <Button variant="ghost" onClick={() => removeTenantProvider("twilio")} disabled={Boolean(busy)}><Trash2 /> Remove</Button> : null}
                   </div>
                 </CardContent>
               </Card>
@@ -409,17 +409,15 @@ export default function ManagedIntegrations() {
                 <CardHeader className="flex flex-row items-start justify-between gap-4"><CardTitle className="text-base">Client SendGrid</CardTitle>{statusBadge(tenant?.sendgrid)}</CardHeader>
                 <CardContent className="space-y-4">
                   {tenant?.sendgrid.error ? <Alert variant="destructive"><AlertDescription>{tenant.sendgrid.error}</AlertDescription></Alert> : null}
-                  <div className="space-y-2"><Label>Verified from email</Label><Input type="email" value={tenantFromEmail} onChange={(event) => setTenantFromEmail(event.target.value)} /></div>
-                  <div className="space-y-2"><Label>Sender name</Label><Input value={tenantFromName} onChange={(event) => setTenantFromName(event.target.value)} /></div>
-                  <div className="space-y-2"><Label>Inbound reply address</Label><Input type="email" value={tenantInboundAddress} onChange={(event) => setTenantInboundAddress(event.target.value)} placeholder="replies+client@reply.example.com" /></div>
-                  <Button onClick={assignSendGrid} disabled={Boolean(busy) || !tenantFromEmail || !tenantFromName || !tenantInboundAddress}>Save assignment</Button>
+                  <div className="space-y-2"><Label>Managed sender</Label><Input readOnly value={tenant?.sendgrid.display?.fromEmail || "Provisioning not complete"} /></div>
+                  <div className="space-y-2"><Label>Sender name</Label><Input readOnly value={tenant?.sendgrid.display?.fromName || selectedTenant?.name || ""} /></div>
                   <div className="space-y-2 border-t pt-4"><Label>Test recipient</Label><Input type="email" value={tenantEmailTestTo} onChange={(event) => setTenantEmailTestTo(event.target.value)} /></div>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" onClick={testTenantSendGrid} disabled={Boolean(busy) || !tenant?.sendgrid.configured}>Test client email</Button>
-                    {tenant?.sendgrid.configured ? <Button variant="ghost" onClick={() => removeTenantProvider("sendgrid")} disabled={Boolean(busy)}><Trash2 /> Remove</Button> : null}
                   </div>
                 </CardContent>
               </Card>
+              </div>
             </div>
           ) : null}
         </CardContent>

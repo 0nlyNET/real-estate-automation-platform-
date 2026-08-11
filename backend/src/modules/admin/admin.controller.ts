@@ -14,6 +14,7 @@ import {
   Req,
   Res,
   UseGuards,
+  Optional,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -27,6 +28,7 @@ import {
   ImpersonateDto,
   SetPlatformStaffDto,
   SuspendClientServicesDto,
+  UsagePolicyDto,
 } from './admin.dto';
 import { AuditService } from '../audit/audit.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
@@ -50,6 +52,11 @@ import {
   TestTwilioDto,
 } from '../integrations/integrations.dto';
 import type { ManagedMessagingProvider } from '../integrations/platform-integrations.service';
+import { LimitsService } from '../limits/limits.service';
+import { TenantProvisioningService } from '../integrations/tenant-provisioning.service';
+import { TwilioProvisioningService } from '../integrations/twilio-provisioning.service';
+import { TestingService } from '../testing/testing.service';
+import { OffboardingService } from '../offboarding/offboarding.service';
 
 @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 @Controller('admin')
@@ -61,6 +68,11 @@ export class AdminController {
     private readonly onboarding: OnboardingService,
     private readonly serviceControl: ServiceControlService,
     private readonly platformIntegrations: PlatformIntegrationsService,
+    private readonly limits: LimitsService,
+    @Optional() private readonly provisioning?: TenantProvisioningService,
+    @Optional() private readonly twilioProvisioning?: TwilioProvisioningService,
+    @Optional() private readonly testing?: TestingService,
+    @Optional() private readonly offboarding?: OffboardingService,
   ) {}
 
   @Get('overview')
@@ -76,6 +88,46 @@ export class AdminController {
   @Get('tenants/:tenantId/readiness')
   readiness(@Param('tenantId') tenantId: string) {
     return this.onboarding.readiness(tenantId);
+  }
+
+  @Get('tenants/:tenantId/usage-policy')
+  @UseGuards(PlatformAdminGuard)
+  async tenantUsagePolicy(@Param('tenantId') tenantId: string) {
+    return this.limits.publicPolicy(
+      await this.limits.ensureTenantPolicy(tenantId),
+    );
+  }
+
+  @Get('tenants/:tenantId/usage-report')
+  @UseGuards(PlatformAdminGuard)
+  tenantUsageReport(
+    @Param('tenantId') tenantId: string,
+    @Query('days') days?: string,
+  ) {
+    return this.limits.tenantUsageReport(tenantId, Number(days || 30));
+  }
+
+  @Put('tenants/:tenantId/usage-policy')
+  @UseGuards(PlatformAdminGuard)
+  updateTenantUsagePolicy(
+    @Param('tenantId') tenantId: string,
+    @Body() body: UsagePolicyDto,
+  ) {
+    return this.limits.updateTenantPolicy(tenantId, body);
+  }
+
+  @Get('platform-usage-policy')
+  @UseGuards(PlatformAdminGuard)
+  async platformUsagePolicy() {
+    const policy = await this.limits.getPlatformPolicy();
+    if (!policy) throw new NotFoundException('Platform usage policy is missing');
+    return this.limits.publicPolicy(policy);
+  }
+
+  @Put('platform-usage-policy')
+  @UseGuards(PlatformAdminGuard)
+  updatePlatformUsagePolicy(@Body() body: UsagePolicyDto) {
+    return this.limits.updatePlatformPolicy(body);
   }
 
   @Post('tenants/:tenantId/onboarding-evidence')
@@ -100,10 +152,56 @@ export class AdminController {
     return this.onboarding.activate(tenantId, req.user.sub);
   }
 
+  @Post('tenants/:tenantId/testing')
+  @UseGuards(PlatformAdminGuard)
+  beginTesting(@Param('tenantId') tenantId: string, @Req() req: any) {
+    return this.onboarding.beginTesting(tenantId, req.user.sub);
+  }
+
+  @Post('tenants/:tenantId/testing/run')
+  @UseGuards(PlatformAdminGuard)
+  runControlledTesting(
+    @Param('tenantId') tenantId: string,
+    @Req() req: any,
+    @Body() body: { smsRecipient?: string; emailRecipient?: string },
+  ) {
+    if (!this.testing) throw new BadRequestException('Testing service unavailable');
+    return this.testing.start(tenantId, req.user.sub, body);
+  }
+
+  @Get('tenants/:tenantId/testing/runs')
+  testingRuns(@Param('tenantId') tenantId: string) {
+    if (!this.testing) throw new BadRequestException('Testing service unavailable');
+    return this.testing.list(tenantId);
+  }
+
   @Post('tenants/:tenantId/pause')
   @UseGuards(PlatformAdminGuard)
   pause(@Param('tenantId') tenantId: string) {
     return this.onboarding.pause(tenantId);
+  }
+
+  @Post('tenants/:tenantId/offboarding')
+  @UseGuards(PlatformAdminGuard)
+  requestOffboarding(
+    @Param('tenantId') tenantId: string,
+    @Req() req: any,
+    @Body() body: { reason: string; retentionDays?: number },
+  ) {
+    if (!this.offboarding) throw new BadRequestException('Offboarding service unavailable');
+    return this.offboarding.request({
+      tenantId,
+      reason: body.reason,
+      retentionDays: body.retentionDays,
+      requestedById: req.user.sub,
+    });
+  }
+
+  @Get('tenants/:tenantId/offboarding/export')
+  @UseGuards(PlatformAdminGuard)
+  exportOffboarding(@Param('tenantId') tenantId: string) {
+    if (!this.offboarding) throw new BadRequestException('Offboarding service unavailable');
+    return this.offboarding.export(tenantId);
   }
 
   @Post('tenants/:tenantId/suspend')
@@ -140,6 +238,72 @@ export class AdminController {
   @UseGuards(PlatformAdminGuard)
   async systemHealth() {
     return this.admin.systemHealth();
+  }
+
+  @Get('setup-checker')
+  @UseGuards(PlatformAdminGuard)
+  async setupChecker() {
+    const [health, providers] = await Promise.all([
+      this.admin.systemHealth(),
+      this.platformIntegrations.platformSummary(),
+    ]);
+    const configured = (name: string) =>
+      Boolean(String(process.env[name] || '').trim());
+    const item = (
+      label: string,
+      passed: boolean,
+      nextAction: string,
+      detail?: unknown,
+    ) => ({
+      label,
+      status: passed ? 'ready' : 'action_required',
+      nextAction: passed ? null : nextAction,
+      ...(detail === undefined ? {} : { detail }),
+    });
+    const groups = {
+      twilio: [
+        item('Parent account connection', providers.twilio.connected, 'Save and test the Twilio parent Account SID and Auth Token.'),
+        item('Inbound SMS webhook', configured('TWILIO_WEBHOOK_URL'), 'Configure the public HTTPS Twilio inbound webhook URL.'),
+        item('Delivery callback', configured('TWILIO_STATUS_CALLBACK_URL'), 'Configure the public HTTPS Twilio status callback URL.'),
+        item('Primary compliance profile', configured('TWILIO_PRIMARY_CUSTOMER_PROFILE_SID'), 'Complete the one-time Twilio primary profile and save its BU SID.'),
+        item('Secondary profile policy', configured('TWILIO_SECONDARY_PROFILE_POLICY_SID'), 'Save Twilio’s current Secondary Customer Profile policy SID.'),
+        item('A2P trust policy', configured('TWILIO_A2P_TRUST_PRODUCT_POLICY_SID'), 'Save Twilio’s current A2P Trust Product policy SID.'),
+      ],
+      sendgrid: [
+        item('Parent account connection', providers.sendgrid.connected, 'Save and test the SendGrid parent API key.'),
+        item('Authenticated sending domain', configured('SENDGRID_SENDING_DOMAIN'), 'Authenticate the sending domain with SPF and DKIM, then configure it.'),
+        item('Inbound parse domain', configured('SENDGRID_REPLY_DOMAIN'), 'Configure the unique inbound reply domain.'),
+        item('Authenticated inbound webhook', configured('SENDGRID_INBOUND_USERNAME') && configured('SENDGRID_INBOUND_PASSWORD'), 'Configure inbound parse webhook authentication.'),
+      ],
+      openai: [
+        item('API key', configured('OPENAI_API_KEY'), 'Configure the platform OpenAI API key.'),
+        item('Model', configured('OPENAI_MODEL'), 'Pin the approved production model.'),
+      ],
+      stripe: [
+        item('Secret key', configured('STRIPE_SECRET_KEY'), 'Configure the Stripe production secret key.'),
+        item('Signed webhook', configured('STRIPE_WEBHOOK_SECRET'), 'Configure and verify the Stripe webhook signing secret.'),
+        item('Monthly price', configured('STRIPE_PRICE_SERVICE_MONTH'), 'Configure the managed-service monthly price ID.'),
+        item('Setup price', configured('STRIPE_PRICE_SETUP_ONCE'), 'Configure the one-time setup price ID.'),
+      ],
+      database: [
+        item('Database connection', health.dbConnected === true, 'Restore the production database connection.'),
+        item('Schema synchronization disabled', process.env.TYPEORM_SYNC === 'false', 'Set TYPEORM_SYNC=false and deploy migrations.'),
+      ],
+      application: [
+        item('Integration encryption', health.environment.encryption.status === 'up', 'Configure a protected 32-byte integration encryption key.'),
+        item('Public API URL', configured('PUBLIC_API_URL'), 'Configure the public HTTPS API origin.'),
+        item('Public app URL', configured('PUBLIC_APP_URL'), 'Configure the public HTTPS application origin.'),
+        item('Platform owner', configured('PLATFORM_ADMIN_EMAILS'), 'Configure at least one platform owner email.'),
+        item('External uptime monitor', configured('EXTERNAL_UPTIME_MONITOR_URL'), 'Create an external monitor for /health/live and /health/ready, then record its URL.'),
+      ],
+    };
+    const all = Object.values(groups).flat();
+    return {
+      ready: all.every((entry) => entry.status === 'ready'),
+      actionRequired: all.filter((entry) => entry.status !== 'ready').length,
+      groups,
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   @Get('tenants')
@@ -325,6 +489,35 @@ export class AdminController {
     return this.platformIntegrations.tenantSummary(tenantId);
   }
 
+  @Post('tenants/:tenantId/provisioning/reconcile')
+  @UseGuards(PlatformAdminGuard)
+  reconcileTenantProvisioning(@Param('tenantId') tenantId: string) {
+    if (!this.provisioning) throw new BadRequestException('Provisioning service unavailable');
+    return this.provisioning.reconcileTenantProvisioning(tenantId);
+  }
+
+  @Patch('tenants/:tenantId/provisioning/twilio-compliance')
+  @UseGuards(PlatformAdminGuard)
+  async setTwilioCompliance(
+    @Param('tenantId') tenantId: string,
+    @Body() body: {
+      status: 'not_started' | 'pending' | 'approved' | 'blocked';
+      customerProfileSid?: string;
+      brandSid?: string;
+      campaignSid?: string;
+    },
+  ) {
+    if (!['not_started', 'pending', 'approved', 'blocked'].includes(body.status)) {
+      throw new BadRequestException('Invalid Twilio compliance status');
+    }
+    if (!this.twilioProvisioning) {
+      throw new BadRequestException('Twilio provisioning service unavailable');
+    }
+    const resource = await this.twilioProvisioning.setComplianceStatus(tenantId, body.status, body);
+    await this.provisioning?.reconcileTenantProvisioning(tenantId);
+    return resource;
+  }
+
   @Put('tenants/:tenantId/integrations/twilio')
   @UseGuards(PlatformAdminGuard)
   assignTenantTwilio(
@@ -336,11 +529,13 @@ export class AdminController {
 
   @Post('tenants/:tenantId/integrations/twilio/test')
   @UseGuards(PlatformAdminGuard)
-  testTenantTwilio(
+  async testTenantTwilio(
     @Param('tenantId') tenantId: string,
     @Body() body: TestTwilioDto,
   ) {
-    return this.platformIntegrations.testTenantTwilio(tenantId, body);
+    const result = await this.platformIntegrations.testTenantTwilio(tenantId, body);
+    if (result.ok) await this.provisioning?.reconcileTenantProvisioning(tenantId);
+    return result;
   }
 
   @Put('tenants/:tenantId/integrations/sendgrid')
@@ -354,11 +549,13 @@ export class AdminController {
 
   @Post('tenants/:tenantId/integrations/sendgrid/test')
   @UseGuards(PlatformAdminGuard)
-  testTenantSendGrid(
+  async testTenantSendGrid(
     @Param('tenantId') tenantId: string,
     @Body() body: TestSendGridDto,
   ) {
-    return this.platformIntegrations.testTenantSendGrid(tenantId, body);
+    const result = await this.platformIntegrations.testTenantSendGrid(tenantId, body);
+    if (result.ok) await this.provisioning?.reconcileTenantProvisioning(tenantId);
+    return result;
   }
 
   @Delete('tenants/:tenantId/integrations/:provider')

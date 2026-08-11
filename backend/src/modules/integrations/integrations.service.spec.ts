@@ -131,4 +131,46 @@ describe("IntegrationsService connection states", () => {
     expect(JSON.stringify(tenantA)).not.toContain("tenant-b-secret");
     expect(JSON.stringify(tenantA)).not.toContain("b@example.test");
   });
+
+  it('shows managed readiness and sender identity without provider credentials', async () => {
+    const managed = new IntegrationsService(
+      {
+        find: jest.fn().mockResolvedValue([]),
+      } as any,
+      { createTask: jest.fn() } as any,
+      undefined,
+      {
+        findOne: jest.fn().mockResolvedValue({
+          tenantId: 'tenant-a',
+          phoneNumber: '+15555550100',
+          smsStatus: 'testing',
+          a2pComplianceStatus: 'approved',
+          lastError: null,
+          updatedAt: new Date(),
+        }),
+      } as any,
+      {
+        findOne: jest.fn().mockResolvedValue({
+          tenantId: 'tenant-a',
+          fromEmail: 'agent@send.example.com',
+          fromName: 'Agent Realty',
+          emailStatus: 'ready',
+          reputationStatus: 'healthy',
+          lastError: null,
+          lastVerifiedAt: new Date(),
+          updatedAt: new Date(),
+        }),
+      } as any,
+    );
+    const result = await managed.list('tenant-a');
+    expect(result.find((item) => item.provider === 'twilio')).toMatchObject({
+      status: 'configured',
+      display: { fromNumber: '+15555550100', readiness: 'testing' },
+    });
+    expect(result.find((item) => item.provider === 'sendgrid')).toMatchObject({
+      status: 'connected',
+      display: { fromEmail: 'agent@send.example.com', readiness: 'ready' },
+    });
+    expect(JSON.stringify(result)).not.toMatch(/authToken|apiKey|accountSid|subaccountSid/i);
+  });
 });

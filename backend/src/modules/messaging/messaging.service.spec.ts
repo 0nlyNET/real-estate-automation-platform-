@@ -14,6 +14,8 @@ function buildService(
     compliance?: any;
     messageSafety?: any;
     aiControl?: any;
+    providerConfig?: any;
+    sendDecisions?: any;
   } = {},
 ) {
   const dataSource = {
@@ -54,6 +56,11 @@ function buildService(
       ),
       markWaitingForHuman: jest.fn().mockResolvedValue({}),
     } as any,
+    undefined,
+    undefined,
+    undefined,
+    options.providerConfig,
+    options.sendDecisions,
   );
 }
 
@@ -354,6 +361,87 @@ describe('outbound message worker safety', () => {
           },
         },
       ],
+    });
+  });
+
+  it('sends automated email through managed SendGrid without tenant credentials', async () => {
+    process.env.FRONTEND_URL = 'https://app.example.com';
+    const lead = Object.assign(new Lead(), {
+      id: 'lead-managed-email',
+      tenantId: 'tenant-1',
+      email: 'lead@example.com',
+    });
+    const message = Object.assign(new Message(), {
+      id: '00000000-0000-4000-8000-000000000088',
+      leadId: lead.id,
+      lead,
+      channel: 'email',
+      direction: 'outbound',
+      body: 'A useful follow-up.\n\nUnsubscribe: {{unsubscribeUrl}}',
+      subject: 'Your home search',
+      status: 'queued',
+      authorship: 'template',
+      attemptCount: 0,
+    });
+    const messageRepo = {
+      findOne: jest.fn().mockResolvedValue(message),
+      save: jest.fn(async (value) => value),
+    };
+    const manager = {
+      query: jest.fn(async (sql: string) =>
+        sql.includes("AND status = 'sending'") ? [] : [{ id: message.id }],
+      ),
+    };
+    const credentialRepo = { find: jest.fn().mockResolvedValue([]) };
+    const providerConfig = {
+      resolveTwilio: jest.fn().mockResolvedValue(null),
+      resolveSendGrid: jest.fn().mockResolvedValue({
+        connected: true,
+        apiKey: 'SG.platform-only',
+        fromEmail: 'sunset-tenant1@send.example.com',
+        fromName: 'Sunset Realty',
+        inboundAddress: 'tenant1@reply.example.com',
+        routingKey: 'tenant1@reply.example.com',
+      }),
+    };
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: new Headers({ 'x-message-id': 'managed-request' }),
+    } as Response);
+    const service = buildService({
+      dataSource: {
+        transaction: jest.fn(async (callback) => callback(manager)),
+      },
+      messageRepo,
+      leadRepo: { save: jest.fn(async (value) => value) },
+      eventRepo: {
+        create: jest.fn((value) => value),
+        save: jest.fn(async (value) => value),
+      },
+      credentialRepo,
+      providerConfig,
+      compliance: {
+        createUnsubscribeToken: jest.fn().mockReturnValue('unsubscribe-token'),
+      },
+    });
+
+    await expect(service.processPendingOutbound({ limit: 1 })).resolves.toEqual({
+      claimed: 1,
+      recovered: 0,
+    });
+    expect(message.status).toBe('provider_accepted');
+    expect(providerConfig.resolveSendGrid).toHaveBeenCalledWith('tenant-1', {
+      allowTesting: false,
+    });
+    expect(credentialRepo.find).not.toHaveBeenCalled();
+    const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(payload).toMatchObject({
+      from: {
+        email: 'sunset-tenant1@send.example.com',
+        name: 'Sunset Realty',
+      },
+      reply_to: { email: 'tenant1@reply.example.com' },
     });
   });
 

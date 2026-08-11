@@ -68,6 +68,7 @@ describe('SendGrid delivery event webhook', () => {
     };
     const compliance = {
       addOptOut: jest.fn().mockResolvedValue({}),
+      addDeliverySuppression: jest.fn().mockResolvedValue({}),
     };
     const sequences = { stopForLead: jest.fn().mockResolvedValue(undefined) };
     const operations = { createTask: jest.fn().mockResolvedValue({}) };
@@ -166,6 +167,46 @@ describe('SendGrid delivery event webhook', () => {
       item.lead.tenantId,
       { providerRejection: true },
     );
+    expect(item.compliance.addOptOut).not.toHaveBeenCalled();
+    expect(item.compliance.addDeliverySuppression).toHaveBeenCalledWith(
+      item.lead.tenantId,
+      'email',
+      item.lead.email,
+      'sendgrid_bounce',
+      'sendgrid_event_webhook',
+    );
+    expect(item.sequences.stopForLead).toHaveBeenCalledWith(
+      item.lead.tenantId,
+      item.lead.id,
+      'other',
+    );
+  });
+
+  it('does not permanently suppress a temporary provider block', async () => {
+    const item = harness();
+    await item.service.handleSendGridEvents(
+      [event('blocked', { reason: 'temporary rate limit', status: '421' })],
+      authorization(),
+    );
+    expect(item.compliance.addOptOut).not.toHaveBeenCalled();
+    expect(item.compliance.addDeliverySuppression).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['invalid-address', true],
+    ['temporary provider congestion', false],
+  ])('classifies a dropped event before suppression: %s', async (reason, permanent) => {
+    const item = harness();
+    await item.service.handleSendGridEvents(
+      [event('dropped', { reason })],
+      authorization(),
+    );
+    if (permanent) {
+      expect(item.compliance.addDeliverySuppression).toHaveBeenCalled();
+    } else {
+      expect(item.compliance.addDeliverySuppression).not.toHaveBeenCalled();
+    }
+    expect(item.compliance.addOptOut).not.toHaveBeenCalled();
   });
 
   it.each(['spamreport', 'unsubscribe', 'group_unsubscribe'])(
@@ -183,6 +224,7 @@ describe('SendGrid delivery event webhook', () => {
         'provider_unsubscribe_event',
         'sendgrid_event_webhook',
       );
+      expect(item.compliance.addDeliverySuppression).not.toHaveBeenCalled();
       expect(item.sequences.stopForLead).toHaveBeenCalledWith(
         item.lead.tenantId,
         item.lead.id,

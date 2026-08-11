@@ -6,6 +6,16 @@ const REQUIRED_PRODUCTION_VALUES = [
   'PLATFORM_ADMIN_EMAILS',
   'GLOBAL_AUTOMATIONS_DISABLED',
   'BILLING_GRACE_DAYS',
+  'TWILIO_WEBHOOK_URL',
+  'TWILIO_STATUS_CALLBACK_URL',
+  'SENDGRID_SENDING_DOMAIN',
+  'SENDGRID_REPLY_DOMAIN',
+  'SENDGRID_INBOUND_USERNAME',
+  'SENDGRID_INBOUND_PASSWORD',
+  'TWILIO_PRIMARY_CUSTOMER_PROFILE_SID',
+  'TWILIO_SECONDARY_PROFILE_POLICY_SID',
+  'TWILIO_A2P_TRUST_PRODUCT_POLICY_SID',
+  'EXTERNAL_UPTIME_MONITOR_URL',
 ] as const;
 
 const SYSTEM_EMAIL_VALUES = [
@@ -96,6 +106,17 @@ export function environmentReadiness() {
     if (!validHttpsUrl('PUBLIC_API_URL')) {
       platformIssues.push('PUBLIC_API_URL must be an absolute HTTPS URL');
     }
+    if (!validHttpsUrl('TWILIO_WEBHOOK_URL')) {
+      platformIssues.push('TWILIO_WEBHOOK_URL must be an absolute HTTPS URL');
+    }
+    if (!validHttpsUrl('TWILIO_STATUS_CALLBACK_URL')) {
+      platformIssues.push('TWILIO_STATUS_CALLBACK_URL must be an absolute HTTPS URL');
+    }
+    for (const name of ['SENDGRID_SENDING_DOMAIN', 'SENDGRID_REPLY_DOMAIN']) {
+      if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(String(process.env[name] || '').trim())) {
+        platformIssues.push(`${name} must be a valid authenticated domain`);
+      }
+    }
     if (process.env.TYPEORM_SYNC !== 'false') {
       platformIssues.push('TYPEORM_SYNC must be explicitly false');
     }
@@ -171,7 +192,7 @@ export function environmentReadiness() {
     retention: {
       status: 'up',
       days: Number(process.env.OPERATIONAL_RETENTION_DAYS || 90),
-      schedule: 'in_process_daily',
+      schedule: 'postgres_durable_daily',
     },
     providerCallbacks: {
       twilioInbound: present('TWILIO_WEBHOOK_URL') ? 'configured' : 'tenant_unavailable',
@@ -195,7 +216,7 @@ export function environmentReadiness() {
     },
     workers: {
       status: 'up',
-      mode: 'in_process',
+      mode: 'postgres_leased',
       message: { intervalMs: 5_000, claimLimit: 25, leaseSeconds: 120 },
       sequence: { intervalMs: 10_000, claimLimit: 25, leaseSeconds: 120 },
       ai: { intervalMs: 3_000, claimLimit: 10, leaseSeconds: 120 },

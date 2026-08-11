@@ -22,6 +22,10 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { environmentReadiness } from '../../common/environment-readiness';
 import { decryptIntegrationPayload } from '../integrations/integrations.service';
 import {
+  defaultTenantUsagePolicy,
+} from '../limits/limits.service';
+import { UsagePolicy } from '../limits/usage-policy.entity';
+import {
   isPlatformAdminEmail,
   platformAdminEmails,
   platformStaffEmails,
@@ -73,6 +77,7 @@ export class AdminService {
     businessName: string;
     ownerEmail: string;
     assignedOperatorId?: string | null;
+    applicationId?: string;
   }) {
     const businessName = String(params.businessName || '').trim();
     const ownerEmail = String(params.ownerEmail || '')
@@ -89,6 +94,31 @@ export class AdminService {
     }
 
     const created = await this.dataSource.transaction(async (manager) => {
+      const applications = manager.getRepository(ProspectApplication);
+      const application = params.applicationId
+        ? await applications
+            .createQueryBuilder('application')
+            .setLock('pessimistic_write')
+            .where('application.id = :id', { id: params.applicationId })
+            .getOne()
+        : null;
+      if (params.applicationId && !application) {
+        throw new BadRequestException('Application not found');
+      }
+      if (application?.convertedTenantId) {
+        const priorTenant = await manager.getRepository(Tenant).findOneOrFail({
+          where: { id: application.convertedTenantId },
+        });
+        const priorOwner = await manager.getRepository(User).findOneOrFail({
+          where: { tenantId: priorTenant.id, role: 'owner' },
+        });
+        priorOwner.emailVerifyToken = verificationTokenHash;
+        priorOwner.emailVerifyTokenExpiresAt = new Date(
+          Date.now() + 24 * 60 * 60_000,
+        );
+        await manager.save(priorOwner);
+        return { tenant: priorTenant, owner: priorOwner };
+      }
       const users = manager.getRepository(User);
       const existing = await users.findOne({ where: { email: ownerEmail } });
       if (existing)
@@ -150,6 +180,20 @@ export class AdminService {
         }),
       );
 
+      const usagePolicies = manager.getRepository(UsagePolicy);
+      await usagePolicies.save(
+        usagePolicies.create(defaultTenantUsagePolicy(tenant.id)),
+      );
+
+      if (application) {
+        application.status = 'accepted';
+        application.convertedTenantId = tenant.id;
+        application.conversionStatus = 'created';
+        application.convertedAt = new Date();
+        application.conversionError = null;
+        await applications.save(application);
+      }
+
       return { tenant, owner };
     });
 
@@ -179,16 +223,6 @@ export class AdminService {
       });
     }
 
-    await this.operations?.createTask({
-      tenantId: created.tenant.id,
-      category: 'onboarding_task',
-      title: 'Complete paid-pilot onboarding',
-      description: 'Assign an owner, collect client intake, connect required providers, run UAT, and record launch approvals.',
-      priority: 'high',
-      relatedEntityType: 'tenant',
-      relatedEntityId: created.tenant.id,
-      dedupeOpen: true,
-    });
     await this.notifications?.createForPlatform({
       eventType: 'client.created',
       category: 'clients',

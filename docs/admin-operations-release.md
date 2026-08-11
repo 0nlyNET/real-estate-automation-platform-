@@ -1,5 +1,10 @@
 # RealtyTechAI admin operations release
 
+> The provider-ownership instructions in this earlier release handoff are
+> superseded by `docs/managed-provider-architecture.md`. RealtyTechAI now owns
+> the Twilio parent account and SendGrid account; clients never enter provider
+> credentials.
+
 This document is the owner handoff for the flat-service admin/client release. It describes what is implemented, what the numbers mean, what must be configured manually, and what still requires a real production device or provider account to verify.
 
 ## Outcome
@@ -202,7 +207,9 @@ Do not mix test keys, live keys, prices, or webhook secrets. Run the full paymen
 There are two separate email uses:
 
 1. **RealtyTechAI system email** uses Railway `SENDGRID_*` values for account verification, password reset, application acknowledgment, and delivery to `SALES_INBOX_EMAIL`. It is optional as a complete unit for deployment; the admin client-creation handoff provides a manual verification link when it is not configured. A partially filled setup is marked unhealthy.
-2. **Client follow-up email** is connected by each brokerage in **Client dashboard → Connections → SendGrid**. The client normally owns and pays for that provider account. RealtyTechAI stores the restricted API key encrypted and exposes only status/test results.
+2. **Client follow-up email** uses the centralized RealtyTechAI SendGrid account.
+   The owner provisions a tenant sender and unguessable inbound reply address;
+   the client sees status and controlled tests but never the API key.
 
 System email values when you return to SendGrid:
 

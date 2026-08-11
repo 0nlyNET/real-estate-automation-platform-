@@ -23,7 +23,7 @@ Status values: `NOT STARTED` · `IN PROGRESS` · `IMPLEMENTED` · `VERIFIED` · 
 | Consent/STOP/unsubscribe | `backend/src/modules/compliance/*`, `backend/src/modules/webhooks/*`, `frontend/app/unsubscribe/*` |
 | Sequences/enrollments/worker | `backend/src/modules/sequences/*` |
 | Messages/provider send/worker | `backend/src/modules/messaging/*`, `backend/src/common/providers.ts` |
-| Tenant provider credentials/tests | `backend/src/modules/integrations/*`, `backend/src/modules/settings/credential.entity.ts` |
+| Managed tenant provider resources/tests | `backend/src/modules/integrations/*` |
 | Public applications | `backend/src/modules/public/*`, `frontend/app/apply/page.tsx` |
 | Support/cancellation/deletion | `backend/src/modules/support/*`, `frontend/app/app/support/page.tsx` |
 | Admin applications/operations | `frontend/app/admin/dashboard/page.tsx`, `backend/src/modules/public/admin-applications.controller.ts`, `backend/src/modules/operations/*` |
@@ -67,7 +67,9 @@ The production reproduction test applies the production reconciliation and clien
 - New workspaces remain onboarding/inactive with automation off.
 - Missing/unknown billing, consent, provider, approval, or configuration blocks protected activity.
 - Calendar synchronization is explicitly unavailable; only an external booking link is supported.
-- Provider credentials are tenant-owned, encrypted, masked, and never supplied through global Twilio variables.
+- RealtyTechAI owns the provider parent accounts. Tenant-scoped Twilio resources
+  and SendGrid identities are provisioned server-side; encrypted secrets are
+  never exposed to clients.
 - Cancellation and deletion create reviewed work; neither automatically destroys production data.
 - Global pause persists leads/evidence but prevents automated work.
 

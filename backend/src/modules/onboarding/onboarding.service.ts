@@ -23,6 +23,11 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PlatformOperatorsService } from '../../common/platform-operators.service';
 import { isSafeBookingUrl } from '../../common/booking-link';
 import { normalizePhoneE164 } from '../../common/phone';
+import { LimitsService } from '../limits/limits.service';
+import { AuditService } from '../audit/audit.service';
+import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
+import { TestRun } from '../testing/test-run.entity';
 
 type ReadinessCategory =
   | 'client_information'
@@ -130,6 +135,17 @@ export class OnboardingService {
     private readonly operations: OperationsService,
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly platformOperators?: PlatformOperatorsService,
+    @Optional() private readonly limits?: LimitsService,
+    @Optional() private readonly audit?: AuditService,
+    @Optional()
+    @InjectRepository(TenantMessagingResource)
+    private readonly messagingResources?: Repository<TenantMessagingResource>,
+    @Optional()
+    @InjectRepository(TenantEmailIdentity)
+    private readonly emailIdentities?: Repository<TenantEmailIdentity>,
+    @Optional()
+    @InjectRepository(TestRun)
+    private readonly testRuns?: Repository<TestRun>,
   ) {}
 
   async getOrCreate(tenantId: string) {
@@ -303,6 +319,29 @@ export class OnboardingService {
     return this.records.save(record);
   }
 
+  async recordBillingFromStripe(input: {
+    tenantId: string;
+    eventReference: string;
+    eligible: boolean;
+    subscriptionStatus: string;
+  }) {
+    const record = await this.getOrCreate(input.tenantId);
+    record.billingVerifiedAt = input.eligible ? new Date() : null;
+    const verifiedItems = { ...(record.verifiedItems || {}) } as Record<string, any>;
+    if (input.eligible) {
+      verifiedItems.billing_evidence = {
+        verifiedAt: record.billingVerifiedAt!.toISOString(),
+        verifiedBy: 'system:stripe',
+        eventReference: input.eventReference,
+        subscriptionStatus: input.subscriptionStatus,
+      };
+    } else {
+      delete verifiedItems.billing_evidence;
+    }
+    record.verifiedItems = verifiedItems;
+    return this.records.save(record);
+  }
+
   async recordOperatorEvidence(
     tenantId: string,
     patch: Record<string, any>,
@@ -396,9 +435,21 @@ export class OnboardingService {
       inboundEmail?: boolean;
       stop?: boolean;
       providerRejection?: boolean;
+      outboundDelivered?: boolean;
+      testRunId?: string | null;
     },
   ) {
     const record = await this.getOrCreate(tenantId);
+    const tenant = await this.tenants.findOne({ where: { id: tenantId } });
+    if (
+      tenant?.lifecycleStatus !== 'TESTING' ||
+      !evidence.testRunId ||
+      !this.testRuns
+    ) return record;
+    const run = await this.testRuns.findOne({
+      where: { id: evidence.testRunId, tenantId, status: 'running' },
+    });
+    if (!run || run.expiresAt <= new Date()) return record;
     const now = new Date();
     const verifiedItems = { ...(record.verifiedItems || {}) };
     let changed = false;
@@ -435,6 +486,49 @@ export class OnboardingService {
       'provider_rejection',
       evidence.providerRejection,
     );
+    if (evidence.outboundDelivered && !record.testLeadCompletedAt) {
+      record.testLeadCompletedAt = now;
+      verifiedItems.test_lead = {
+        verifiedAt: now.toISOString(),
+        verifiedBy: 'system:provider_callback',
+        testRunId: run.id,
+      };
+      run.checks = { ...run.checks, outbound: 'delivered' };
+      record.providerTests = {
+        ...(record.providerTests || {}),
+        endToEndTestReference: `test-run:${run.id}`,
+        endToEndTestRecordedAt: now.toISOString(),
+      };
+      changed = true;
+    }
+    if (evidence.inboundSms || evidence.inboundEmail || evidence.stop) {
+      run.checks = {
+        ...run.checks,
+        ...(evidence.inboundSms ? { inboundSms: 'passed' } : {}),
+        ...(evidence.inboundEmail ? { inboundEmail: 'passed' } : {}),
+        ...(evidence.stop ? { stop: 'passed' } : {}),
+      };
+    }
+    if (evidence.providerRejection) {
+      run.checks = { ...run.checks, providerRejection: 'passed' };
+      record.providerTests = {
+        ...(record.providerTests || {}),
+        providerRejectionReference: `test-run:${run.id}`,
+        providerRejectionRecordedAt: now.toISOString(),
+      };
+      changed = true;
+    }
+    const checks = run.checks as Record<string, unknown>;
+    const passed =
+      checks.outbound === 'delivered' &&
+      (!record.smsEnabled ||
+        (checks.inboundSms === 'passed' && checks.stop === 'passed')) &&
+      (!record.emailEnabled || checks.inboundEmail === 'passed');
+    if (passed) {
+      run.status = 'passed';
+      run.completedAt = now;
+    }
+    await this.testRuns.save(run);
     if (!changed) return record;
     record.verifiedItems = verifiedItems;
     return this.records.save(record);
@@ -445,6 +539,7 @@ export class OnboardingService {
       .createQueryBuilder('step')
       .innerJoin('step.sequence', 'sequence')
       .where('sequence.tenant_id = :tenantId', { tenantId })
+      .andWhere('sequence.active = true')
       .andWhere('step.approval_status = :approved', { approved: 'approved' })
       .andWhere('step.active = true')
       .select('step.channel', 'channel')
@@ -459,6 +554,23 @@ export class OnboardingService {
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException('Workspace not found');
     const settings = await this.settings.findOne({ where: { tenantId } });
+    const [
+      tenantUsagePolicy,
+      platformUsagePolicy,
+      safetyIncidentOpen,
+      managedTwilio,
+      managedEmail,
+    ] =
+      await Promise.all([
+        this.limits?.getTenantPolicy(tenantId) || Promise.resolve(null),
+        this.limits?.getPlatformPolicy() || Promise.resolve(null),
+        this.operations.hasOpenSafetyIncident?.(tenantId) ||
+          Promise.resolve(false),
+        this.messagingResources?.findOne({ where: { tenantId } }) ||
+          Promise.resolve(null),
+        this.emailIdentities?.findOne({ where: { tenantId } }) ||
+          Promise.resolve(null),
+      ]);
     const credentials = await this.credentials.find({
       where: { tenant: { id: tenantId } as any },
       relations: ['tenant'],
@@ -541,16 +653,27 @@ export class OnboardingService {
     const approvedPhone = normalizePhoneE164(
       String(record.brandCommunication.approvedPhoneIdentity || ''),
     );
-    const twilioRuntimeReady = Boolean(
-      twilio?.connected === true &&
-        !twilio?.error &&
-        twilio?.accountSid &&
-        twilio?.authToken &&
-        twilioFromNumber &&
-        twilioRow?.routingKey === twilioFromNumber &&
-        approvedPhone === twilioFromNumber &&
-        twilio?.lastSync,
-    );
+    const twilioRuntimeReady = managedTwilio
+      ? Boolean(
+          ['testing', 'ready'].includes(managedTwilio.smsStatus) &&
+            managedTwilio.twilioSubaccountSid &&
+            managedTwilio.messagingServiceSid &&
+            managedTwilio.phoneNumber &&
+            managedTwilio.encryptedAuthToken &&
+            managedTwilio.twilioApiKeySid &&
+            managedTwilio.encryptedApiSecret &&
+            approvedPhone === normalizePhoneE164(managedTwilio.phoneNumber),
+        )
+      : Boolean(
+          twilio?.connected === true &&
+            !twilio?.error &&
+            twilio?.accountSid &&
+            twilio?.authToken &&
+            twilioFromNumber &&
+            twilioRow?.routingKey === twilioFromNumber &&
+            approvedPhone === twilioFromNumber &&
+            twilio?.lastSync,
+        );
     const sendgrid = integrations.get('sendgrid');
     const sendgridRow = credentialRows.get('sendgrid');
     const sendgridFromEmail = String(sendgrid?.fromEmail || '')
@@ -564,18 +687,27 @@ export class OnboardingService {
     )
       .trim()
       .toLowerCase();
-    const sendgridRuntimeReady = Boolean(
-      sendgrid?.connected === true &&
-        !sendgrid?.error &&
-        sendgrid?.apiKey &&
-        validEmail(sendgridFromEmail) &&
-        String(sendgrid?.fromName || '').trim() &&
-        validEmail(sendgridInboundAddress) &&
-        String(sendgridRow?.routingKey || '').trim().toLowerCase() ===
-          sendgridInboundAddress &&
-        approvedEmail === sendgridFromEmail &&
-        sendgrid?.lastSync,
-    );
+    const sendgridRuntimeReady = managedEmail
+      ? Boolean(
+          ['testing', 'ready'].includes(managedEmail.emailStatus) &&
+            managedEmail.reputationStatus !== 'blocked' &&
+            validEmail(managedEmail.fromEmail) &&
+            validEmail(managedEmail.inboundAddress) &&
+            managedEmail.fromName &&
+            approvedEmail === managedEmail.fromEmail.toLowerCase(),
+        )
+      : Boolean(
+          sendgrid?.connected === true &&
+            !sendgrid?.error &&
+            sendgrid?.apiKey &&
+            validEmail(sendgridFromEmail) &&
+            String(sendgrid?.fromName || '').trim() &&
+            validEmail(sendgridInboundAddress) &&
+            String(sendgridRow?.routingKey || '').trim().toLowerCase() ===
+              sendgridInboundAddress &&
+            approvedEmail === sendgridFromEmail &&
+            sendgrid?.lastSync,
+        );
     const providerTests = record.providerTests || {};
     const configurationUpdatedAt =
       record.configurationUpdatedAt?.getTime?.() ||
@@ -587,16 +719,20 @@ export class OnboardingService {
       const timestamp = new Date(String(value || '')).getTime();
       return Number.isFinite(timestamp) && timestamp >= configurationUpdatedAt;
     };
-    const twilioProviderApproved = Boolean(
-      providerTests.twilioMessagingApprovalStatus === 'approved' &&
-        hasText(providerTests, 'twilioApprovalReference') &&
-        freshProviderEvidence(providerTests.twilioApprovalRecordedAt),
-    );
-    const sendgridProviderApproved = Boolean(
-      providerTests.sendgridSenderVerificationStatus === 'approved' &&
-        hasText(providerTests, 'sendgridApprovalReference') &&
-        freshProviderEvidence(providerTests.sendgridApprovalRecordedAt),
-    );
+    const twilioProviderApproved = managedTwilio
+      ? managedTwilio.a2pComplianceStatus === 'approved'
+      : Boolean(
+          providerTests.twilioMessagingApprovalStatus === 'approved' &&
+            hasText(providerTests, 'twilioApprovalReference') &&
+            freshProviderEvidence(providerTests.twilioApprovalRecordedAt),
+        );
+    const sendgridProviderApproved = managedEmail
+      ? Boolean(managedEmail.lastVerifiedAt && managedEmail.emailStatus === 'ready')
+      : Boolean(
+          providerTests.sendgridSenderVerificationStatus === 'approved' &&
+            hasText(providerTests, 'sendgridApprovalReference') &&
+            freshProviderEvidence(providerTests.sendgridApprovalRecordedAt),
+        );
 
     add('billing', 'Billing status is eligible', billing.allowed, true, {
       category: 'billing',
@@ -620,6 +756,23 @@ export class OnboardingService {
       true,
       {
         nextAction: `Provide valid values for: ${invalidContacts.join(', ')}.`,
+      },
+    );
+    const controlledTestPhone = normalizePhoneE164(
+      String(record.contacts.controlledTestPhone || ''),
+    );
+    const controlledTestEmail = String(
+      record.contacts.controlledTestEmail || record.contacts.accountOwner || '',
+    );
+    add(
+      'controlled_test_destinations',
+      'Controlled SMS and email test destinations are valid',
+      (!record.smsEnabled || Boolean(controlledTestPhone)) &&
+        (!record.emailEnabled || validEmail(controlledTestEmail)),
+      record.smsEnabled || record.emailEnabled,
+      {
+        nextAction:
+          'Provide destinations you control for the automated end-to-end SMS and email tests.',
       },
     );
     add(
@@ -721,11 +874,111 @@ export class OnboardingService {
         hasText(record.consentConfiguration, 'optOutProcess') &&
         hasText(record.consentConfiguration, 'consentPolicyVersion') &&
         record.consentConfiguration.purchasedOrColdListsExcluded === true &&
-        record.consentConfiguration.clientResponsibilityAcknowledged === true,
+        record.consentConfiguration.clientResponsibilityAcknowledged === true &&
+        record.consentConfiguration.lawfulLeadCollectionCertified === true &&
+        hasText(record.consentConfiguration, 'termsAcceptedVersion') &&
+        hasText(record.consentConfiguration, 'privacyAcceptedVersion') &&
+        hasText(record.consentConfiguration, 'acceptableUseAcceptedVersion') &&
+        hasText(record.consentConfiguration, 'dataRetentionAcceptedVersion'),
       true,
       {
         nextAction:
           'Provide and acknowledge the exact consent language, collection method, source ownership, opt-out process, and evidence responsibilities.',
+      },
+    );
+    add(
+      'usage_limits',
+      'Tenant and platform usage/cost limits are configured',
+      Boolean(
+        tenantUsagePolicy?.enabled &&
+          platformUsagePolicy?.enabled &&
+          tenantUsagePolicy.maxSmsPerHour > 0 &&
+          tenantUsagePolicy.maxSmsPerDay > 0 &&
+          tenantUsagePolicy.maxEmailsPerHour > 0 &&
+          tenantUsagePolicy.maxEmailsPerDay > 0 &&
+          tenantUsagePolicy.maxAiCallsPerDay > 0 &&
+          Number(tenantUsagePolicy.hardCostThresholdUsd) > 0,
+      ),
+      true,
+      {
+        category: 'platform_control',
+        responsibleParty: 'jayden',
+        nextAction:
+          'Configure tenant and platform hourly, daily, AI, warning-cost, and hard-cost safety limits.',
+      },
+    );
+    const production = process.env.NODE_ENV === 'production';
+    const restoreTestedAt = new Date(
+      String(process.env.BACKUP_RESTORE_TESTED_AT || ''),
+    );
+    const restoreAge = Date.now() - restoreTestedAt.getTime();
+    const disasterRecoveryReady =
+      !production ||
+      (Number.isFinite(restoreTestedAt.getTime()) &&
+        restoreAge >= 0 &&
+        restoreAge <= 90 * 24 * 60 * 60_000 &&
+        Number(process.env.BACKUP_RPO_MINUTES) <= 60 &&
+        Number(process.env.BACKUP_RTO_MINUTES) <= 240 &&
+        Number(process.env.BACKUP_RETENTION_DAYS) >= 7 &&
+        process.env.BACKUP_RESTORE_ISOLATED_VERIFIED === 'true' &&
+        process.env.BACKUP_RESTORE_CREDENTIALS_PROTECTED === 'true');
+    add(
+      'disaster_recovery',
+      'Production backup restore is proven within RPO/RTO targets',
+      disasterRecoveryReady,
+      true,
+      {
+        category: 'platform_control',
+        responsibleParty: 'jayden',
+        statusMessage: 'A recent isolated production restore test is not recorded',
+        nextAction:
+          'Complete the disaster-recovery runbook, verify restored leads/messages, and record the protected evidence variables.',
+      },
+    );
+    const legalReviewedAt = new Date(
+      String(process.env.LEGAL_DOCUMENTS_REVIEWED_AT || ''),
+    );
+    const legalReviewReady =
+      !production ||
+      (Number.isFinite(legalReviewedAt.getTime()) &&
+        Date.now() - legalReviewedAt.getTime() >= 0 &&
+        Date.now() - legalReviewedAt.getTime() <= 365 * 24 * 60 * 60_000);
+    add(
+      'legal_review',
+      'Customer-facing terms and messaging obligations received legal review',
+      legalReviewReady,
+      true,
+      {
+        category: 'platform_control',
+        responsibleParty: 'jayden',
+        nextAction:
+          'Have qualified counsel review the actual managed-service terms, privacy, acceptable-use, cancellation, messaging, and retention documents; then record the review date.',
+      },
+    );
+    add(
+      'tenant_safety',
+      'No unresolved usage, quality, or security safety incident exists',
+      !safetyIncidentOpen,
+      true,
+      {
+        category: 'platform_control',
+        responsibleParty: 'jayden',
+        nextAction:
+          'Resolve the open safety incident and document the corrective action before activation.',
+      },
+    );
+    add(
+      'testing_started',
+      'Workspace entered controlled TESTING mode',
+      ['TESTING', 'READY_FOR_ACTIVATION', 'ACTIVE', 'PAUSED'].includes(
+        tenant.lifecycleStatus,
+      ),
+      true,
+      {
+        category: 'controlled_live_test',
+        responsibleParty: 'jayden',
+        nextAction:
+          'Start controlled TESTING mode after profile, billing, providers, compliance, and safety limits are ready.',
       },
     );
     add(
@@ -857,7 +1110,9 @@ export class OnboardingService {
       'A controlled end-to-end test lead completed',
       Boolean(
         freshDate(record.testLeadCompletedAt) &&
-          hasText(providerTests, 'endToEndTestReference'),
+          (hasText(providerTests, 'endToEndTestReference') ||
+            (record.verifiedItems as any)?.test_lead?.verifiedBy ===
+              'system:provider_callback'),
       ),
       true,
       {
@@ -912,7 +1167,7 @@ export class OnboardingService {
             (record.verifiedItems as any)?.provider_rejection?.verifiedBy ===
               'system:webhook'),
       ),
-      true,
+      false,
       {
         category: 'controlled_live_test',
         responsibleParty: 'jayden',
@@ -944,13 +1199,13 @@ export class OnboardingService {
     );
     add(
       'billing_evidence',
-      'Billing state was verified by an operator',
+      'Billing readiness was verified from signed Stripe state',
       Boolean(record.billingVerifiedAt),
       true,
       {
         category: 'billing',
-        responsibleParty: 'jayden',
-        nextAction: 'Verify the current billing state through the owner-only control.',
+        responsibleParty: 'platform',
+        nextAction: 'Complete payment so Stripe can confirm an eligible subscription state.',
       },
     );
     add(
@@ -997,13 +1252,24 @@ export class OnboardingService {
         ? record.activationStatus
         : blockers.length === 0
           ? 'ready'
+          : record.activationStatus === 'testing'
+            ? 'testing'
           : record.activationStatus === 'blocked'
             ? 'blocked'
             : 'incomplete';
+    const testingBlockers = blockers.filter(
+      (item) =>
+        item.category !== 'controlled_live_test' &&
+        item.key !== 'client_approval' &&
+        item.key !== 'operator_approval' &&
+        item.key !== 'global_pause',
+    );
     return {
       state: tenant.lifecycleStatus,
       activationStatus: computedActivationStatus,
       ready: blockers.length === 0,
+      testingReady: testingBlockers.length === 0,
+      testingBlockers,
       blockers,
       required: items.filter((item) => item.required),
       optional: items.filter((item) => !item.required),
@@ -1035,32 +1301,76 @@ export class OnboardingService {
         twilio: {
           required: record.smsEnabled,
           runtimeReady: twilioRuntimeReady,
-          status: twilio?.error
+          status: managedTwilio?.lastError || twilio?.error
             ? 'error'
             : twilioRuntimeReady
               ? 'ready'
               : 'incomplete',
-          lastCheckedAt: twilio?.lastSync || null,
-          error: twilio?.error
-            ? sanitizeOperationalText(twilio.error)
+          lastCheckedAt: managedTwilio?.smsLastVerifiedAt || twilio?.lastSync || null,
+          error: managedTwilio?.lastError || twilio?.error
+            ? sanitizeOperationalText(managedTwilio?.lastError || twilio.error)
             : null,
         },
         sendgrid: {
           required: record.emailEnabled,
           runtimeReady: sendgridRuntimeReady,
-          status: sendgrid?.error
+          status: managedEmail?.lastError || sendgrid?.error
             ? 'error'
             : sendgridRuntimeReady
               ? 'ready'
               : 'incomplete',
-          lastCheckedAt: sendgrid?.lastSync || null,
-          error: sendgrid?.error
-            ? sanitizeOperationalText(sendgrid.error)
+          lastCheckedAt: managedEmail?.lastVerifiedAt || sendgrid?.lastSync || null,
+          error: managedEmail?.lastError || sendgrid?.error
+            ? sanitizeOperationalText(managedEmail?.lastError || sendgrid.error)
             : null,
         },
       },
       lastUpdatedAt: record.updatedAt,
     };
+  }
+
+  async beginTesting(tenantId: string, operatorId: string) {
+    const readiness = await this.readiness(tenantId);
+    if (!readiness.testingReady) {
+      throw new BadRequestException({
+        code: 'TESTING_BLOCKED',
+        message: 'Workspace is not ready for controlled testing',
+        blockers: readiness.testingBlockers,
+      });
+    }
+    const tenant = await this.tenants.findOne({ where: { id: tenantId } });
+    if (!tenant) throw new NotFoundException('Workspace not found');
+    const record = await this.getOrCreate(tenantId);
+    let settings = await this.settings.findOne({ where: { tenantId } });
+    if (!settings) settings = this.settings.create({ tenantId });
+    const beforeState = {
+      lifecycleStatus: tenant.lifecycleStatus,
+      activationStatus: record.activationStatus,
+      automationsEnabled: settings.automationsEnabled,
+    };
+    tenant.lifecycleStatus = 'TESTING';
+    record.activationStatus = 'testing';
+    record.blockedReason = null;
+    settings.automationsEnabled = false;
+    await this.tenants.manager.transaction(async (manager) => {
+      await manager.save(tenant);
+      await manager.save(record);
+      await manager.save(settings!);
+    });
+    await this.audit?.recordSystemEvent({
+      tenantId,
+      eventType: 'tenant.testing_started',
+      resourceType: 'tenant',
+      resourceId: tenantId,
+      beforeState,
+      afterState: {
+        lifecycleStatus: 'TESTING',
+        activationStatus: 'testing',
+        automationsEnabled: false,
+        initiatedBy: operatorId,
+      },
+    });
+    return this.readiness(tenantId);
   }
 
   async activate(tenantId: string, operatorId: string) {
@@ -1101,6 +1411,9 @@ export class OnboardingService {
     if (!tenant) throw new NotFoundException('Workspace not found');
     const record = await this.getOrCreate(tenantId);
     tenant.lifecycleStatus = 'ACTIVE';
+    tenant.provisioningStatus = 'ACTIVE';
+    tenant.provisioningLastReconciledAt = new Date();
+    tenant.provisioningLastError = null;
     tenant.serviceActivatedAt = new Date();
     tenant.servicePausedAt = null;
     record.activationStatus = 'active';

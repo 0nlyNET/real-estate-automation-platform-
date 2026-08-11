@@ -1,7 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CommonModule } from '../../common/common.module';
-import { AuditLog } from '../audit/audit-log.entity';
 import { StripeWebhookEvent } from '../billing/stripe-webhook-event.entity';
 import { User } from '../users/user.entity';
 import { HealthMonitorService } from './health-monitor.service';
@@ -16,6 +15,10 @@ import { ProspectApplication } from '../public/prospect-application.entity';
 import { OperationalRemindersService } from './operational-reminders.service';
 import { ClientNotificationsController } from './client-notifications.controller';
 import { AiRun } from '../ai/ai-run.entity';
+import { Message } from '../messaging/message.entity';
+import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
+import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 
 @Global()
 @Module({
@@ -25,11 +28,14 @@ import { AiRun } from '../ai/ai-run.entity';
       AdminNotificationPreference,
       AdminPushSubscription,
       User,
-      AuditLog,
       StripeWebhookEvent,
       OperationsTask,
       ProspectApplication,
       AiRun,
+      Message,
+      SequenceEnrollment,
+      TenantMessagingResource,
+      TenantEmailIdentity,
     ]),
     CommonModule,
   ],

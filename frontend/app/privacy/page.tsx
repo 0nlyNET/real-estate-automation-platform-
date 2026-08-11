@@ -9,7 +9,7 @@ export default function PrivacyPage() {
       <main className="py-24">
         <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
           <h1 className="text-4xl font-bold tracking-tight text-foreground">Privacy Policy</h1>
-          <p className="mt-4 text-muted-foreground">Effective July 19, 2026</p>
+          <p className="mt-4 text-muted-foreground">Effective August 11, 2026</p>
 
           <div className="mt-12 space-y-8 text-muted-foreground">
             <section>
@@ -54,7 +54,8 @@ export default function PrivacyPage() {
               <p className="mt-4">
                 We use access controls, encrypted provider credentials, HTTPS in production, and operational monitoring
                 to reduce risk. No system can guarantee absolute security. Records are retained for service, security,
-                billing, and legal needs and are deleted or de-identified when no longer required.
+                billing, and legal needs and are deleted or de-identified when no longer required. The current operational
+                approach is described in the <Link className="text-primary hover:underline" href="/data-retention">Data Retention &amp; Deletion Policy</Link>.
               </p>
             </section>
 

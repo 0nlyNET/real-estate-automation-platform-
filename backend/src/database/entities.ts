@@ -39,6 +39,16 @@ import { PlatformCredential } from '../modules/integrations/platform-credential.
 import { LeadIngestionEvent } from '../modules/lead-ingestion/lead-ingestion-event.entity';
 import { TwilioInboundMessage } from '../modules/webhooks/twilio-inbound-message.entity';
 import { SendGridWebhookEvent } from '../modules/webhooks/sendgrid-webhook-event.entity';
+import { UsageBucket } from '../modules/limits/usage-bucket.entity';
+import { UsagePolicy } from '../modules/limits/usage-policy.entity';
+import { UsageReservation } from '../modules/limits/usage-reservation.entity';
+import { CommunicationSuppression } from '../modules/compliance/communication-suppression.entity';
+import { TenantMessagingResource } from '../modules/integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../modules/integrations/tenant-email-identity.entity';
+import { DurableJob } from '../modules/durable-jobs/durable-job.entity';
+import { TestRun } from '../modules/testing/test-run.entity';
+import { OffboardingRequest } from '../modules/offboarding/offboarding-request.entity';
+import { SendDecision } from '../modules/messaging/send-decision.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -52,6 +62,8 @@ export const databaseEntities = [
   SequenceStep,
   Credential,
   PlatformCredential,
+  TenantMessagingResource,
+  TenantEmailIdentity,
   LeadIngestionEvent,
   TwilioInboundMessage,
   SendGridWebhookEvent,
@@ -60,6 +72,7 @@ export const databaseEntities = [
   RoutingAssignmentLog,
   AgentPresence,
   ComplianceOptOut,
+  CommunicationSuppression,
   ComplianceEvent,
   TenantQuietHours,
   PasswordResetToken,
@@ -82,4 +95,11 @@ export const databaseEntities = [
   ConversationAiState,
   AiRun,
   PlatformAiControl,
+  UsagePolicy,
+  UsageBucket,
+  UsageReservation,
+  DurableJob,
+  TestRun,
+  OffboardingRequest,
+  SendDecision,
 ] as const;

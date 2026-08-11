@@ -1,9 +1,10 @@
 import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, LessThan, Repository } from 'typeorm';
+import { FindOptionsWhere, In, IsNull, LessThan, Repository } from 'typeorm';
 import { OperationsTask } from './operations-task.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlatformOperatorsService } from '../../common/platform-operators.service';
+import { DurableJob } from '../durable-jobs/durable-job.entity';
 
 export type CreateOperationsTask = {
   tenantId?: string | null;
@@ -27,6 +28,9 @@ export class OperationsService {
     private readonly repo: Repository<OperationsTask>,
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly platformOperators?: PlatformOperatorsService,
+    @Optional()
+    @InjectRepository(DurableJob)
+    private readonly jobs?: Repository<DurableJob>,
   ) {}
 
   async createTask(input: CreateOperationsTask) {
@@ -122,6 +126,87 @@ export class OperationsService {
       .slice(skip, skip + take);
   }
 
+  async exceptionSummary() {
+    const [tasks, failedJobs] = await Promise.all([
+      this.repo
+        .createQueryBuilder('task')
+        .where('task.status != :resolved', { resolved: 'resolved' })
+        .orderBy("CASE task.priority WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END", 'DESC')
+        .addOrderBy('task.createdAt', 'ASC')
+        .getMany(),
+      this.jobs
+        ? this.jobs.find({
+            where: { status: 'failed' },
+            order: { updatedAt: 'DESC' },
+            take: 200,
+          })
+        : Promise.resolve([]),
+    ]);
+    if (!tasks.length && !failedJobs.length) {
+      return { status: 'HEALTHY', action: 'NO ACTION', exceptions: [] };
+    }
+    const tenantIds = [...new Set(tasks.map((task) => task.tenantId).filter(Boolean))] as string[];
+    const jobs = tenantIds.length && this.jobs
+      ? await this.jobs.find({
+          where: { tenantId: In(tenantIds) },
+          order: { updatedAt: 'DESC' },
+          take: 500,
+        })
+      : [];
+    const taskExceptions = tasks.map((task) => {
+      const attempts = jobs
+        .filter((job) => job.tenantId === task.tenantId && job.attemptCount > 0)
+        .slice(0, 10)
+        .map((job) => ({
+          operation: job.taskType,
+          attempts: job.attemptCount,
+          maxAttempts: job.maxAttempts,
+          status: job.status,
+          lastError: job.lastError,
+          lastChecked: job.updatedAt,
+        }));
+      return {
+        id: task.id,
+        tenantId: task.tenantId || null,
+        severity: task.priority,
+        category: task.category,
+        problem: task.description,
+        providerError: task.evidenceNote || null,
+        automaticAttempts: attempts,
+        recommendedAction:
+          task.evidenceNote || `Review and resolve: ${task.title}`,
+        firstDetected: task.createdAt,
+        lastChecked: task.updatedAt,
+        status: task.status,
+      };
+    });
+    const failedJobExceptions = failedJobs.map((job) => ({
+      id: `job:${job.id}`,
+      tenantId: job.tenantId,
+      severity: 'critical',
+      category: 'durable_job_failure',
+      problem: `${job.taskType} exhausted automatic retries`,
+      providerError: job.lastError,
+      automaticAttempts: [{
+        operation: job.taskType,
+        attempts: job.attemptCount,
+        maxAttempts: job.maxAttempts,
+        status: job.status,
+        lastError: job.lastError,
+        lastChecked: job.updatedAt,
+      }],
+      recommendedAction: `Review the final error and safely retry ${job.taskType}.`,
+      firstDetected: job.createdAt,
+      lastChecked: job.updatedAt,
+      status: job.status,
+    }));
+    return {
+      status: 'ACTION REQUIRED',
+      action: 'REVIEW EXCEPTIONS',
+      exceptions: [...failedJobExceptions, ...taskExceptions],
+    };
+  }
+
   async updateTask(
     id: string,
     patch: {
@@ -169,5 +254,48 @@ export class OperationsService {
         priorities: ['high', 'critical'],
       })
       .getCount();
+  }
+
+  async hasOpenSafetyIncident(tenantId: string) {
+    const count = await this.repo
+      .createQueryBuilder('task')
+      .where('task.tenantId = :tenantId', { tenantId })
+      .andWhere('task.status != :resolved', { resolved: 'resolved' })
+      .andWhere('task.category IN (:...categories)', {
+        categories: ['usage_limit', 'client_quality', 'security_incident'],
+      })
+      .getCount();
+    return count > 0;
+  }
+
+  async resolveRecoverableTasks(input: {
+    tenantId?: string | null;
+    category: string;
+    relatedEntityType: string;
+    relatedEntityId: string;
+    evidenceNote: string;
+  }) {
+    const rows = await this.repo.find({
+      where: {
+        ...(input.tenantId === null
+          ? { tenantId: IsNull() }
+          : input.tenantId
+            ? { tenantId: input.tenantId }
+            : {}),
+        category: input.category,
+        relatedEntityType: input.relatedEntityType,
+        relatedEntityId: input.relatedEntityId,
+        status: In(['open', 'in_progress', 'blocked']),
+      },
+    });
+    if (!rows.length) return 0;
+    const completedAt = new Date();
+    for (const row of rows) {
+      row.status = 'resolved';
+      row.completedAt = completedAt;
+      row.evidenceNote = input.evidenceNote;
+    }
+    await this.repo.save(rows);
+    return rows.length;
   }
 }

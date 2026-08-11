@@ -224,6 +224,8 @@ export default function OnboardingPage() {
                     <Field label="Website" type="url" value={data.businessIdentity.website} onChange={(value) => field("businessIdentity", "website", value)} />
                     <Field label="Areas you serve (comma-separated)" value={listValue("businessIdentity", "serviceAreas")} onChange={(value) => csv("businessIdentity", "serviceAreas", value)} />
                     <Field label="Best account-owner email" type="email" value={data.contacts.accountOwner} onChange={(value) => field("contacts", "accountOwner", value)} />
+                    <Field label="Controlled SMS test phone" value={data.contacts.controlledTestPhone} onChange={(value) => field("contacts", "controlledTestPhone", value)} />
+                    <Field label="Controlled email test recipient" type="email" value={data.contacts.controlledTestEmail || data.contacts.accountOwner} onChange={(value) => field("contacts", "controlledTestEmail", value)} />
                     <Field label="Billing email (if different)" type="email" value={data.contacts.billingContact} onChange={(value) => field("contacts", "billingContact", value)} />
                     <Field label="Time zone" value={settings.timeZone} onChange={(value) => setSettings((current) => ({ ...current, timeZone: value }))} />
                   </div>
@@ -267,7 +269,18 @@ export default function OnboardingPage() {
                     <Choice label="We will not upload purchased or cold lists" checked={data.consentConfiguration.purchasedOrColdListsExcluded === true} onChange={(value) => field("consentConfiguration", "purchasedOrColdListsExcluded", value)} />
                     <Choice label="We are responsible for keeping consent evidence" checked={data.consentConfiguration.clientResponsibilityAcknowledged === true} onChange={(value) => field("consentConfiguration", "clientResponsibilityAcknowledged", value)} />
                     <Choice label="Our message copy has had a fair-housing review" checked={data.brandCommunication.fairHousingReviewAcknowledged === true} onChange={(value) => field("brandCommunication", "fairHousingReviewAcknowledged", value)} />
+                    <Choice label="We certify that every lead was collected lawfully for the intended communications" checked={data.consentConfiguration.lawfulLeadCollectionCertified === true} onChange={(value) => field("consentConfiguration", "lawfulLeadCollectionCertified", value)} />
+                    <Choice label="We accept the current Terms of Service" checked={data.consentConfiguration.termsAcceptedVersion === "2026-08-11"} onChange={(value) => field("consentConfiguration", "termsAcceptedVersion", value ? "2026-08-11" : "")} />
+                    <Choice label="We acknowledge the current Privacy Policy" checked={data.consentConfiguration.privacyAcceptedVersion === "2026-08-11"} onChange={(value) => field("consentConfiguration", "privacyAcceptedVersion", value ? "2026-08-11" : "")} />
+                    <Choice label="We accept the Acceptable Use Policy" checked={data.consentConfiguration.acceptableUseAcceptedVersion === "2026-08-11"} onChange={(value) => field("consentConfiguration", "acceptableUseAcceptedVersion", value ? "2026-08-11" : "")} />
+                    <Choice label="We acknowledge the Data Retention & Deletion Policy" checked={data.consentConfiguration.dataRetentionAcceptedVersion === "2026-08-11"} onChange={(value) => field("consentConfiguration", "dataRetentionAcceptedVersion", value ? "2026-08-11" : "")} />
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Review the <Link className="text-primary hover:underline" href="/terms">Terms</Link>,{" "}
+                    <Link className="text-primary hover:underline" href="/privacy">Privacy Policy</Link>,{" "}
+                    <Link className="text-primary hover:underline" href="/acceptable-use">Acceptable Use Policy</Link>, and{" "}
+                    <Link className="text-primary hover:underline" href="/data-retention">Data Retention &amp; Deletion Policy</Link> before accepting.
+                  </p>
                 </>
               ) : null}
 

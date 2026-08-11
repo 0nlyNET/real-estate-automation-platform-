@@ -86,10 +86,11 @@ See `backend/.env.example` and `frontend/.env.example`. At minimum, configure:
 - backend `FRONTEND_URL` and `PUBLIC_APP_URL`, both set to the canonical frontend HTTPS origin
 - frontend server-only `BACKEND_API_URL` for the same-origin `/api/backend/*` proxy, plus `NEXT_PUBLIC_SITE_URL` for canonical metadata; do not expose the backend origin through `NEXT_PUBLIC_*`
 - exact public `TWILIO_WEBHOOK_URL=<api-origin>/webhooks/twilio/inbound` and `TWILIO_STATUS_CALLBACK_URL=<api-origin>/webhooks/twilio/status`
+- authenticated `SENDGRID_SENDING_DOMAIN` and random-token `SENDGRID_REPLY_DOMAIN`; publish and verify SPF, DKIM, and DMARC
 - server-only OpenAI configuration plus the authenticated `SENDGRID_INBOUND_WEBHOOK_URL=<api-origin>/webhooks/sendgrid/inbound`; follow the approval and test gates in `docs/controlled-ai-lead-agent.md`
 - Meta app credentials, an active `FACEBOOK_GRAPH_API_VERSION`, and the exact
   `FACEBOOK_WEBHOOK_URL` only when Facebook Lead Ads is enabled
-- SendGrid, Twilio, Stripe, and Facebook values only for integrations you enable
+- platform-owned SendGrid and Twilio credentials are saved once by the owner; tenant subaccounts, numbers, and email identities are provisioned server-side
 - `SALES_INBOX_EMAIL` for public contact/application delivery
 - `STRIPE_PRICE_SERVICE_MONTH` plus matching Stripe secret/webhook values when billing is enabled
 - one VAPID key pair (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT`) for admin phone alerts
@@ -100,6 +101,7 @@ Production startup validates critical security/database configuration, and `/hea
 Before accepting a pilot payment, complete:
 
 - `docs/admin-operations-release.md`
+- `docs/managed-provider-architecture.md`
 - `docs/production-launch-owner-checklist.md`
 - `docs/database-migration-runbook.md`
 - `docs/controlled-ai-lead-agent.md`

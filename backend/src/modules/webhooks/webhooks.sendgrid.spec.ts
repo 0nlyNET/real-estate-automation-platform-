@@ -23,6 +23,8 @@ describe('SendGrid inbound email webhook', () => {
       connected: boolean;
       error: string | null;
     };
+    newLead?: boolean;
+    limits?: { reserveUsage: jest.Mock };
   }) {
     const lead = Object.assign(new Lead(), {
       id: '00000000-0000-4000-8000-000000000020',
@@ -49,7 +51,7 @@ describe('SendGrid inbound email webhook', () => {
       ),
     };
     const leadRepo = {
-      findOne: jest.fn().mockResolvedValue(lead),
+      findOne: jest.fn().mockResolvedValue(options?.newLead ? null : lead),
       create: jest.fn((value) => Object.assign(new Lead(), value)),
       save: jest.fn(async (value) => value),
     };
@@ -68,6 +70,10 @@ describe('SendGrid inbound email webhook', () => {
     };
     const dataSource = {
       transaction: jest.fn(async (callback) => callback(manager)),
+      getRepository: jest.fn((entity) => {
+        if (entity === Lead) return leadRepo;
+        throw new Error('Unexpected repository');
+      }),
     };
     const credentials = {
       findOne: jest.fn().mockResolvedValue({
@@ -101,6 +107,10 @@ describe('SendGrid inbound email webhook', () => {
       ai as any,
       undefined,
       { createTask: jest.fn() } as any,
+      undefined,
+      undefined,
+      undefined,
+      options?.limits as any,
     );
     return {
       service,
@@ -154,6 +164,24 @@ describe('SendGrid inbound email webhook', () => {
         channel: 'email',
       }),
     );
+  });
+
+  it('reserves lead usage before an inbound email creates a new real lead', async () => {
+    const limits = {
+      reserveUsage: jest.fn().mockResolvedValue({
+        ok: false,
+        code: 'LIMIT_LEADS',
+        message: 'Lead limit reached',
+      }),
+    };
+    const item = build({ newLead: true, limits });
+    await expect(
+      item.service.handleSendGridInbound(body, authorization()),
+    ).resolves.toEqual({ status: 'ignored' });
+    expect(limits.reserveUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: item.lead.tenantId, metric: 'lead' }),
+    );
+    expect(item.manager.getRepository).not.toHaveBeenCalled();
   });
 
   it('rejects an unauthenticated inbound parse request', async () => {

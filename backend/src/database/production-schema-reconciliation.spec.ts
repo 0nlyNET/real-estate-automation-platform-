@@ -17,6 +17,9 @@ import { StripeSetupFeeTracking1785801600001 } from "./migrations/202608040001-s
 import { FirstClientSafetyPipeline1785974400001 } from "./migrations/202608060001-first-client-safety-pipeline";
 import { MessagingDeliveryReliability1786060800001 } from "./migrations/202608070001-messaging-delivery-reliability";
 import { ClientReadinessObservability1786060800002 } from "./migrations/202608070002-client-readiness-observability";
+import { LaunchSafeguards1786406400001 } from "./migrations/202608110001-launch-safeguards";
+import { ManagedProviderArchitecture1786492800001 } from "./migrations/202608120001-managed-provider-architecture";
+import { TurnkeyLaunchOperation1786579200001 } from "./migrations/202608130001-turnkey-launch-operation";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -121,7 +124,7 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 41,
+      expectedTables: 51,
       actualTables: 12,
       missingTables: [
         "admin_notification_preferences",
@@ -132,13 +135,16 @@ describe("deployed legacy schema reproduction", () => {
         "appointments",
         "billing_events",
         "brokerage_ai_knowledge",
+        "communication_suppressions",
         "compliance_events",
         "compliance_optouts",
         "conversation_ai_states",
+        "durable_jobs",
         "lead_consent_records",
         "lead_handoffs",
         "lead_ingestion_events",
         "lead_stage_events",
+        "offboarding_requests",
         "onboarding_records",
         "operations_tasks",
         "platform_ai_controls",
@@ -146,12 +152,19 @@ describe("deployed legacy schema reproduction", () => {
         "prospect_applications",
         "routing_assignment_logs",
         "routing_rules",
+        "send_decisions",
         "sendgrid_webhook_events",
         "stripe_webhook_events",
         "support_tickets",
         "teams",
+        "tenant_email_identities",
+        "tenant_messaging_resources",
         "tenant_quiet_hours",
+        "test_runs",
         "twilio_inbound_messages",
+        "usage_buckets",
+        "usage_policies",
+        "usage_reservations",
         "workspace_ai_settings",
       ],
     });
@@ -170,12 +183,15 @@ describe("deployed legacy schema reproduction", () => {
     await new FirstClientSafetyPipeline1785974400001().up(queryRunner);
     await new MessagingDeliveryReliability1786060800001().up(queryRunner);
     await new ClientReadinessObservability1786060800002().up(queryRunner);
+    await new LaunchSafeguards1786406400001().up(queryRunner);
+    await new ManagedProviderArchitecture1786492800001().up(queryRunner);
+    await new TurnkeyLaunchOperation1786579200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 41,
-      actualTables: 41,
+      expectedTables: 51,
+      actualTables: 51,
       missingTables: [],
       missingColumns: [],
     });
@@ -238,18 +254,24 @@ describe("deployed legacy schema reproduction", () => {
     await new FirstClientSafetyPipeline1785974400001().up(queryRunner);
     await new MessagingDeliveryReliability1786060800001().up(queryRunner);
     await new ClientReadinessObservability1786060800002().up(queryRunner);
+    await new LaunchSafeguards1786406400001().up(queryRunner);
+    await new ManagedProviderArchitecture1786492800001().up(queryRunner);
+    await new TurnkeyLaunchOperation1786579200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 41,
-      actualTables: 41,
+      expectedTables: 51,
+      actualTables: 51,
       missingTables: [],
       missingColumns: [],
     });
 
     const rollbackRunner = dataSource.createQueryRunner();
     await rollbackRunner.connect();
+    await new TurnkeyLaunchOperation1786579200001().down(rollbackRunner);
+    await new ManagedProviderArchitecture1786492800001().down(rollbackRunner);
+    await new LaunchSafeguards1786406400001().down(rollbackRunner);
     await new ClientReadinessObservability1786060800002().down(rollbackRunner);
     await new MessagingDeliveryReliability1786060800001().down(rollbackRunner);
     await new FirstClientSafetyPipeline1785974400001().down(rollbackRunner);

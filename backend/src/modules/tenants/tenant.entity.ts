@@ -35,6 +35,7 @@ export type TenantStatus =
 export type WorkspaceLifecycleStatus =
   | 'DRAFT'
   | 'ONBOARDING'
+  | 'TESTING'
   | 'READY_FOR_UAT'
   | 'UAT_FAILED'
   | 'READY_FOR_ACTIVATION'
@@ -42,6 +43,18 @@ export type WorkspaceLifecycleStatus =
   | 'PAUSED'
   | 'SUSPENDED'
   | 'CANCELED';
+
+export type TenantProvisioningStatus =
+  | 'WAITING_FOR_CLIENT'
+  | 'PROFILE_READY'
+  | 'BILLING_READY'
+  | 'EMAIL_PROVISIONING'
+  | 'SMS_PROVISIONING'
+  | 'COMPLIANCE_PENDING'
+  | 'TESTING'
+  | 'READY'
+  | 'ACTIVE'
+  | 'ACTION_REQUIRED';
 
 @Entity('tenants')
 export class Tenant {
@@ -60,6 +73,15 @@ export class Tenant {
   @Column({ name: 'lifecycle_status', type: 'text', default: 'ONBOARDING' })
   lifecycleStatus!: WorkspaceLifecycleStatus;
 
+  @Column({ name: 'provisioning_status', type: 'text', default: 'WAITING_FOR_CLIENT' })
+  provisioningStatus!: TenantProvisioningStatus;
+
+  @Column({ name: 'provisioning_last_reconciled_at', type: 'timestamptz', nullable: true })
+  provisioningLastReconciledAt?: Date | null;
+
+  @Column({ name: 'provisioning_last_error', type: 'text', nullable: true })
+  provisioningLastError?: string | null;
+
   @Column({ name: 'service_activated_at', type: 'timestamptz', nullable: true })
   serviceActivatedAt?: Date | null;
 
@@ -73,7 +95,7 @@ export class Tenant {
   serviceSuspensionReason?: string | null;
 
   @Column({ name: 'service_suspension_source', type: 'varchar', length: 30, nullable: true })
-  serviceSuspensionSource?: 'manual' | 'billing' | null;
+  serviceSuspensionSource?: 'manual' | 'billing' | 'safety' | null;
 
   @Column({ name: 'service_suspended_by_id', type: 'uuid', nullable: true })
   serviceSuspendedById?: string | null;

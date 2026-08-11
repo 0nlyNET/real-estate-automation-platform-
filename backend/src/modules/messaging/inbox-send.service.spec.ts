@@ -94,6 +94,59 @@ describe('manual inbox channel handling', () => {
     );
   });
 
+  it('queues human email with the managed SendGrid contract and no tenant credential', async () => {
+    const tenantId = '00000000-0000-4000-8000-000000000001';
+    const lead = Object.assign(new Lead(), {
+      id: '00000000-0000-4000-8000-000000000010',
+      tenantId,
+      email: 'lead@example.com',
+      fullName: 'Jordan Lead',
+    });
+    const messages = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({
+        id: '00000000-0000-4000-8000-000000000020',
+        createdAt: new Date(),
+        ...value,
+      })),
+    };
+    const tenantCredentials = { findOne: jest.fn().mockResolvedValue(null) };
+    const providerConfig = {
+      resolveSendGrid: jest.fn().mockResolvedValue({
+        connected: true,
+        apiKey: 'SG.server-side-only',
+        fromEmail: 'sunset-00000000@send.example.com',
+        fromName: 'Sunset Realty',
+        inboundAddress: 'reply-token@reply.example.com',
+      }),
+    };
+    const service = new InboxSendService(
+      { findOne: jest.fn().mockResolvedValue(lead) } as any,
+      messages as any,
+      tenantCredentials as any,
+      { communicationEligibility: jest.fn().mockResolvedValue({ allowed: true }) } as any,
+      { assertAllowed: jest.fn().mockResolvedValue(undefined) } as any,
+      { createTask: jest.fn() } as any,
+      {
+        runHumanSendExclusive: jest.fn(
+          async (_tenant, _lead, _actor, callback) => callback(),
+        ),
+      } as any,
+      undefined,
+      providerConfig as any,
+    );
+
+    await expect(
+      service.queueEmailToLead(tenantId, lead.id, 'I can help with your search.'),
+    ).resolves.toMatchObject({
+      status: 'queued',
+      message: { channel: 'email', authorship: 'human' },
+    });
+    expect(providerConfig.resolveSendGrid).toHaveBeenCalledWith(tenantId);
+    expect(tenantCredentials.findOne).not.toHaveBeenCalled();
+  });
+
   it('queues manual SMS through the guarded worker instead of making an untracked request', async () => {
     process.env.TWILIO_STATUS_CALLBACK_URL =
       'https://api.example.com/webhooks/twilio/status';
