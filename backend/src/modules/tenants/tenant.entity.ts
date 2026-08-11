@@ -44,6 +44,18 @@ export type WorkspaceLifecycleStatus =
   | 'SUSPENDED'
   | 'CANCELED';
 
+export type TenantProvisioningStatus =
+  | 'WAITING_FOR_CLIENT'
+  | 'PROFILE_READY'
+  | 'BILLING_READY'
+  | 'EMAIL_PROVISIONING'
+  | 'SMS_PROVISIONING'
+  | 'COMPLIANCE_PENDING'
+  | 'TESTING'
+  | 'READY'
+  | 'ACTIVE'
+  | 'ACTION_REQUIRED';
+
 @Entity('tenants')
 export class Tenant {
   @PrimaryGeneratedColumn('uuid')
@@ -60,6 +72,15 @@ export class Tenant {
 
   @Column({ name: 'lifecycle_status', type: 'text', default: 'ONBOARDING' })
   lifecycleStatus!: WorkspaceLifecycleStatus;
+
+  @Column({ name: 'provisioning_status', type: 'text', default: 'WAITING_FOR_CLIENT' })
+  provisioningStatus!: TenantProvisioningStatus;
+
+  @Column({ name: 'provisioning_last_reconciled_at', type: 'timestamptz', nullable: true })
+  provisioningLastReconciledAt?: Date | null;
+
+  @Column({ name: 'provisioning_last_error', type: 'text', nullable: true })
+  provisioningLastError?: string | null;
 
   @Column({ name: 'service_activated_at', type: 'timestamptz', nullable: true })
   serviceActivatedAt?: Date | null;

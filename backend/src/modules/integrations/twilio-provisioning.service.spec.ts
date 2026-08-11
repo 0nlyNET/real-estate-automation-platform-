@@ -64,7 +64,14 @@ describe('TwilioProvisioningService resumability', () => {
       phoneNumber: '+15550000001',
       smsStatus: 'blocked',
     });
+    await expect(service.provisionTenant('tenant-a')).resolves.toMatchObject({
+      twilioSubaccountSid: 'AC-sub',
+      messagingServiceSid: 'MG-sub',
+      phoneNumberSid: 'PN-sub',
+    });
     expect(calls.filter((url) => url.endsWith('/Accounts.json'))).toHaveLength(1);
+    expect(calls.filter((url) => url.endsWith('/Services'))).toHaveLength(1);
+    expect(calls.filter((url) => url.endsWith('/IncomingPhoneNumbers.json'))).toHaveLength(1);
   });
 });
 

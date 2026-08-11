@@ -5,6 +5,12 @@ export class ManagedProviderArchitecture1786492800001 implements MigrationInterf
 
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
+      ALTER TABLE "tenants"
+        ADD COLUMN IF NOT EXISTS "provisioning_status" varchar(40) NOT NULL DEFAULT 'WAITING_FOR_CLIENT',
+        ADD COLUMN IF NOT EXISTS "provisioning_last_reconciled_at" timestamptz,
+        ADD COLUMN IF NOT EXISTS "provisioning_last_error" text
+    `);
+    await queryRunner.query(`
       CREATE TABLE "tenant_messaging_resources" (
         "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         "tenant_id" uuid NOT NULL REFERENCES "tenants"("id") ON DELETE CASCADE,
@@ -63,5 +69,11 @@ export class ManagedProviderArchitecture1786492800001 implements MigrationInterf
   async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query('DROP TABLE IF EXISTS "tenant_email_identities"');
     await queryRunner.query('DROP TABLE IF EXISTS "tenant_messaging_resources"');
+    await queryRunner.query(`
+      ALTER TABLE "tenants"
+        DROP COLUMN IF EXISTS "provisioning_last_error",
+        DROP COLUMN IF EXISTS "provisioning_last_reconciled_at",
+        DROP COLUMN IF EXISTS "provisioning_status"
+    `);
   }
 }

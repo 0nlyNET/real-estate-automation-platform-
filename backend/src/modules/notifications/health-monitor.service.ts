@@ -1,10 +1,16 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, MoreThan, Repository } from 'typeorm';
+import { DataSource, In, LessThan, MoreThan, Not, Repository } from 'typeorm';
 import { environmentReadiness } from '../../common/environment-readiness';
 import { operationalEvent } from '../../common/operational-log';
 import { StripeWebhookEvent } from '../billing/stripe-webhook-event.entity';
 import { NotificationsService } from './notifications.service';
+import { Message } from '../messaging/message.entity';
+import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
+import { AiRun } from '../ai/ai-run.entity';
+import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
+import { OperationsTask } from '../operations/operations-task.entity';
 
 @Injectable()
 export class HealthMonitorService implements OnModuleInit, OnModuleDestroy {
@@ -18,6 +24,18 @@ export class HealthMonitorService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(StripeWebhookEvent)
     private readonly stripeEvents: Repository<StripeWebhookEvent>,
     private readonly notifications: NotificationsService,
+    @Optional() @InjectRepository(Message)
+    private readonly messages?: Repository<Message>,
+    @Optional() @InjectRepository(SequenceEnrollment)
+    private readonly enrollments?: Repository<SequenceEnrollment>,
+    @Optional() @InjectRepository(AiRun)
+    private readonly aiRuns?: Repository<AiRun>,
+    @Optional() @InjectRepository(TenantMessagingResource)
+    private readonly messagingResources?: Repository<TenantMessagingResource>,
+    @Optional() @InjectRepository(TenantEmailIdentity)
+    private readonly emailIdentities?: Repository<TenantEmailIdentity>,
+    @Optional() @InjectRepository(OperationsTask)
+    private readonly operationsTasks?: Repository<OperationsTask>,
   ) {}
 
   onModuleInit() {
@@ -59,6 +77,33 @@ export class HealthMonitorService implements OnModuleInit, OnModuleDestroy {
     } catch {
       healthy = false;
       reasons.push('webhook health query failed');
+    }
+    try {
+      const stalledBefore = new Date(now.getTime() - 15 * 60 * 1_000);
+      const [stalledMessages, stalledSequences, stalledAi, failedTwilio, failedEmail, criticalIncidents] =
+        await Promise.all([
+          this.messages?.count({ where: { status: 'sending', lockedAt: LessThan(stalledBefore) } }) || 0,
+          this.enrollments?.count({ where: { status: 'active', lockedAt: LessThan(stalledBefore) } }) || 0,
+          this.aiRuns?.count({ where: { status: 'processing', lockedAt: LessThan(stalledBefore) } }) || 0,
+          this.messagingResources?.count({ where: { smsStatus: In(['failed', 'blocked']) } }) || 0,
+          this.emailIdentities?.count({ where: { emailStatus: In(['failed', 'blocked']) } }) || 0,
+          this.operationsTasks?.count({
+            where: { priority: 'critical', status: Not('resolved') },
+          }) || 0,
+        ]);
+      if (stalledMessages) reasons.push(`${stalledMessages} messages have stalled leases`);
+      if (stalledSequences) reasons.push(`${stalledSequences} sequences have stalled leases`);
+      if (stalledAi) reasons.push(`${stalledAi} AI jobs have stalled leases`);
+      if (failedTwilio) reasons.push(`${failedTwilio} tenant Twilio resources need attention`);
+      if (failedEmail) reasons.push(`${failedEmail} tenant email identities need attention`);
+      if (criticalIncidents) reasons.push(`${criticalIncidents} critical incidents remain unresolved`);
+      if (
+        stalledMessages || stalledSequences || stalledAi || failedTwilio ||
+        failedEmail || criticalIncidents
+      ) healthy = false;
+    } catch {
+      healthy = false;
+      reasons.push('worker/provider health query failed');
     }
 
     if (!healthy) this.failures += 1;

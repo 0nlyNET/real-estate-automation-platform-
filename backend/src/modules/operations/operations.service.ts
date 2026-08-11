@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, LessThan, Repository } from 'typeorm';
+import { FindOptionsWhere, In, LessThan, Repository } from 'typeorm';
 import { OperationsTask } from './operations-task.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlatformOperatorsService } from '../../common/platform-operators.service';
@@ -181,5 +181,32 @@ export class OperationsService {
       })
       .getCount();
     return count > 0;
+  }
+
+  async resolveRecoverableTasks(input: {
+    tenantId: string;
+    category: string;
+    relatedEntityType: string;
+    relatedEntityId: string;
+    evidenceNote: string;
+  }) {
+    const rows = await this.repo.find({
+      where: {
+        tenantId: input.tenantId,
+        category: input.category,
+        relatedEntityType: input.relatedEntityType,
+        relatedEntityId: input.relatedEntityId,
+        status: In(['open', 'in_progress', 'blocked']),
+      },
+    });
+    if (!rows.length) return 0;
+    const completedAt = new Date();
+    for (const row of rows) {
+      row.status = 'resolved';
+      row.completedAt = completedAt;
+      row.evidenceNote = input.evidenceNote;
+    }
+    await this.repo.save(rows);
+    return rows.length;
   }
 }

@@ -15,6 +15,10 @@ import { ProspectApplication } from '../public/prospect-application.entity';
 import { OperationalRemindersService } from './operational-reminders.service';
 import { ClientNotificationsController } from './client-notifications.controller';
 import { AiRun } from '../ai/ai-run.entity';
+import { Message } from '../messaging/message.entity';
+import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
+import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 
 @Global()
 @Module({
@@ -28,6 +32,10 @@ import { AiRun } from '../ai/ai-run.entity';
       OperationsTask,
       ProspectApplication,
       AiRun,
+      Message,
+      SequenceEnrollment,
+      TenantMessagingResource,
+      TenantEmailIdentity,
     ]),
     CommonModule,
   ],

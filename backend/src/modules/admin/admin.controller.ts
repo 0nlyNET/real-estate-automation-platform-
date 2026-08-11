@@ -388,7 +388,7 @@ export class AdminController {
 
   @Patch('tenants/:tenantId/provisioning/twilio-compliance')
   @UseGuards(PlatformAdminGuard)
-  setTwilioCompliance(
+  async setTwilioCompliance(
     @Param('tenantId') tenantId: string,
     @Body() body: {
       status: 'not_started' | 'pending' | 'approved' | 'blocked';
@@ -403,7 +403,9 @@ export class AdminController {
     if (!this.twilioProvisioning) {
       throw new BadRequestException('Twilio provisioning service unavailable');
     }
-    return this.twilioProvisioning.setComplianceStatus(tenantId, body.status, body);
+    const resource = await this.twilioProvisioning.setComplianceStatus(tenantId, body.status, body);
+    await this.provisioning?.reconcileTenantProvisioning(tenantId);
+    return resource;
   }
 
   @Put('tenants/:tenantId/integrations/twilio')
@@ -417,11 +419,13 @@ export class AdminController {
 
   @Post('tenants/:tenantId/integrations/twilio/test')
   @UseGuards(PlatformAdminGuard)
-  testTenantTwilio(
+  async testTenantTwilio(
     @Param('tenantId') tenantId: string,
     @Body() body: TestTwilioDto,
   ) {
-    return this.platformIntegrations.testTenantTwilio(tenantId, body);
+    const result = await this.platformIntegrations.testTenantTwilio(tenantId, body);
+    if (result.ok) await this.provisioning?.reconcileTenantProvisioning(tenantId);
+    return result;
   }
 
   @Put('tenants/:tenantId/integrations/sendgrid')
@@ -435,11 +439,13 @@ export class AdminController {
 
   @Post('tenants/:tenantId/integrations/sendgrid/test')
   @UseGuards(PlatformAdminGuard)
-  testTenantSendGrid(
+  async testTenantSendGrid(
     @Param('tenantId') tenantId: string,
     @Body() body: TestSendGridDto,
   ) {
-    return this.platformIntegrations.testTenantSendGrid(tenantId, body);
+    const result = await this.platformIntegrations.testTenantSendGrid(tenantId, body);
+    if (result.ok) await this.provisioning?.reconcileTenantProvisioning(tenantId);
+    return result;
   }
 
   @Delete('tenants/:tenantId/integrations/:provider')

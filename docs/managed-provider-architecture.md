@@ -45,16 +45,21 @@ remain transient. Dropped events are classified by their reason.
 
 ## 3. Tenant provisioning lifecycle
 
-The normal lifecycle is `PROVISIONING -> TESTING -> READY -> ACTIVE`.
-Provisioning reconciliation is safe to rerun and reconciles Twilio and email
-independently. A failed provider step stores the completed resource identifiers,
-records a sanitized error, releases its lease, and creates an owner task when
-triggered from billing. It must never guess a tenant for an unknown number or
-reply token.
+The persisted aggregate lifecycle is `WAITING_FOR_CLIENT -> PROFILE_READY ->
+BILLING_READY -> EMAIL_PROVISIONING -> SMS_PROVISIONING ->
+COMPLIANCE_PENDING -> TESTING -> READY -> ACTIVE`, with `ACTION_REQUIRED` for
+failures. Provisioning reconciliation is safe to rerun and reconciles Twilio and
+email independently. A failed provider step stores the completed resource
+identifiers, records a sanitized error, releases its lease, and creates one
+deduplicated owner task. A successful retry resolves that recoverable task.
+It must never guess a tenant for an unknown number or reply token.
 
 Stripe checkout completion and successful invoice payment request provider
-reconciliation. Provider failures do not invalidate or retry a verified Stripe
-event; they become owner-visible exceptions.
+reconciliation. Owner compliance changes and successful controlled tests also
+reconcile immediately; a bounded background reconciliation pass covers relevant
+configuration changes without depending on an open browser. Provider failures
+do not invalidate or retry a verified Stripe event; they become owner-visible
+exceptions.
 
 ## 4. Callback checklist
 
@@ -87,11 +92,13 @@ activation after every required item passes.
 
 ## 6. Monitoring and owner exception queue
 
-Monitor backend readiness, worker leases, database connections and migrations,
-Stripe webhook failures, Twilio/SendGrid failures, provisioning state and lease
-age, safety incidents, usage warnings, bounce/complaint/opt-out rates, and backup
-freshness. Alerts must link to an operations task or tenant resource and contain
-no provider secrets or message bodies.
+The deduplicated health incident monitor checks backend readiness, database
+connectivity/configuration, Stripe webhook failures, stalled message/sequence/AI
+leases, blocked or failed Twilio/SendGrid tenant resources, and unresolved
+critical incidents. Tenant quality monitoring separately evaluates SMS/email
+failure, bounce, complaint, opt-out, velocity, lead-spike, and prohibited-content
+rates. Alerts must link to an operations task or tenant resource and contain no
+provider secrets or message bodies.
 
 The owner dashboard is the exception queue: provider provisioning failures,
 compliance blocks, spend warnings, hard-limit pauses, unusual velocity, billing
@@ -112,9 +119,10 @@ service through the audited control path.
 
 ## 8. Cost and margin reporting
 
-The owner-only tenant usage report aggregates SMS, email, AI, and lead
-reservations, estimated provider cost, normalized monthly subscription revenue,
-and estimated contribution margin. Unit costs come from the configured
+The owner-only tenant usage report aggregates SMS/email sent, delivered, failed,
+and email-bounce outcomes alongside SMS, email, AI, and lead reservations,
+estimated provider cost, normalized monthly subscription revenue, and estimated
+contribution margin. Unit costs come from the configured
 `ESTIMATED_*_COST_USD` values. Reconcile estimates against Twilio, SendGrid, and
 AI invoices before financial use; estimates are operational guardrails, not an
 accounting ledger.

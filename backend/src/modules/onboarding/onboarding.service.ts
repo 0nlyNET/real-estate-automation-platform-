@@ -1307,6 +1307,9 @@ export class OnboardingService {
     if (!tenant) throw new NotFoundException('Workspace not found');
     const record = await this.getOrCreate(tenantId);
     tenant.lifecycleStatus = 'ACTIVE';
+    tenant.provisioningStatus = 'ACTIVE';
+    tenant.provisioningLastReconciledAt = new Date();
+    tenant.provisioningLastError = null;
     tenant.serviceActivatedAt = new Date();
     tenant.servicePausedAt = null;
     record.activationStatus = 'active';

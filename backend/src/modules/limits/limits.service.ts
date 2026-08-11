@@ -8,6 +8,7 @@ import { OperationsService } from '../operations/operations.service';
 import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Tenant } from '../tenants/tenant.entity';
+import { Message } from '../messaging/message.entity';
 import { UsageBucket, UsageMetric, UsageWindow } from './usage-bucket.entity';
 import { UsagePolicy, UsagePolicyScope } from './usage-policy.entity';
 import { UsageReservation } from './usage-reservation.entity';
@@ -211,7 +212,7 @@ export class LimitsService {
   async tenantUsageReport(tenantId: string, days = 30) {
     const safeDays = Math.max(1, Math.min(366, Math.floor(days)));
     const since = new Date(Date.now() - safeDays * 86_400_000);
-    const [tenant, rows] = await Promise.all([
+    const [tenant, rows, messageRows] = await Promise.all([
       this.dataSource.getRepository(Tenant).findOne({ where: { id: tenantId } }),
       this.dataSource
         .getRepository(UsageReservation)
@@ -222,6 +223,21 @@ export class LimitsService {
         .where('usage.tenantId = :tenantId', { tenantId })
         .andWhere('usage.createdAt >= :since', { since })
         .groupBy('usage.metric')
+        .getRawMany(),
+      this.dataSource
+        .getRepository(Message)
+        .createQueryBuilder('message')
+        .innerJoin('message.lead', 'lead')
+        .select('message.channel', 'channel')
+        .addSelect('message.status', 'status')
+        .addSelect('message.providerStatus', 'providerStatus')
+        .addSelect('COUNT(*)', 'quantity')
+        .where('lead.tenantId = :tenantId', { tenantId })
+        .andWhere('message.direction = :direction', { direction: 'outbound' })
+        .andWhere('message.createdAt >= :since', { since })
+        .groupBy('message.channel')
+        .addGroupBy('message.status')
+        .addGroupBy('message.providerStatus')
         .getRawMany(),
     ]);
     if (!tenant) throw new BadRequestException('Tenant not found');
@@ -234,21 +250,43 @@ export class LimitsService {
         },
       ]),
     );
-    const estimatedProviderCostUsd = Object.values(usage).reduce(
-      (sum, item: any) => sum + Number(item.estimatedCostUsd || 0),
-      0,
+    const estimatedProviderCostUsd = Number(
+      Object.values(usage)
+        .reduce((sum, item: any) => sum + Number(item.estimatedCostUsd || 0), 0)
+        .toFixed(4),
     );
     const recurringRevenueUsd = Number(tenant.stripeUnitAmount || 0) / 100;
     const normalizedRevenueUsd =
       tenant.billingInterval === 'year' ? recurringRevenueUsd / 12 : recurringRevenueUsd;
+    const delivery = {
+      sms: { sent: 0, delivered: 0, failed: 0 },
+      email: { sent: 0, delivered: 0, failed: 0, bounced: 0 },
+    };
+    for (const row of messageRows) {
+      const channel = String(row.channel) === 'email' ? 'email' : 'sms';
+      const status = String(row.status || '');
+      const providerStatus = String(row.providerStatus || '').toLowerCase();
+      const quantity = Number(row.quantity || 0);
+      if (['provider_accepted', 'sent', 'delivered'].includes(status)) {
+        delivery[channel].sent += quantity;
+      }
+      if (status === 'delivered') delivery[channel].delivered += quantity;
+      if (['failed', 'blocked'].includes(status)) delivery[channel].failed += quantity;
+      if (channel === 'email' && providerStatus === 'bounce') {
+        delivery.email.bounced += quantity;
+      }
+    }
     return {
       tenantId,
       periodDays: safeDays,
       since,
       usage,
+      delivery,
       estimatedProviderCostUsd,
       normalizedMonthlyRevenueUsd: normalizedRevenueUsd,
-      estimatedContributionMarginUsd: normalizedRevenueUsd - estimatedProviderCostUsd,
+      estimatedContributionMarginUsd: Number(
+        (normalizedRevenueUsd - estimatedProviderCostUsd).toFixed(4),
+      ),
       currency: tenant.stripeCurrency || 'usd',
       note: 'Provider costs are estimates from configured unit costs; reconcile against provider invoices.',
     };
