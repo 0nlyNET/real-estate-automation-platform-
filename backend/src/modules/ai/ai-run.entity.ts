@@ -18,7 +18,14 @@ export type AiRunStatus =
   | 'failed';
 
 @Entity({ name: 'ai_runs' })
-@Index(['triggeringMessageId'], { unique: true })
+@Index('UQ_ai_runs_triggering_message', ['triggeringMessageId'], {
+  unique: true,
+  where: 'triggering_message_id IS NOT NULL',
+})
+@Index('UQ_ai_runs_first_response', ['leadId', 'triggerType'], {
+  unique: true,
+  where: "trigger_type = 'first_response'",
+})
 @Index(['tenantId', 'createdAt'])
 @Index(['status', 'createdAt'])
 export class AiRun {
@@ -31,8 +38,11 @@ export class AiRun {
   @Column({ name: 'lead_id', type: 'uuid' })
   leadId!: string;
 
-  @Column({ name: 'triggering_message_id', type: 'uuid' })
-  triggeringMessageId!: string;
+  @Column({ name: 'triggering_message_id', type: 'uuid', nullable: true })
+  triggeringMessageId!: string | null;
+
+  @Column({ name: 'trigger_type', type: 'varchar', length: 30, default: 'inbound' })
+  triggerType!: 'inbound' | 'first_response';
 
   @Column({ type: 'varchar', length: 80, default: 'openai' })
   provider!: string;

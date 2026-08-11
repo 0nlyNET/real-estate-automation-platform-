@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { isSafeBookingUrl } from "../../common/booking-link";
@@ -12,6 +12,7 @@ import { Lead } from "../leads/lead.entity";
 import { TenantSettings } from "../settings/tenant-settings.entity";
 import { Tenant } from "../tenants/tenant.entity";
 import { Message } from "./message.entity";
+import { TestRun } from "../testing/test-run.entity";
 
 export interface MessageSafetyInput {
   leadId: string;
@@ -45,6 +46,9 @@ export class MessageSafetyService {
     private readonly leadEventRepository: Repository<LeadEvent>,
     private readonly compliance: ComplianceService,
     private readonly entitlements: EntitlementService,
+    @Optional()
+    @InjectRepository(TestRun)
+    private readonly testRuns?: Repository<TestRun>,
   ) {}
 
   async verifyMessageSafety(
@@ -120,6 +124,34 @@ export class MessageSafetyService {
       }
       if (lead.stage === "closed") {
         block("LEAD_CLOSED", "Closed leads cannot receive ordinary automation");
+      }
+
+      if (lead.testRunId) {
+        const run = await this.testRuns?.findOne({
+          where: { id: lead.testRunId, tenantId: input.clientId },
+        });
+        if (
+          !run ||
+          run.status !== "running" ||
+          run.expiresAt.getTime() <= now.getTime()
+        ) {
+          block("TEST_RUN_INACTIVE", "Controlled test run is not active");
+        } else {
+          const testChannel = job?.channel ?? normalizeChannel(input.communicationType);
+          if (
+            testChannel === "sms" &&
+            normalizePhoneE164(lead.phone) !== normalizePhoneE164(run.smsRecipient)
+          ) {
+            block("TEST_RECIPIENT_MISMATCH", "SMS destination is outside the approved test run");
+          }
+          if (
+            testChannel === "email" &&
+            String(lead.email || "").trim().toLowerCase() !==
+              String(run.emailRecipient || "").trim().toLowerCase()
+          ) {
+            block("TEST_RECIPIENT_MISMATCH", "Email destination is outside the approved test run");
+          }
+        }
       }
 
       if (automated) {

@@ -14,5 +14,6 @@ import { TenantSettings } from '../settings/tenant-settings.entity';
   imports: [TypeOrmModule.forFeature([User, Lead, Message, ComplianceOptOut, LeadStageEvent, TenantSettings]), CommonModule],
   controllers: [StatsController],
   providers: [StatsService],
+  exports: [StatsService],
 })
 export class StatsModule {}

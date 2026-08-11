@@ -120,11 +120,24 @@ export default function OnboardingPage() {
   }
 
   const completedClientSections = useMemo(() => {
+    const smsBusinessReady = !data.smsEnabled || Boolean(
+      data.businessIdentity.businessType && data.businessIdentity.companyType &&
+      data.businessIdentity.ein && data.businessIdentity.website &&
+      data.businessIdentity.businessAddress && data.businessIdentity.city &&
+      data.businessIdentity.region && data.businessIdentity.postalCode &&
+      data.contacts.firstName && data.contacts.lastName && data.contacts.email &&
+      data.contacts.phone && data.contacts.jobPosition,
+    )
+    const smsCampaignReady = !data.smsEnabled || Boolean(
+      data.consentConfiguration.campaignDescription && data.consentConfiguration.messageFlow &&
+      data.consentConfiguration.sampleMessage && data.consentConfiguration.sampleMessage2 &&
+      data.consentConfiguration.termsUrl && data.consentConfiguration.privacyUrl,
+    )
     return [
-      Boolean(data.businessIdentity.legalBusinessName && data.businessIdentity.primaryMarket && data.contacts.accountOwner),
+      Boolean(data.businessIdentity.legalBusinessName && data.businessIdentity.primaryMarket && data.contacts.accountOwner && smsBusinessReady),
       Boolean(data.serviceScope.leadSources && data.leadHandling.routingRules && data.leadHandling.businessHours),
-      Boolean(data.brandCommunication.brandName && data.brandCommunication.brandVoice && data.consentConfiguration.exactConsentLanguage),
-      Boolean(data.integrationConfiguration.providerAccountOwner && data.targetLaunchDate),
+      Boolean(data.brandCommunication.brandName && data.brandCommunication.brandVoice && data.consentConfiguration.exactConsentLanguage && smsCampaignReady),
+      Boolean(data.targetLaunchDate),
     ]
   }, [data])
 
@@ -155,6 +168,7 @@ export default function OnboardingPage() {
       },
       integrationConfiguration: {
         ...data.integrationConfiguration,
+        providerAccountOwner: "RealtyTechAI managed platform",
         authorizationStatus: data.integrationConfiguration.authorizationStatus || "client authorized setup",
       },
     }
@@ -229,6 +243,28 @@ export default function OnboardingPage() {
                     <Field label="Billing email (if different)" type="email" value={data.contacts.billingContact} onChange={(value) => field("contacts", "billingContact", value)} />
                     <Field label="Time zone" value={settings.timeZone} onChange={(value) => setSettings((current) => ({ ...current, timeZone: value }))} />
                   </div>
+                  {data.smsEnabled ? (
+                    <div className="space-y-4 rounded-lg border p-4">
+                      <div><div className="font-medium">Twilio business verification</div><p className="text-sm text-muted-foreground">Required only for SMS registration. Enter the legal information exactly as registered with the IRS.</p></div>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Field label="Legal business type" value={data.businessIdentity.businessType} onChange={(value) => field("businessIdentity", "businessType", value)} placeholder="LLC, Corporation, Partnership" />
+                        <Field label="EIN" value={data.businessIdentity.ein} onChange={(value) => field("businessIdentity", "ein", value)} placeholder="12-3456789" />
+                        <Field label="Company type" value={data.businessIdentity.companyType} onChange={(value) => field("businessIdentity", "companyType", value)} placeholder="private, public, non-profit, or government" />
+                        <Field label="Street address" value={data.businessIdentity.businessAddress} onChange={(value) => field("businessIdentity", "businessAddress", value)} />
+                        <Field label="City" value={data.businessIdentity.city} onChange={(value) => field("businessIdentity", "city", value)} />
+                        <Field label="State / region" value={data.businessIdentity.region} onChange={(value) => field("businessIdentity", "region", value)} placeholder="NY" />
+                        <Field label="Postal code" value={data.businessIdentity.postalCode} onChange={(value) => field("businessIdentity", "postalCode", value)} />
+                        <Field label="Country code" value={data.businessIdentity.country || "US"} onChange={(value) => field("businessIdentity", "country", value)} placeholder="US" />
+                        {String(data.businessIdentity.companyType || "").toLowerCase() === "public" ? <><Field label="Stock exchange" value={data.businessIdentity.stockExchange} onChange={(value) => field("businessIdentity", "stockExchange", value)} /><Field label="Stock ticker" value={data.businessIdentity.stockTicker} onChange={(value) => field("businessIdentity", "stockTicker", value)} /><Field label="Brand contact email" type="email" value={data.businessIdentity.brandContactEmail} onChange={(value) => field("businessIdentity", "brandContactEmail", value)} /></> : null}
+                        <Field label="Representative first name" value={data.contacts.firstName} onChange={(value) => field("contacts", "firstName", value)} />
+                        <Field label="Representative last name" value={data.contacts.lastName} onChange={(value) => field("contacts", "lastName", value)} />
+                        <Field label="Representative business email" type="email" value={data.contacts.email || data.contacts.accountOwner} onChange={(value) => field("contacts", "email", value)} />
+                        <Field label="Representative phone" value={data.contacts.phone} onChange={(value) => field("contacts", "phone", value)} />
+                        <Field label="Representative position" value={data.contacts.jobPosition} onChange={(value) => field("contacts", "jobPosition", value)} placeholder="Owner, CEO, Director, VP" />
+                        <Field label="Representative title" value={data.contacts.businessTitle} onChange={(value) => field("contacts", "businessTitle", value)} placeholder="Broker Owner" />
+                      </div>
+                    </div>
+                  ) : null}
                   <p className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">We use the account owner as the setup, support, approval, and escalation contact unless you tell us otherwise later.</p>
                 </>
               ) : null}
@@ -264,6 +300,24 @@ export default function OnboardingPage() {
                     <Field label="How do you handle opt-outs?" value={data.consentConfiguration.optOutProcess} onChange={(value) => field("consentConfiguration", "optOutProcess", value)} placeholder="Honor STOP and unsubscribe immediately" />
                   </div>
                   <div className="space-y-2"><Label htmlFor="consent-copy">Exact consent language shown on your lead form</Label><Textarea id="consent-copy" value={String(data.consentConfiguration.exactConsentLanguage || "")} onChange={(event) => field("consentConfiguration", "exactConsentLanguage", event.target.value)} /></div>
+                  {data.smsEnabled ? (
+                    <div className="space-y-4 rounded-lg border p-4">
+                      <div><div className="font-medium">A2P campaign registration</div><p className="text-sm text-muted-foreground">These exact examples and public URLs are submitted to Twilio for carrier review.</p></div>
+                      <div className="space-y-2"><Label htmlFor="campaign-description">Campaign description (40–4096 characters)</Label><Textarea id="campaign-description" value={String(data.consentConfiguration.campaignDescription || "")} onChange={(event) => field("consentConfiguration", "campaignDescription", event.target.value)} /></div>
+                      <div className="space-y-2"><Label htmlFor="message-flow">Detailed opt-in flow (40–2048 characters)</Label><Textarea id="message-flow" value={String(data.consentConfiguration.messageFlow || "")} onChange={(event) => field("consentConfiguration", "messageFlow", event.target.value)} /></div>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Field label="Sample SMS 1" value={data.consentConfiguration.sampleMessage} onChange={(value) => field("consentConfiguration", "sampleMessage", value)} />
+                        <Field label="Sample SMS 2" value={data.consentConfiguration.sampleMessage2} onChange={(value) => field("consentConfiguration", "sampleMessage2", value)} />
+                        <Field label="Public terms URL" type="url" value={data.consentConfiguration.termsUrl} onChange={(value) => field("consentConfiguration", "termsUrl", value)} />
+                        <Field label="Public privacy URL" type="url" value={data.consentConfiguration.privacyUrl} onChange={(value) => field("consentConfiguration", "privacyUrl", value)} />
+                        <Field label="Opt-in reply (if using START)" value={data.consentConfiguration.optInMessage} onChange={(value) => field("consentConfiguration", "optInMessage", value)} />
+                        <Field label="Opt-out reply (if self-managed)" value={data.consentConfiguration.optOutMessage} onChange={(value) => field("consentConfiguration", "optOutMessage", value)} />
+                        <Field label="Help reply (if self-managed)" value={data.consentConfiguration.helpMessage} onChange={(value) => field("consentConfiguration", "helpMessage", value)} />
+                        <Field label="A2P use case" value={data.consentConfiguration.a2pUseCase || "LOW_VOLUME"} onChange={(value) => field("consentConfiguration", "a2pUseCase", value)} />
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2"><Choice label="Messages may contain links" checked={data.consentConfiguration.hasEmbeddedLinks === true} onChange={(value) => field("consentConfiguration", "hasEmbeddedLinks", value)} /><Choice label="Messages may contain phone numbers" checked={data.consentConfiguration.hasEmbeddedPhone === true} onChange={(value) => field("consentConfiguration", "hasEmbeddedPhone", value)} /></div>
+                    </div>
+                  ) : null}
                   <div className="grid gap-3 md:grid-cols-2">
                     <Choice label="We use only leads we own or are authorized to contact" checked={data.consentConfiguration.sourceOwnership === "authorized"} onChange={(value) => field("consentConfiguration", "sourceOwnership", value ? "authorized" : "")} />
                     <Choice label="We will not upload purchased or cold lists" checked={data.consentConfiguration.purchasedOrColdListsExcluded === true} onChange={(value) => field("consentConfiguration", "purchasedOrColdListsExcluded", value)} />
@@ -287,7 +341,6 @@ export default function OnboardingPage() {
               {step === 3 ? (
                 <>
                   <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="Who owns the connected provider accounts?" value={data.integrationConfiguration.providerAccountOwner} onChange={(value) => field("integrationConfiguration", "providerAccountOwner", value)} placeholder="Lakeview Realty / account owner" />
                     <Field label="Target launch date" type="date" value={data.targetLaunchDate} onChange={(value) => setData((current) => ({ ...current, targetLaunchDate: value || null }))} />
                   </div>
                   <Card className="border-primary/30 bg-primary/5">

@@ -10,7 +10,9 @@ function builder(result: { count?: number; rawOne?: any; rawMany?: any[] }) {
     'where',
     'andWhere',
     'groupBy',
+    'addGroupBy',
     'orderBy',
+    'addOrderBy',
     'limit',
   ]) {
     value[method] = jest.fn(() => value);
@@ -85,5 +87,32 @@ describe('truthful reporting metrics', () => {
       'lead.tenantId = :tenantId',
       expect.objectContaining({ tenantId: 'tenant-a' }),
     );
+  });
+
+  it('groups team reporting by tenant, team, agent, source, and date with operating metrics', async () => {
+    const teamBuilder = builder({ rawMany: [{
+      teamId: 'team-a', teamName: 'North Team', agentId: 'agent-a',
+      agentEmail: 'agent@example.com', source: 'Facebook', date: '2026-08-10',
+      leads: '8', responses: '5', qualified: '3', appointments: '2',
+      avgResponseTimeSec: '91.6', handoffs: '1', closed: '1',
+    }] });
+    const service = new StatsService(
+      {} as any,
+      { createQueryBuilder: jest.fn(() => teamBuilder) } as any,
+      {} as any, {} as any, {} as any, {} as any,
+    );
+    const report = await service.teamPerformance('tenant-a', {
+      from: '2026-08-01T00:00:00Z', to: '2026-08-11T00:00:00Z',
+      teamId: 'team-a', agentId: 'agent-a', source: 'Facebook',
+    });
+    expect(report.rows).toEqual([expect.objectContaining({
+      teamId: 'team-a', agentId: 'agent-a', source: 'Facebook', date: '2026-08-10',
+      leads: 8, responses: 5, qualified: 3, appointments: 2,
+      avgResponseTimeSec: 92, handoffs: 1, closed: 1,
+    })]);
+    expect(teamBuilder.where).toHaveBeenCalledWith('lead.tenantId = :tenantId', { tenantId: 'tenant-a' });
+    expect(teamBuilder.andWhere).toHaveBeenCalledWith('lead.assignedToTeamId = :teamId', { teamId: 'team-a' });
+    expect(teamBuilder.andWhere).toHaveBeenCalledWith('lead.assignedToUserId = :agentId', { agentId: 'agent-a' });
+    expect(teamBuilder.andWhere).toHaveBeenCalledWith('lead.source = :source', { source: 'Facebook' });
   });
 });

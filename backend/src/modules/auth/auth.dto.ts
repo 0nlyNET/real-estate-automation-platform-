@@ -46,3 +46,13 @@ export class ChangeTemporaryPasswordDto {
   @MinLength(12)
   newPassword!: string;
 }
+
+export class AcceptInvitationDto {
+  @IsString()
+  @Length(32, 256)
+  token!: string;
+
+  @IsString()
+  @MinLength(12)
+  password!: string;
+}

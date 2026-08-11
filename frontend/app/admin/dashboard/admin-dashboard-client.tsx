@@ -344,9 +344,8 @@ type UsagePolicy = {
 type ClientSetup = {
   tenant: Tenant
   owner: { id: string; email: string; role: string; isEmailVerified: boolean }
-  temporaryPassword: string
-  verifyLink: string
-  verificationEmailSent: boolean
+  invitationEmailSent: boolean
+  invitationExpiresAt: string | null
 }
 
 type AiOverview = {
@@ -2261,21 +2260,19 @@ export function AdminDashboardClient({
                 <CardHeader>
                   <CardTitle>Secure client handoff</CardTitle>
                   <p className="text-sm text-muted-foreground">
-                    Send the verification link and temporary password through separate channels, then remove them from
-                    your notes.
+                    The owner chooses their own password from a single-use invitation. No password is generated or
+                    disclosed to RealtyTechAI staff.
                   </p>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <CopyRow label="Owner email" value={clientSetup.owner.email} />
-                  <CopyRow label="Temporary password" value={clientSetup.temporaryPassword} />
-                  <CopyRow label="Verification link" value={clientSetup.verifyLink} />
                   <p className="rounded-md bg-muted p-3 text-sm">
-                    {clientSetup.verificationEmailSent
-                      ? "Verification email sent successfully."
-                      : "System email is not connected; send the verification link manually."}
+                    {clientSetup.invitationEmailSent
+                      ? `Invitation sent successfully${clientSetup.invitationExpiresAt ? `; it expires ${new Date(clientSetup.invitationExpiresAt).toLocaleString()}.` : "."}`
+                      : "System email is not connected. Restore transactional email, then resend the invitation from the client workspace."}
                   </p>
                   <Button variant="outline" onClick={() => setClientSetup(null)}>
-                    I saved the handoff
+                    Done
                   </Button>
                 </CardContent>
               </Card>

@@ -63,7 +63,7 @@ export class HealthMonitorService implements OnModuleInit {
       reasons.push('database check failed');
     }
     const report = environmentReadiness();
-    if (report.platform.status === 'down' || report.encryption.status === 'down') {
+    if (report.runtime.status === 'down' || report.encryption.status === 'down') {
       healthy = false;
       reasons.push('critical environment configuration is incomplete');
     }

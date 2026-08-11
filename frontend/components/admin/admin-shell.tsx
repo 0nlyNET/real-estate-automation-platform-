@@ -15,6 +15,7 @@ import {
   Menu,
   Settings,
   Users,
+  Bot,
 } from "lucide-react"
 import { Logo } from "@/components/logo"
 import { Button } from "@/components/ui/button"
@@ -92,6 +93,13 @@ function Navigation({
         {primaryAdminNavigation.map((item) => (
           <NavigationLink key={item.id} item={item} active={activeView === item.id} mobile={mobile} />
         ))}
+        {mobile ? (
+          <SheetClose asChild>
+            <Link href="/admin/assistant" className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"><Bot className="h-4 w-4" />Operations AI</Link>
+          </SheetClose>
+        ) : (
+          <Link href="/admin/assistant" className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"><Bot className="h-4 w-4" />Operations AI</Link>
+        )}
       </div>
       {isOwner ? (
         <div className="mt-auto border-t px-3 py-4">

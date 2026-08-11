@@ -2,7 +2,7 @@ import { Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { Throttle } from '@nestjs/throttler';
-import { ChangeTemporaryPasswordDto, ForgotPasswordDto, LoginDto, ResetPasswordDto, VerifyEmailDto } from './auth.dto';
+import { AcceptInvitationDto, ChangeTemporaryPasswordDto, ForgotPasswordDto, LoginDto, ResetPasswordDto, VerifyEmailDto } from './auth.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import {
   clearSessionCookie,
@@ -29,6 +29,18 @@ export class AuthController {
       SESSION_COOKIE,
       rememberMe ? REMEMBER_ME_MAX_AGE_MS : SESSION_MAX_AGE_MS,
     );
+    clearSessionCookie(response, PRIMARY_SESSION_COOKIE);
+    return { user: result.user };
+  }
+
+  @Post('accept-invitation')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async acceptInvitation(
+    @Body() dto: AcceptInvitationDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.auth.acceptInvitation(dto.token, dto.password);
+    setSessionCookie(response, result.accessToken, SESSION_COOKIE, SESSION_MAX_AGE_MS);
     clearSessionCookie(response, PRIMARY_SESSION_COOKIE);
     return { user: result.user };
   }

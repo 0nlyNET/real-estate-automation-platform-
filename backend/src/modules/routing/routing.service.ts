@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Not, Repository } from 'typeorm';
 import { RoutingRule } from './routing-rule.entity';
 import { RoutingAssignmentLog } from './routing-assignment-log.entity';
 import { User } from '../users/user.entity';
@@ -16,7 +16,6 @@ export class RoutingService {
     @InjectRepository(RoutingAssignmentLog)
     private readonly logRepo: Repository<RoutingAssignmentLog>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
-    @InjectRepository(Lead) private readonly leadRepo: Repository<Lead>,
     @InjectRepository(Team) private readonly teamRepo: Repository<Team>,
     private readonly presence: PresenceService,
   ) {}
@@ -107,11 +106,20 @@ export class RoutingService {
         }
         if (!users.length) continue;
 
-        const counts = await Promise.all(
-          users.map(async (user) => ({ user, count: await this.leadRepo.count({ where: { tenantId: lead.tenantId, assignedToUserId: user.id } }) })),
-        );
-        counts.sort((a, b) => a.count - b.count || a.user.id.localeCompare(b.user.id));
-        const selected = counts[0].user;
+        users.sort((a, b) => a.id.localeCompare(b.id));
+        const previous = await this.logRepo.findOne({
+          where: {
+            tenantId: lead.tenantId,
+            ruleId: rule.id,
+            assignedToTeamId: team.id,
+            assignedToUserId: Not(IsNull()),
+          },
+          order: { createdAt: 'DESC' },
+        });
+        const priorIndex = previous?.assignedToUserId
+          ? users.findIndex((user) => user.id === previous.assignedToUserId)
+          : -1;
+        const selected = users[(priorIndex + 1 + users.length) % users.length];
         const result = { assignedToUserId: selected.id, assignedToTeamId: team.id, assignedToLabel: selected.email, ruleId: rule.id };
         await this.logDecision(lead.tenantId, lead.id, 'round_robin_team', config, rule.id, selected.id, team.id);
         return result;

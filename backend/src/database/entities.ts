@@ -49,6 +49,12 @@ import { DurableJob } from '../modules/durable-jobs/durable-job.entity';
 import { TestRun } from '../modules/testing/test-run.entity';
 import { OffboardingRequest } from '../modules/offboarding/offboarding-request.entity';
 import { SendDecision } from '../modules/messaging/send-decision.entity';
+import { AccountInvitation } from '../modules/auth/account-invitation.entity';
+import { TenantIntegrationConnection } from '../modules/crm-events/tenant-integration-connection.entity';
+import { IntegrationIngressEvent } from '../modules/crm-events/integration-ingress-event.entity';
+import { TenantWebhookSubscription } from '../modules/crm-events/tenant-webhook-subscription.entity';
+import { IntegrationDeliveryEvent } from '../modules/crm-events/integration-delivery-event.entity';
+import { AssistantRun } from '../modules/ai/assistant-run.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -102,4 +108,10 @@ export const databaseEntities = [
   TestRun,
   OffboardingRequest,
   SendDecision,
+  AccountInvitation,
+  TenantIntegrationConnection,
+  IntegrationIngressEvent,
+  TenantWebhookSubscription,
+  IntegrationDeliveryEvent,
+  AssistantRun,
 ] as const;

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -16,6 +17,7 @@ import {
 import { AiUsageService } from './ai-usage.service';
 import { BrokerageKnowledge } from './brokerage-knowledge.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
+import { ProviderConfigService } from '../integrations/provider-config.service';
 
 type ConfigurationActor = {
   userId: string;
@@ -24,6 +26,10 @@ type ConfigurationActor = {
 
 const SETTINGS_FIELDS_REQUIRING_APPROVAL: Array<keyof UpdateAiSettingsDto> = [
   'responseMode',
+  'aiFirstResponderEnabled',
+  'allowedChannels',
+  'tone',
+  'bookingBehavior',
   'identityLabel',
   'maximumAutomaticTurns',
   'minimumConfidenceThreshold',
@@ -46,6 +52,7 @@ export class AiConfigurationService {
     private readonly tenantSettings: Repository<TenantSettings>,
     private readonly usage: AiUsageService,
     private readonly audit: AiAuditService,
+    @Optional() private readonly providerConfig?: ProviderConfigService,
   ) {}
 
   async getConfiguration(tenantId: string) {
@@ -106,6 +113,14 @@ export class AiConfigurationService {
     }
 
     if (dto.responseMode !== undefined) settings.responseMode = dto.responseMode;
+    if (dto.aiFirstResponderEnabled !== undefined) {
+      settings.aiFirstResponderEnabled = dto.aiFirstResponderEnabled;
+    }
+    if (dto.allowedChannels !== undefined) {
+      settings.allowedChannels = [...new Set(dto.allowedChannels)];
+    }
+    if (dto.tone !== undefined) settings.tone = dto.tone;
+    if (dto.bookingBehavior !== undefined) settings.bookingBehavior = dto.bookingBehavior;
     if (dto.identityLabel !== undefined) {
       settings.identityLabel = dto.identityLabel.trim() || null;
     }
@@ -169,9 +184,9 @@ export class AiConfigurationService {
       throw new ConflictException('Approve brokerage information first.');
     }
     const communications = await this.communicationReadiness(tenantId);
-    if (!communications.sms && !communications.email) {
+    if (!this.allowedChannels(settings).some((channel) => communications[channel])) {
       throw new ConflictException(
-        'Connect and successfully test an SMS or email integration first.',
+        'Connect and successfully test at least one AI-allowed messaging channel first.',
       );
     }
     if (!String(process.env.OPENAI_API_KEY || '').trim()) {
@@ -329,14 +344,29 @@ export class AiConfigurationService {
       throw new ConflictException('The AI provider is not configured.');
     }
     const communications = await this.communicationReadiness(tenantId);
-    if (!communications.sms && !communications.email) {
+    if (!this.allowedChannels(settings).some((channel) => communications[channel])) {
       throw new ConflictException(
-        'A successfully tested messaging integration is required.',
+        'A successfully tested AI-allowed messaging integration is required.',
       );
     }
   }
 
+  private allowedChannels(settings: WorkspaceAiSettings): Array<'sms' | 'email'> {
+    const values = Array.isArray(settings.allowedChannels)
+      ? settings.allowedChannels.filter((value): value is 'sms' | 'email' =>
+          value === 'sms' || value === 'email')
+      : [];
+    return values.length ? values : ['sms', 'email'];
+  }
+
   private async communicationReadiness(tenantId: string) {
+    if (this.providerConfig) {
+      const [sms, email] = await Promise.all([
+        this.providerConfig.resolveTwilio(tenantId, { allowTesting: true }),
+        this.providerConfig.resolveSendGrid(tenantId, { allowTesting: true }),
+      ]);
+      return { sms: Boolean(sms), email: Boolean(email) };
+    }
     const rows = await this.credentials.find({
       where: { tenant: { id: tenantId } as any },
       relations: ['tenant'],
@@ -373,6 +403,10 @@ export class AiConfigurationService {
         this.settings.create({
           tenantId,
           aiEnabled: false,
+          aiFirstResponderEnabled: true,
+          allowedChannels: ['sms', 'email'],
+          tone: 'professional_warm',
+          bookingBehavior: 'verified_link_only',
           responseMode: 'human_only',
           maximumAutomaticTurns: 6,
           minimumConfidenceThreshold: 0.82,

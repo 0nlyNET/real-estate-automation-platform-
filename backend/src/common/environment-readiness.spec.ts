@@ -82,6 +82,7 @@ describe('production configuration contract', () => {
 
     expect(() => assertProductionEnvironment()).not.toThrow();
     const report = environmentReadiness();
+    expect(report.runtime).toEqual({ status: 'up', issues: [] });
     expect(report.platform.status).toBe('down');
     expect(report.platform.issues).toEqual(
       expect.arrayContaining([

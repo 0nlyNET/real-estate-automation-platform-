@@ -55,7 +55,13 @@ export class TestingService implements OnModuleInit {
       where: { tenantId, status: 'running' },
       order: { createdAt: 'DESC' },
     });
-    if (existing) return existing;
+    if (existing && existing.expiresAt.getTime() > Date.now()) return existing;
+    if (existing) {
+      existing.status = 'expired';
+      existing.completedAt = new Date();
+      existing.failureReason = 'Controlled test run expired before completion';
+      await this.runs.save(existing);
+    }
     const sequence = (await this.sequences.find({
       where: { tenantId, active: true },
       relations: ['steps'],

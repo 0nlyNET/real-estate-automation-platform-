@@ -30,8 +30,18 @@ export type LeadStage =
   | 'lost';
 
 @Entity({ name: 'leads' })
-@Index(['tenant', 'email'], { unique: true, where: 'email IS NOT NULL' })
-@Index(['tenant', 'phone'], { unique: true, where: 'phone IS NOT NULL' })
+@Index('IDX_leads_tenant_email', ['tenant', 'email'], {
+  unique: true,
+  where: 'email IS NOT NULL AND test_run_id IS NULL',
+})
+@Index('IDX_leads_tenant_phone', ['tenant', 'phone'], {
+  unique: true,
+  where: 'phone IS NOT NULL AND test_run_id IS NULL',
+})
+@Index('IDX_leads_tenant_test_run', ['tenantId', 'testRunId'], {
+  unique: true,
+  where: 'test_run_id IS NOT NULL',
+})
 @Index(
   'IDX_leads_tenant_provider_lead',
   ['tenantId', 'provider', 'providerLeadId'],
@@ -101,6 +111,18 @@ export class Lead extends BaseEntity {
     nullable: true,
   })
   providerLeadId?: string | null;
+
+  @Column({ name: 'ingestion_provider', type: 'varchar', length: 40, nullable: true })
+  ingestionProvider?: string | null;
+
+  @Column({ name: 'source_system', type: 'varchar', length: 80, nullable: true })
+  sourceSystem?: string | null;
+
+  @Column({ name: 'original_source', type: 'varchar', length: 160, nullable: true })
+  originalSource?: string | null;
+
+  @Column({ name: 'external_lead_id', type: 'varchar', length: 255, nullable: true })
+  externalLeadId?: string | null;
 
   @Column({
     name: 'ingestion_fingerprint',

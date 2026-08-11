@@ -87,7 +87,7 @@ export class HealthController {
       migrations.status === 'up' &&
       credentialStorage.status === 'up' &&
       durableWorkers.status === 'up' &&
-      configuration.platform.status === 'up' &&
+      configuration.runtime.status === 'up' &&
       configuration.encryption.status === 'up' &&
       configuration.systemEmail.status !== 'down' &&
       configuration.billing.status !== 'down';

@@ -219,7 +219,13 @@ export class OnboardingService {
         twilioApproval:
           messagingConfigurationChanged &&
           changed.some((key) =>
-            ['businessIdentity', 'brandCommunication', 'smsEnabled'].includes(
+            [
+              'businessIdentity',
+              'contacts',
+              'brandCommunication',
+              'consentConfiguration',
+              'smsEnabled',
+            ].includes(
               key,
             ),
           ),
@@ -624,6 +630,46 @@ export class OnboardingService {
       publicBusinessName: 'public business name',
       primaryMarket: 'primary market',
     });
+    const representative =
+      (record.contacts.authorizedRepresentative as Record<string, unknown>) ||
+      record.contacts;
+    const twilioRegistrationMissing = record.smsEnabled
+      ? [
+          ...missingTextFields(record.businessIdentity, {
+            businessType: 'legal business type',
+            ein: 'EIN',
+            website: 'business website',
+            businessAddress: 'business street address',
+            city: 'business city',
+            region: 'business state/region',
+            postalCode: 'business postal code',
+            companyType: 'company type',
+          }),
+          ...missingTextFields(representative, {
+            firstName: 'authorized representative first name',
+            lastName: 'authorized representative last name',
+            email: 'authorized representative email',
+            phone: 'authorized representative phone',
+            jobPosition: 'authorized representative position',
+          }),
+          ...missingTextFields(record.consentConfiguration, {
+            campaignDescription: 'A2P campaign description',
+            messageFlow: 'A2P opt-in message flow',
+            sampleMessage: 'A2P sample message one',
+            sampleMessage2: 'A2P sample message two',
+            termsUrl: 'public terms URL',
+            privacyUrl: 'public privacy URL',
+          }),
+          ...(String(record.businessIdentity.companyType || '').toLowerCase() ===
+          'public'
+            ? missingTextFields(record.businessIdentity, {
+                stockExchange: 'stock exchange',
+                stockTicker: 'stock ticker',
+                brandContactEmail: 'brand contact email',
+              })
+            : []),
+        ]
+      : [];
     const contactFields: Record<string, string> = {
       accountOwner: 'account owner email',
       billingContact: 'billing email',
@@ -747,6 +793,16 @@ export class OnboardingService {
       true,
       {
         nextAction: `Provide: ${businessMissing.join(', ')}.`,
+      },
+    );
+    add(
+      'twilio_registration_data',
+      'Twilio business, representative, and A2P campaign data are complete',
+      twilioRegistrationMissing.length === 0,
+      record.smsEnabled,
+      {
+        category: 'provider_configuration',
+        nextAction: `Provide: ${twilioRegistrationMissing.join(', ')}.`,
       },
     );
     add(
