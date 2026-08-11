@@ -17,6 +17,7 @@ import { FirstClientSafetyPipeline1785974400001 } from './migrations/20260806000
 import { MessagingDeliveryReliability1786060800001 } from './migrations/202608070001-messaging-delivery-reliability';
 import { ClientReadinessObservability1786060800002 } from './migrations/202608070002-client-readiness-observability';
 import { LaunchSafeguards1786406400001 } from './migrations/202608110001-launch-safeguards';
+import { ManagedProviderArchitecture1786492800001 } from './migrations/202608120001-managed-provider-architecture';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -35,6 +36,7 @@ const databaseMigrations = [
   MessagingDeliveryReliability1786060800001,
   ClientReadinessObservability1786060800002,
   LaunchSafeguards1786406400001,
+  ManagedProviderArchitecture1786492800001,
 ];
 
 function migrationOptions() {

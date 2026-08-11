@@ -32,6 +32,10 @@ import { LeadConsentRecord } from '../compliance/lead-consent-record.entity';
 import { ComplianceEvent } from '../compliance/compliance-event.entity';
 import { SendGridWebhookEvent } from './sendgrid-webhook-event.entity';
 import { OnboardingService } from '../onboarding/onboarding.service';
+import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
+import { decryptString } from '../../common/crypto-secrets';
+import { LimitsService } from '../limits/limits.service';
 
 export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
@@ -101,6 +105,14 @@ export class WebhooksService {
     private readonly operations?: OperationsService,
     @Optional()
     private readonly onboarding?: OnboardingService,
+    @Optional()
+    @InjectRepository(TenantMessagingResource)
+    private readonly messagingResources?: Repository<TenantMessagingResource>,
+    @Optional()
+    @InjectRepository(TenantEmailIdentity)
+    private readonly emailIdentities?: Repository<TenantEmailIdentity>,
+    @Optional()
+    private readonly limits?: LimitsService,
   ) {}
 
   async handleTwilioStatus(
@@ -120,24 +132,15 @@ export class WebhooksService {
       relations: ['lead'],
     });
     if (!message?.lead?.tenantId) return { status: 'ignored' } as const;
-    const credential = await this.credentialsRepo.findOne({
-      where: {
-        provider: 'twilio',
-        tenant: { id: message.lead.tenantId } as any,
-      },
-      relations: ['tenant'],
-    });
-    const integration = credential
-      ? decryptIntegrationPayload(credential.encryptedValue)
-      : null;
-    const authToken = String(integration?.authToken || '').trim();
+    const route = await this.findTwilioRoute('', null, message.lead.tenantId);
+    const authToken = String(route?.authToken || '').trim();
     const callbackUrl = String(process.env.TWILIO_STATUS_CALLBACK_URL || '').trim();
     const signatureHeader = headers['x-twilio-signature'];
     const signature = Array.isArray(signatureHeader)
       ? signatureHeader[0] || ''
       : String(signatureHeader || '');
     if (
-      !integration?.connected ||
+      !route?.connected ||
       !authToken ||
       !callbackUrl ||
       !validTwilioSignature(callbackUrl, body, authToken, signature)
@@ -361,15 +364,44 @@ export class WebhooksService {
     void webhookValue;
   }
 
-  private async findTwilioCredential(
+  private async findTwilioRoute(
     routingKey: string,
     messagingServiceSid?: string | null,
-  ): Promise<Credential | null> {
+    tenantId?: string,
+  ): Promise<{ tenantId: string; authToken: string; connected: boolean } | null> {
+    if (this.messagingResources) {
+      let resource = tenantId
+        ? await this.messagingResources.findOne({ where: { tenantId } })
+        : routingKey
+          ? await this.messagingResources.findOne({ where: { phoneNumber: routingKey } })
+          : null;
+      if (!resource && messagingServiceSid) {
+        resource = await this.messagingResources.findOne({
+          where: { messagingServiceSid },
+        });
+      }
+      if (resource?.encryptedAuthToken) {
+        return {
+          tenantId: resource.tenantId,
+          authToken: decryptString(resource.encryptedAuthToken),
+          connected: !['failed'].includes(resource.smsStatus),
+        };
+      }
+    }
     const direct = await this.credentialsRepo.findOne({
-      where: { provider: 'twilio', routingKey },
+      where: tenantId
+        ? ({ provider: 'twilio', tenant: { id: tenantId } as any } as any)
+        : { provider: 'twilio', routingKey },
       relations: ['tenant'],
     });
-    if (direct) return direct;
+    if (direct) {
+      const payload = decryptIntegrationPayload(direct.encryptedValue);
+      return {
+        tenantId: direct.tenant.id,
+        authToken: String(payload?.authToken || ''),
+        connected: Boolean(payload?.connected && !payload?.error),
+      };
+    }
 
     // Existing encrypted rows predate routing keys. Backfill the one exact
     // match once, then all subsequent webhooks use the indexed lookup.
@@ -391,13 +423,26 @@ export class WebhooksService {
 
     matches[0].routingKey = routingKey;
     try {
-      return await this.credentialsRepo.save(matches[0]);
+      const saved = await this.credentialsRepo.save(matches[0]);
+      const payload = decryptIntegrationPayload(saved.encryptedValue);
+      return {
+        tenantId: saved.tenant.id,
+        authToken: String(payload?.authToken || ''),
+        connected: Boolean(payload?.connected && !payload?.error),
+      };
     } catch (error: any) {
       if (String(error?.code || '') !== '23505') throw error;
-      return this.credentialsRepo.findOne({
+      const saved = await this.credentialsRepo.findOne({
         where: { provider: 'twilio', routingKey },
         relations: ['tenant'],
       });
+      if (!saved) return null;
+      const payload = decryptIntegrationPayload(saved.encryptedValue);
+      return {
+        tenantId: saved.tenant.id,
+        authToken: String(payload?.authToken || ''),
+        connected: Boolean(payload?.connected && !payload?.error),
+      };
     }
   }
 
@@ -419,11 +464,11 @@ export class WebhooksService {
       throw new BadRequestException('Missing required Twilio message fields');
     }
 
-    const credential = await this.findTwilioCredential(
+    const route = await this.findTwilioRoute(
       toRoutingKey,
       messagingServiceSid,
     );
-    if (!credential?.tenant?.id) {
+    if (!route?.tenantId) {
       this.logger.warn(
         operationalEvent('twilio_inbound_unrouted', {
           providerMessageId,
@@ -432,21 +477,20 @@ export class WebhooksService {
       return { status: 'ignored' } as const;
     }
 
-    const integration = decryptIntegrationPayload(credential.encryptedValue);
-    const authToken = String(integration?.authToken || '');
+    const authToken = route.authToken;
     const signatureHeader = headers['x-twilio-signature'];
     const signature = Array.isArray(signatureHeader)
       ? signatureHeader[0] || ''
       : String(signatureHeader || '');
     const webhookUrl = String(process.env.TWILIO_WEBHOOK_URL || '').trim();
     if (
-      !integration?.connected ||
+      !route.connected ||
       !authToken ||
       !webhookUrl ||
       !validTwilioSignature(webhookUrl, body, authToken, signature)
     ) {
       await this.compliance
-        .recordEvent(credential.tenant.id, {
+        .recordEvent(route.tenantId, {
           type: 'twilio_signature_rejected',
           channel: 'sms',
           payload: {
@@ -459,14 +503,14 @@ export class WebhooksService {
         operationalEvent('invalid_webhook_signature', {
           provider: 'twilio',
           webhook: 'inbound',
-          tenantId: credential.tenant.id,
+          tenantId: route.tenantId,
           providerMessageId,
         }),
       );
       throw new UnauthorizedException('Invalid webhook signature');
     }
 
-    const tenantId = credential.tenant.id;
+    const tenantId = route.tenantId;
     const stopKeyword = isOptOutMessage(text, optOutType);
     const persisted = await this.dataSource.transaction((manager) =>
       this.persistInbound(manager, {
@@ -551,8 +595,8 @@ export class WebhooksService {
         'Missing required SendGrid inbound message fields',
       );
     }
-    const credential = await this.findSendGridCredential(to);
-    if (!credential?.tenant?.id) {
+    const route = await this.findSendGridRoute(to);
+    if (!route?.tenantId) {
       this.logger.warn(
         operationalEvent('sendgrid_inbound_unrouted', {
           providerMessageId: rawMessageId,
@@ -560,38 +604,65 @@ export class WebhooksService {
       );
       return { status: 'ignored' } as const;
     }
-    const integration = decryptIntegrationPayload(credential.encryptedValue);
-    if (extractEmailAddress(integration?.inboundAddress) !== to) {
+    if (extractEmailAddress(route.inboundAddress) !== to) {
       this.logger.error(
         operationalEvent('sendgrid_inbound_route_mismatch', {
-          tenantId: credential.tenant.id,
+          tenantId: route.tenantId,
           providerMessageId: rawMessageId,
         }),
       );
       await this.operations?.createTask({
-        tenantId: credential.tenant.id,
+        tenantId: route.tenantId,
         category: 'messaging_failure',
         title: 'Inbound email routing needs attention',
         description:
           'An authenticated inbound email matched a stored routing key, but the tenant inbound address configuration did not match.',
         priority: 'high',
         relatedEntityType: 'integration:sendgrid',
-        relatedEntityId: credential.tenant.id,
+        relatedEntityId: route.tenantId,
         dedupeOpen: true,
       });
       return { status: 'ignored' } as const;
     }
-    if (!integration?.connected || integration?.error) {
+    if (!route.connected || route.error) {
       this.logger.warn(
         operationalEvent('sendgrid_inbound_outbound_unavailable', {
-          tenantId: credential.tenant.id,
+          tenantId: route.tenantId,
           providerMessageId: rawMessageId,
-          connected: Boolean(integration?.connected),
-          hasProviderError: Boolean(integration?.error),
+          connected: Boolean(route.connected),
+          hasProviderError: Boolean(route.error),
         }),
       );
     }
-    const tenantId = credential.tenant.id;
+    const tenantId = route.tenantId;
+    if (this.limits) {
+      const existingLead = await this.dataSource.getRepository(Lead).findOne({
+        where: { tenantId, email: from },
+      });
+      if (!existingLead) {
+        const usage = await this.limits.reserveUsage({
+          tenantId,
+          metric: 'lead',
+          idempotencyKey: `lead-inbound-email:${crypto
+            .createHash('sha256')
+            .update(`${tenantId}:${from}`)
+            .digest('hex')}`,
+        });
+        if (!usage.ok) {
+          await this.operations?.createTask({
+            tenantId,
+            category: 'usage_limit',
+            title: 'Inbound email lead blocked by usage limit',
+            description: usage.message,
+            priority: 'critical',
+            relatedEntityType: 'tenant',
+            relatedEntityId: tenantId,
+            dedupeOpen: true,
+          });
+          return { status: 'ignored' } as const;
+        }
+      }
+    }
     const stopKeyword =
       this.compliance.isStopKeyword(text) ||
       /^\s*(?:unsubscribe|remove me|opt out)\s*[.!]?\s*$/i.test(text);
@@ -692,23 +763,32 @@ export class WebhooksService {
           dedupeOpen: true,
         });
       }
-      if (
-        (result.optOut || result.deliveryFailed) &&
-        result.message?.lead?.email
-      ) {
+      if (result.optOut && result.message?.lead?.email) {
         await this.compliance.addOptOut(
           result.message.lead.tenantId,
           'email',
           result.message.lead.email,
-          result.optOut
-            ? 'provider_unsubscribe_event'
-            : 'provider_delivery_failure',
+          'provider_unsubscribe_event',
           'sendgrid_event_webhook',
         );
         await this.sequences.stopForLead(
           result.message.lead.tenantId,
           result.message.lead.id,
           'opt_out',
+        );
+      }
+      if (result.permanentSuppression && result.message?.lead?.email) {
+        await this.compliance.addDeliverySuppression(
+          result.message.lead.tenantId,
+          'email',
+          result.message.lead.email,
+          result.permanentSuppression,
+          'sendgrid_event_webhook',
+        );
+        await this.sequences.stopForLead(
+          result.message.lead.tenantId,
+          result.message.lead.id,
+          'other',
         );
       }
       if (
@@ -872,9 +952,12 @@ export class WebhooksService {
       }
       await messages.save(message);
       const deliveryFailed = state?.status === 'failed';
-      const optOut = ['spamreport', 'unsubscribe', 'group_unsubscribe'].includes(
-        eventType,
-      );
+      const disposition = classifySendGridDisposition(eventType, event);
+      const optOut = disposition === 'consent_opt_out';
+      const permanentSuppression =
+        disposition === 'permanent_suppression'
+          ? `sendgrid_${eventType}`
+          : null;
       this.logger.log(
         operationalEvent('sendgrid_event_saved', {
           tenantId: message.lead?.tenantId || null,
@@ -890,6 +973,7 @@ export class WebhooksService {
         message,
         deliveryFailed,
         optOut,
+        permanentSuppression,
         deliveryEvent: isSendGridDeliveryEvent(eventType),
       };
     });
@@ -1225,14 +1309,40 @@ export class WebhooksService {
     };
   }
 
-  private async findSendGridCredential(
+  private async findSendGridRoute(
     routingKey: string,
-  ): Promise<Credential | null> {
+  ): Promise<{
+    tenantId: string;
+    inboundAddress: string;
+    connected: boolean;
+    error: string | null;
+  } | null> {
+    if (this.emailIdentities) {
+      const identity = await this.emailIdentities.findOne({
+        where: { inboundAddress: routingKey },
+      });
+      if (identity) {
+        return {
+          tenantId: identity.tenantId,
+          inboundAddress: identity.inboundAddress,
+          connected: !['failed', 'blocked'].includes(identity.emailStatus),
+          error: identity.lastError,
+        };
+      }
+    }
     const direct = await this.credentialsRepo.findOne({
       where: { provider: 'sendgrid', routingKey },
       relations: ['tenant'],
     });
-    if (direct) return direct;
+    if (direct) {
+      const payload = decryptIntegrationPayload(direct.encryptedValue);
+      return {
+        tenantId: direct.tenant.id,
+        inboundAddress: String(payload?.inboundAddress || ''),
+        connected: Boolean(payload?.connected),
+        error: payload?.error || null,
+      };
+    }
     const legacy = await this.credentialsRepo.find({
       where: { provider: 'sendgrid', routingKey: IsNull() },
       relations: ['tenant'],
@@ -1244,13 +1354,28 @@ export class WebhooksService {
     if (matches.length !== 1) return null;
     matches[0].routingKey = routingKey;
     try {
-      return await this.credentialsRepo.save(matches[0]);
+      const saved = await this.credentialsRepo.save(matches[0]);
+      const payload = decryptIntegrationPayload(saved.encryptedValue);
+      return {
+        tenantId: saved.tenant.id,
+        inboundAddress: String(payload?.inboundAddress || ''),
+        connected: Boolean(payload?.connected),
+        error: payload?.error || null,
+      };
     } catch (error: any) {
       if (String(error?.code || '') !== '23505') throw error;
-      return this.credentialsRepo.findOne({
+      const saved = await this.credentialsRepo.findOne({
         where: { provider: 'sendgrid', routingKey },
         relations: ['tenant'],
       });
+      if (!saved) return null;
+      const payload = decryptIntegrationPayload(saved.encryptedValue);
+      return {
+        tenantId: saved.tenant.id,
+        inboundAddress: String(payload?.inboundAddress || ''),
+        connected: Boolean(payload?.connected),
+        error: payload?.error || null,
+      };
     }
   }
 
@@ -1522,6 +1647,39 @@ function sendGridMessageState(
     return { status: 'failed', rank: 4 };
   }
   return null;
+}
+
+export type SendGridDisposition =
+  | 'consent_opt_out'
+  | 'permanent_suppression'
+  | 'transient_failure'
+  | 'none';
+
+export function classifySendGridDisposition(
+  eventType: string,
+  event: Record<string, unknown>,
+): SendGridDisposition {
+  if (['spamreport', 'unsubscribe', 'group_unsubscribe'].includes(eventType)) {
+    return 'consent_opt_out';
+  }
+  if (['blocked', 'deferred'].includes(eventType)) return 'transient_failure';
+  if (eventType === 'bounce') {
+    const status = String(event.status || event.response || '').trim();
+    const bounceType = String(event.type || '').trim().toLowerCase();
+    if (status.startsWith('4') || bounceType === 'blocked') {
+      return 'transient_failure';
+    }
+    return 'permanent_suppression';
+  }
+  if (eventType === 'dropped') {
+    const detail = String(event.reason || event.response || '').toLowerCase();
+    return /invalid|no such user|unknown user|hard bounce|suppression|unsubscrib|spam report|does not exist/.test(
+      detail,
+    )
+      ? 'permanent_suppression'
+      : 'transient_failure';
+  }
+  return 'none';
 }
 
 function isSendGridDeliveryEvent(eventType: string) {

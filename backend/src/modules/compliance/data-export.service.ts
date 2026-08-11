@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -15,6 +15,8 @@ import { TenantSettings } from '../settings/tenant-settings.entity';
 import { SupportTicket } from '../support/support-ticket.entity';
 import { AuditLog } from '../audit/audit-log.entity';
 import { IntegrationsService } from '../integrations/integrations.service';
+import { Appointment } from '../client-operations/appointment.entity';
+import { BillingEvent } from '../billing/billing-event.entity';
 
 @Injectable()
 export class DataExportService {
@@ -40,6 +42,12 @@ export class DataExportService {
     @InjectRepository(AuditLog)
     private readonly auditLogs: Repository<AuditLog>,
     private readonly integrations: IntegrationsService,
+    @Optional()
+    @InjectRepository(Appointment)
+    private readonly appointments?: Repository<Appointment>,
+    @Optional()
+    @InjectRepository(BillingEvent)
+    private readonly billingEvents?: Repository<BillingEvent>,
   ) {}
 
   async exportWorkspace(tenantId: string) {
@@ -59,6 +67,8 @@ export class DataExportService {
       supportTickets,
       auditLogs,
       integrations,
+      appointments,
+      billingEvents,
     ] = await Promise.all([
       this.users.find({ where: { tenantId }, order: { email: 'ASC' } }),
       this.teams.find({ where: { tenantId }, order: { name: 'ASC' } }),
@@ -92,6 +102,14 @@ export class DataExportService {
         order: { createdAt: 'DESC' },
       }),
       this.integrations.list(tenantId),
+      this.appointments?.find({
+        where: { tenantId },
+        order: { startsAt: 'DESC' },
+      }) || Promise.resolve([]),
+      this.billingEvents?.find({
+        where: { tenantId },
+        order: { occurredAt: 'DESC' },
+      }) || Promise.resolve([]),
     ]);
 
     return {
@@ -133,6 +151,8 @@ export class DataExportService {
         : null,
       quietHours,
       integrations,
+      appointments,
+      billingRecords: billingEvents,
       leads,
       sequences,
       routingRules,

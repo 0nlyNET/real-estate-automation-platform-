@@ -16,6 +16,8 @@ import { TwilioInboundMessage } from './twilio-inbound-message.entity';
 import { TelephonyController } from './telephony.controller';
 import { SendGridWebhookEvent } from './sendgrid-webhook-event.entity';
 import { OnboardingModule } from '../onboarding/onboarding.module';
+import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { OnboardingModule } from '../onboarding/onboarding.module';
       LeadEvent,
       TwilioInboundMessage,
       SendGridWebhookEvent,
+      TenantMessagingResource,
+      TenantEmailIdentity,
     ]),
     ComplianceModule,
     SequencesModule,

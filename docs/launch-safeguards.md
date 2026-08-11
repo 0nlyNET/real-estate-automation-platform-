@@ -11,7 +11,8 @@ This release extends the existing managed-service architecture. It does not repl
 - 80%-style configurable owner warnings and hard-limit automation pause with a critical operations task.
 - Lead-ingestion velocity caps for custom, Zillow, and Realtor.com intake paths.
 - Quality monitoring for opt-outs, SMS failures, email bounces/drops, and spam complaints, with client warning, automatic pause, or suspension by severity.
-- SendGrid bounce/drop/blocked events add the recipient to the existing email suppression path, and provider traffic is classified as `transactional` or `lead_follow_up`.
+- SendGrid unsubscribe/spam events revoke consent; permanent hard bounces create a separate deliverability suppression; temporary blocks remain transient; dropped events are classified from provider evidence before suppression.
+- Platform-owned Twilio subaccounts, Messaging Services, dedicated numbers, scoped encrypted credentials, and centralized SendGrid tenant identities are persisted and resolved server-side. Clients never receive provider secrets.
 - Expanded immutable audit events with actor type, event type, resource, before/after state, and IP address fields; automated operational retention no longer purges audit events.
 - Explicit `TESTING` lifecycle state. Live automation remains disabled until controlled tests and every activation requirement pass.
 - Activation gates for tenant/platform limits, unresolved safety incidents, client policy certifications, recent disaster-recovery evidence, and legal-review evidence in production.
@@ -28,3 +29,6 @@ This release extends the existing managed-service architecture. It does not repl
 - Record the production environment evidence only after those steps pass.
 
 No environment variable should be set merely to make readiness turn green.
+
+See `docs/managed-provider-architecture.md` for setup, callbacks, provisioning,
+testing, monitoring, incident response, cost reporting, recovery, and offboarding.

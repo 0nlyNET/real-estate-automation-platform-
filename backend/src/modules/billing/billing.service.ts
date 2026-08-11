@@ -26,6 +26,7 @@ import { BillingEvent } from './billing-event.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { configuredBillingGraceDays } from '../entitlements/entitlement.service';
 import { ServiceControlService } from '../service-control/service-control.service';
+import { TenantProvisioningService } from '../integrations/tenant-provisioning.service';
 
 const OPEN_SUBSCRIPTION_STATES = new Set([
   'active',
@@ -74,6 +75,8 @@ export class BillingService {
     private readonly notifications?: NotificationsService,
     @Optional()
     private readonly serviceControl?: ServiceControlService,
+    @Optional()
+    private readonly provisioning?: TenantProvisioningService,
   ) {
     const key = process.env.STRIPE_SECRET_KEY?.trim();
     this.stripe = key ? new Stripe(key) : null;
@@ -346,6 +349,7 @@ export class BillingService {
           throw new Error('Checkout event is missing tenant or subscription');
         const subscription = await this.getStripe().subscriptions.retrieve(subscriptionId);
         await this.syncSubscription(subscription, tenantId, false);
+        await this.triggerProvisioningSafely(tenantId);
       } else if (
         event.type === 'customer.subscription.created' ||
         event.type === 'customer.subscription.updated' ||
@@ -512,6 +516,7 @@ export class BillingService {
               entityType: 'tenant',
               entityId: tenantId,
             });
+            await this.triggerProvisioningSafely(tenantId);
           }
         }
       } else if (event.type === 'refund.created') {
@@ -611,6 +616,25 @@ export class BillingService {
         actionUrl: '/admin/dashboard?view=billing',
       });
       throw error;
+    }
+  }
+
+  private async triggerProvisioningSafely(tenantId: string) {
+    if (!this.provisioning) return;
+    try {
+      const result = await this.provisioning.reconcileTenantProvisioning(tenantId);
+      if (!result.ok) throw new Error(result.errors.join('; '));
+    } catch (error) {
+      await this.operations?.createTask({
+        tenantId,
+        category: 'provider_configuration',
+        title: 'Managed provider provisioning needs attention',
+        description: sanitizedError(error),
+        priority: 'high',
+        relatedEntityType: 'tenant',
+        relatedEntityId: tenantId,
+        dedupeOpen: true,
+      });
     }
   }
 

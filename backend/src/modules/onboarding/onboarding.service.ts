@@ -25,6 +25,8 @@ import { isSafeBookingUrl } from '../../common/booking-link';
 import { normalizePhoneE164 } from '../../common/phone';
 import { LimitsService } from '../limits/limits.service';
 import { AuditService } from '../audit/audit.service';
+import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 
 type ReadinessCategory =
   | 'client_information'
@@ -134,6 +136,12 @@ export class OnboardingService {
     @Optional() private readonly platformOperators?: PlatformOperatorsService,
     @Optional() private readonly limits?: LimitsService,
     @Optional() private readonly audit?: AuditService,
+    @Optional()
+    @InjectRepository(TenantMessagingResource)
+    private readonly messagingResources?: Repository<TenantMessagingResource>,
+    @Optional()
+    @InjectRepository(TenantEmailIdentity)
+    private readonly emailIdentities?: Repository<TenantEmailIdentity>,
   ) {}
 
   async getOrCreate(tenantId: string) {
@@ -463,12 +471,22 @@ export class OnboardingService {
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException('Workspace not found');
     const settings = await this.settings.findOne({ where: { tenantId } });
-    const [tenantUsagePolicy, platformUsagePolicy, safetyIncidentOpen] =
+    const [
+      tenantUsagePolicy,
+      platformUsagePolicy,
+      safetyIncidentOpen,
+      managedTwilio,
+      managedEmail,
+    ] =
       await Promise.all([
         this.limits?.getTenantPolicy(tenantId) || Promise.resolve(null),
         this.limits?.getPlatformPolicy() || Promise.resolve(null),
         this.operations.hasOpenSafetyIncident?.(tenantId) ||
           Promise.resolve(false),
+        this.messagingResources?.findOne({ where: { tenantId } }) ||
+          Promise.resolve(null),
+        this.emailIdentities?.findOne({ where: { tenantId } }) ||
+          Promise.resolve(null),
       ]);
     const credentials = await this.credentials.find({
       where: { tenant: { id: tenantId } as any },
@@ -552,16 +570,25 @@ export class OnboardingService {
     const approvedPhone = normalizePhoneE164(
       String(record.brandCommunication.approvedPhoneIdentity || ''),
     );
-    const twilioRuntimeReady = Boolean(
-      twilio?.connected === true &&
-        !twilio?.error &&
-        twilio?.accountSid &&
-        twilio?.authToken &&
-        twilioFromNumber &&
-        twilioRow?.routingKey === twilioFromNumber &&
-        approvedPhone === twilioFromNumber &&
-        twilio?.lastSync,
-    );
+    const twilioRuntimeReady = managedTwilio
+      ? Boolean(
+          managedTwilio.smsStatus === 'ready' &&
+            managedTwilio.twilioSubaccountSid &&
+            managedTwilio.messagingServiceSid &&
+            managedTwilio.phoneNumber &&
+            managedTwilio.encryptedAuthToken &&
+            approvedPhone === normalizePhoneE164(managedTwilio.phoneNumber),
+        )
+      : Boolean(
+          twilio?.connected === true &&
+            !twilio?.error &&
+            twilio?.accountSid &&
+            twilio?.authToken &&
+            twilioFromNumber &&
+            twilioRow?.routingKey === twilioFromNumber &&
+            approvedPhone === twilioFromNumber &&
+            twilio?.lastSync,
+        );
     const sendgrid = integrations.get('sendgrid');
     const sendgridRow = credentialRows.get('sendgrid');
     const sendgridFromEmail = String(sendgrid?.fromEmail || '')
@@ -575,18 +602,27 @@ export class OnboardingService {
     )
       .trim()
       .toLowerCase();
-    const sendgridRuntimeReady = Boolean(
-      sendgrid?.connected === true &&
-        !sendgrid?.error &&
-        sendgrid?.apiKey &&
-        validEmail(sendgridFromEmail) &&
-        String(sendgrid?.fromName || '').trim() &&
-        validEmail(sendgridInboundAddress) &&
-        String(sendgridRow?.routingKey || '').trim().toLowerCase() ===
-          sendgridInboundAddress &&
-        approvedEmail === sendgridFromEmail &&
-        sendgrid?.lastSync,
-    );
+    const sendgridRuntimeReady = managedEmail
+      ? Boolean(
+          managedEmail.emailStatus === 'ready' &&
+            managedEmail.reputationStatus !== 'blocked' &&
+            validEmail(managedEmail.fromEmail) &&
+            validEmail(managedEmail.inboundAddress) &&
+            managedEmail.fromName &&
+            approvedEmail === managedEmail.fromEmail.toLowerCase(),
+        )
+      : Boolean(
+          sendgrid?.connected === true &&
+            !sendgrid?.error &&
+            sendgrid?.apiKey &&
+            validEmail(sendgridFromEmail) &&
+            String(sendgrid?.fromName || '').trim() &&
+            validEmail(sendgridInboundAddress) &&
+            String(sendgridRow?.routingKey || '').trim().toLowerCase() ===
+              sendgridInboundAddress &&
+            approvedEmail === sendgridFromEmail &&
+            sendgrid?.lastSync,
+        );
     const providerTests = record.providerTests || {};
     const configurationUpdatedAt =
       record.configurationUpdatedAt?.getTime?.() ||
@@ -598,16 +634,20 @@ export class OnboardingService {
       const timestamp = new Date(String(value || '')).getTime();
       return Number.isFinite(timestamp) && timestamp >= configurationUpdatedAt;
     };
-    const twilioProviderApproved = Boolean(
-      providerTests.twilioMessagingApprovalStatus === 'approved' &&
-        hasText(providerTests, 'twilioApprovalReference') &&
-        freshProviderEvidence(providerTests.twilioApprovalRecordedAt),
-    );
-    const sendgridProviderApproved = Boolean(
-      providerTests.sendgridSenderVerificationStatus === 'approved' &&
-        hasText(providerTests, 'sendgridApprovalReference') &&
-        freshProviderEvidence(providerTests.sendgridApprovalRecordedAt),
-    );
+    const twilioProviderApproved = managedTwilio
+      ? managedTwilio.a2pComplianceStatus === 'approved'
+      : Boolean(
+          providerTests.twilioMessagingApprovalStatus === 'approved' &&
+            hasText(providerTests, 'twilioApprovalReference') &&
+            freshProviderEvidence(providerTests.twilioApprovalRecordedAt),
+        );
+    const sendgridProviderApproved = managedEmail
+      ? Boolean(managedEmail.lastVerifiedAt && managedEmail.emailStatus === 'ready')
+      : Boolean(
+          providerTests.sendgridSenderVerificationStatus === 'approved' &&
+            hasText(providerTests, 'sendgridApprovalReference') &&
+            freshProviderEvidence(providerTests.sendgridApprovalRecordedAt),
+        );
 
     add('billing', 'Billing status is eligible', billing.allowed, true, {
       category: 'billing',
@@ -1157,27 +1197,27 @@ export class OnboardingService {
         twilio: {
           required: record.smsEnabled,
           runtimeReady: twilioRuntimeReady,
-          status: twilio?.error
+          status: managedTwilio?.lastError || twilio?.error
             ? 'error'
             : twilioRuntimeReady
               ? 'ready'
               : 'incomplete',
-          lastCheckedAt: twilio?.lastSync || null,
-          error: twilio?.error
-            ? sanitizeOperationalText(twilio.error)
+          lastCheckedAt: managedTwilio?.smsLastVerifiedAt || twilio?.lastSync || null,
+          error: managedTwilio?.lastError || twilio?.error
+            ? sanitizeOperationalText(managedTwilio?.lastError || twilio.error)
             : null,
         },
         sendgrid: {
           required: record.emailEnabled,
           runtimeReady: sendgridRuntimeReady,
-          status: sendgrid?.error
+          status: managedEmail?.lastError || sendgrid?.error
             ? 'error'
             : sendgridRuntimeReady
               ? 'ready'
               : 'incomplete',
-          lastCheckedAt: sendgrid?.lastSync || null,
-          error: sendgrid?.error
-            ? sanitizeOperationalText(sendgrid.error)
+          lastCheckedAt: managedEmail?.lastVerifiedAt || sendgrid?.lastSync || null,
+          error: managedEmail?.lastError || sendgrid?.error
+            ? sanitizeOperationalText(managedEmail?.lastError || sendgrid.error)
             : null,
         },
       },

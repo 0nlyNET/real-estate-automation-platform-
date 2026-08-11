@@ -166,9 +166,10 @@ SENDGRID_INBOUND_USERNAME=<random-user>
 SENDGRID_INBOUND_PASSWORD=<strong-random-secret>
 ```
 
-No model credential may use a `NEXT_PUBLIC_*` name. Tenant Twilio/SendGrid
-credentials and each SendGrid inbound routing address remain in the existing
-encrypted credential store.
+No model or provider credential may use a `NEXT_PUBLIC_*` name. The platform
+Twilio and SendGrid credentials remain centralized. Tenant Twilio subaccount
+credentials are encrypted in provider-resource storage, and random SendGrid
+reply identities contain routing data but no platform API key.
 
 ## Migration and verification
 

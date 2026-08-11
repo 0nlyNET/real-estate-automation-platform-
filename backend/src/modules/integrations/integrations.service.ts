@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, Logger, Optional } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import { TenantMessagingResource } from './tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from './tenant-email-identity.entity';
 import { Credential } from "../settings/credential.entity";
 import * as crypto from "crypto";
 import { normalizePhoneE164 } from "../../common/phone";
@@ -124,6 +126,12 @@ export class IntegrationsService {
     private readonly credentialsRepo: Repository<Credential>,
     private readonly operations: OperationsService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional()
+    @InjectRepository(TenantMessagingResource)
+    private readonly messagingResources?: Repository<TenantMessagingResource>,
+    @Optional()
+    @InjectRepository(TenantEmailIdentity)
+    private readonly emailIdentities?: Repository<TenantEmailIdentity>,
   ) {}
 
   private async getRow(
@@ -286,10 +294,16 @@ export class IntegrationsService {
   }
 
   async list(tenantId: string): Promise<IntegrationSummary[]> {
-    const creds = await this.credentialsRepo.find({
-      where: { tenant: { id: tenantId } as any },
-      relations: ["tenant"],
-    });
+    const [creds, managedTwilio, managedEmail] = await Promise.all([
+      this.credentialsRepo.find({
+        where: { tenant: { id: tenantId } as any },
+        relations: ["tenant"],
+      }),
+      this.messagingResources?.findOne({ where: { tenantId } }) ||
+        Promise.resolve(null),
+      this.emailIdentities?.findOne({ where: { tenantId } }) ||
+        Promise.resolve(null),
+    ]);
 
     const byProvider = new Map<string, Credential>();
     for (const c of creds) byProvider.set(c.provider, c);
@@ -301,6 +315,49 @@ export class IntegrationsService {
     ];
 
     return providers.map((provider) => {
+      if (provider === 'twilio' && managedTwilio) {
+        const connected = managedTwilio.smsStatus === 'ready';
+        return {
+          provider,
+          connected,
+          status: managedTwilio.lastError
+            ? 'error'
+            : connected
+              ? 'connected'
+              : 'configured',
+          lastSync: (
+            managedTwilio.smsLastVerifiedAt || managedTwilio.updatedAt
+          )?.toISOString?.() || null,
+          error: managedTwilio.lastError,
+          display: {
+            fromNumber: managedTwilio.phoneNumber,
+            readiness: managedTwilio.smsStatus,
+            complianceStatus: managedTwilio.a2pComplianceStatus,
+          },
+        } as IntegrationSummary;
+      }
+      if (provider === 'sendgrid' && managedEmail) {
+        const connected = managedEmail.emailStatus === 'ready';
+        return {
+          provider,
+          connected,
+          status: managedEmail.lastError
+            ? 'error'
+            : connected
+              ? 'connected'
+              : 'configured',
+          lastSync: (
+            managedEmail.lastVerifiedAt || managedEmail.updatedAt
+          )?.toISOString?.() || null,
+          error: managedEmail.lastError,
+          display: {
+            fromEmail: managedEmail.fromEmail,
+            fromName: managedEmail.fromName,
+            readiness: managedEmail.emailStatus,
+            reputationStatus: managedEmail.reputationStatus,
+          },
+        } as IntegrationSummary;
+      }
       const row = byProvider.get(provider);
       const parsed = row ? decryptIntegrationPayload(row.encryptedValue) : null;
       const connected = Boolean(parsed && parsed.connected);

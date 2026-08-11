@@ -20,6 +20,9 @@ import { IntegrationsModule } from '../integrations/integrations.module';
 import { LeadConsentRecord } from './lead-consent-record.entity';
 import { Message } from '../messaging/message.entity';
 import { UnsubscribeController } from './unsubscribe.controller';
+import { CommunicationSuppression } from './communication-suppression.entity';
+import { Appointment } from '../client-operations/appointment.entity';
+import { BillingEvent } from '../billing/billing-event.entity';
 
 @Module({
   imports: [
@@ -38,6 +41,9 @@ import { UnsubscribeController } from './unsubscribe.controller';
       AuditLog,
       LeadConsentRecord,
       Message,
+      CommunicationSuppression,
+      Appointment,
+      BillingEvent,
     ]),
     CommonModule,
     IntegrationsModule,

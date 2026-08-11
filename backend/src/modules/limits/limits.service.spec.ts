@@ -1,13 +1,17 @@
-import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Tenant } from '../tenants/tenant.entity';
-import { LimitsService, defaultPlatformUsagePolicy, defaultTenantUsagePolicy } from './limits.service';
+import { LimitsService, defaultPlatformUsagePolicy, defaultTenantUsagePolicy, isHardLimitExceeded } from './limits.service';
 import { UsageBucket } from './usage-bucket.entity';
 import { UsagePolicy } from './usage-policy.entity';
 import { UsageReservation } from './usage-reservation.entity';
 
 describe('LimitsService hard limits', () => {
-  it('blocks the threshold-crossing request and pauses the affected tenant', async () => {
+  it('allows the 60th unit and rejects the 61st', () => {
+    expect(isHardLimitExceeded(59, 1, 60)).toBe(false);
+    expect(isHardLimitExceeded(60, 1, 60)).toBe(true);
+  });
+
+  it('permits the configured maximum and rejects the next request', async () => {
     const tenantPolicy = Object.assign(
       new UsagePolicy(),
       defaultTenantUsagePolicy('tenant-1'),
@@ -56,38 +60,17 @@ describe('LimitsService hard limits', () => {
       id: 'tenant-1',
       lifecycleStatus: 'ACTIVE',
     });
-    const settingsRepo = {
-      findOne: jest.fn().mockResolvedValue(settings),
-      create: jest.fn((value) => value),
-      save: jest.fn(async (value) => value),
-    };
-    const tenantsRepo = {
-      findOne: jest.fn().mockResolvedValue(tenant),
-      save: jest.fn(async (value) => value),
-    };
-    const onboardingRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
-    const pauseManager = {
-      query: jest.fn().mockResolvedValue([]),
-      getRepository: jest.fn((entity) => {
-        if (entity === TenantSettings) return settingsRepo;
-        if (entity === Tenant) return tenantsRepo;
-        if (entity === OnboardingRecord) return onboardingRepo;
-        throw new Error(`Unexpected pause repository: ${String(entity)}`);
-      }),
-    };
     const dataSource = {
-      transaction: jest
-        .fn()
-        .mockImplementationOnce(async (callback) => callback(usageManager))
-        .mockImplementationOnce(async (callback) => callback(pauseManager)),
+      transaction: jest.fn(async (callback) => callback(usageManager)),
     };
     const operations = { createTask: jest.fn().mockResolvedValue({}) };
     const audit = { recordSystemEvent: jest.fn().mockResolvedValue({}) };
+    const notifications = { createForPlatform: jest.fn().mockResolvedValue({}) };
     const service = new LimitsService(
       dataSource as any,
       {} as any,
       operations as any,
-      {} as any,
+      notifications as any,
       audit as any,
     );
 
@@ -97,20 +80,13 @@ describe('LimitsService hard limits', () => {
         metric: 'sms',
         idempotencyKey: 'message:one',
       }),
-    ).resolves.toMatchObject({
-      ok: false,
-      code: 'USAGE_LIMIT',
-      scope: 'tenant',
-      metric: 'sms',
-    });
-    expect(reservations.save).not.toHaveBeenCalled();
-    expect(settings.automationsEnabled).toBe(false);
-    expect(tenant.lifecycleStatus).toBe('PAUSED');
-    expect(operations.createTask).toHaveBeenCalledWith(
-      expect.objectContaining({ priority: 'critical', category: 'usage_limit' }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(reservations.save).toHaveBeenCalled();
+    expect(settings.automationsEnabled).toBe(true);
+    expect(tenant.lifecycleStatus).toBe('ACTIVE');
+    expect(operations.createTask).not.toHaveBeenCalledWith(
+      expect.objectContaining({ priority: 'critical' }),
     );
-    expect(audit.recordSystemEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'automation.paused_usage_limit' }),
-    );
+    expect(notifications.createForPlatform).toHaveBeenCalled();
   });
 });

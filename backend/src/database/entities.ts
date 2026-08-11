@@ -42,6 +42,9 @@ import { SendGridWebhookEvent } from '../modules/webhooks/sendgrid-webhook-event
 import { UsageBucket } from '../modules/limits/usage-bucket.entity';
 import { UsagePolicy } from '../modules/limits/usage-policy.entity';
 import { UsageReservation } from '../modules/limits/usage-reservation.entity';
+import { CommunicationSuppression } from '../modules/compliance/communication-suppression.entity';
+import { TenantMessagingResource } from '../modules/integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../modules/integrations/tenant-email-identity.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -55,6 +58,8 @@ export const databaseEntities = [
   SequenceStep,
   Credential,
   PlatformCredential,
+  TenantMessagingResource,
+  TenantEmailIdentity,
   LeadIngestionEvent,
   TwilioInboundMessage,
   SendGridWebhookEvent,
@@ -63,6 +68,7 @@ export const databaseEntities = [
   RoutingAssignmentLog,
   AgentPresence,
   ComplianceOptOut,
+  CommunicationSuppression,
   ComplianceEvent,
   TenantQuietHours,
   PasswordResetToken,

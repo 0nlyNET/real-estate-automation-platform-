@@ -19,6 +19,7 @@ import {
   AiConversationControlService,
   ConversationActor,
 } from '../ai/ai-conversation-control.service';
+import { ProviderConfigService } from '../integrations/provider-config.service';
 
 function isV1Encrypted(v: string) {
   return typeof v === 'string' && v.startsWith('v1:');
@@ -84,6 +85,7 @@ export class InboxSendService {
     private readonly operations: OperationsService,
     private readonly aiControl: AiConversationControlService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly providerConfig?: ProviderConfigService,
   ) {}
 
   private requireTenant(tenantId?: string | null) {
@@ -119,7 +121,8 @@ export class InboxSendService {
       });
     }
 
-    const match = await this.credentialsRepo.findOne({
+    const managedTwilio = await this.providerConfig?.resolveTwilio(tenantId);
+    const match = managedTwilio ? null : await this.credentialsRepo.findOne({
       where: {
         provider: 'twilio' as any,
         tenant: { id: tenantId } as any,
@@ -127,8 +130,8 @@ export class InboxSendService {
       relations: ['tenant'],
     });
 
-    const payload = decryptToJson(match?.encryptedValue);
-    const connected = Boolean(payload?.connected);
+    const payload = managedTwilio || decryptToJson(match?.encryptedValue);
+    const connected = managedTwilio ? true : Boolean(payload?.connected);
 
     const accountSid = payload?.accountSid ? String(payload.accountSid) : null;
     const authToken = payload?.authToken ? String(payload.authToken) : null;
@@ -136,7 +139,7 @@ export class InboxSendService {
     const messagingServiceSid = String(payload?.messagingServiceSid || '').trim();
 
     if (
-      !match ||
+      (!match && !managedTwilio) ||
       !connected ||
       !accountSid ||
       !authToken ||
@@ -231,16 +234,17 @@ export class InboxSendService {
         message: consent.reason,
       });
     }
-    const credential = await this.credentialsRepo.findOne({
+    const managedSendGrid = await this.providerConfig?.resolveSendGrid(tenantId);
+    const credential = managedSendGrid ? null : await this.credentialsRepo.findOne({
       where: {
         provider: 'sendgrid' as any,
         tenant: { id: tenantId } as any,
       },
       relations: ['tenant'],
     });
-    const payload = decryptToJson(credential?.encryptedValue);
+    const payload = managedSendGrid || decryptToJson(credential?.encryptedValue);
     if (
-      !credential ||
+      (!credential && !managedSendGrid) ||
       !payload?.connected ||
       payload?.error ||
       !String(payload?.apiKey || '').trim() ||

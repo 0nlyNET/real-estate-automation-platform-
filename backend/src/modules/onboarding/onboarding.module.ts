@@ -11,6 +11,8 @@ import { OperationsModule } from '../operations/operations.module';
 import { CommonModule } from '../../common/common.module';
 import { LimitsModule } from '../limits/limits.module';
 import { AuditModule } from '../audit/audit.module';
+import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 
 @Module({
   imports: [
@@ -20,6 +22,8 @@ import { AuditModule } from '../audit/audit.module';
       TenantSettings,
       Credential,
       SequenceStep,
+      TenantMessagingResource,
+      TenantEmailIdentity,
     ]),
     OperationsModule,
     CommonModule,

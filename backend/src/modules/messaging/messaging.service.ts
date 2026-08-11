@@ -26,6 +26,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { AiConversationControlService } from '../ai/ai-conversation-control.service';
 import { MessageSafetyService } from './message-safety.service';
 import { LimitsService } from '../limits/limits.service';
+import { ProviderConfigService } from '../integrations/provider-config.service';
 
 type ProviderConfig = {
   sendgrid?: {
@@ -72,6 +73,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly clientOperations?: ClientOperationsService,
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly limits?: LimitsService,
+    @Optional() private readonly providerConfig?: ProviderConfigService,
   ) {}
 
   onModuleInit(): void {
@@ -97,6 +99,18 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async getProviderConfig(tenantId: string): Promise<ProviderConfig> {
+    if (this.providerConfig) {
+      const [twilio, sendgrid] = await Promise.all([
+        this.providerConfig.resolveTwilio(tenantId),
+        this.providerConfig.resolveSendGrid(tenantId),
+      ]);
+      return {
+        twilio: twilio || undefined,
+        sendgrid: sendgrid || undefined,
+      };
+    }
+    // Temporary compatibility for pre-migration tests and installations. New
+    // production configuration always resolves platform-owned resources above.
     const rows = await this.credentialRepository.find({
       where: { tenant: { id: tenantId } as any },
       relations: ['tenant'],

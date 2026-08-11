@@ -341,6 +341,20 @@ export class LeadsService {
       return existing;
     }
 
+    const usage = await this.limits?.reserveUsage({
+      tenantId: tenant.id,
+      metric: 'lead',
+      idempotencyKey: `lead-manual:${createHash('sha256')
+        .update(`${tenant.id}:${email || ''}:${phone || ''}:${fullName}`)
+        .digest('hex')}`,
+    });
+    if (usage && !usage.ok) {
+      throw new HttpException(
+        { code: usage.code, message: usage.message },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
 
     let teamId = this.normalizeString((payload as any).assignedToTeamId ?? undefined) || null;
     let assigneeUserId = this.normalizeString((payload as any).assignedToUserId ?? undefined) || null;

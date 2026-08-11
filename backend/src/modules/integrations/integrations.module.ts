@@ -13,20 +13,51 @@ import {
 } from './sales-booking.controller';
 import { SalesBookingService } from './sales-booking.service';
 import { OnboardingModule } from '../onboarding/onboarding.module';
+import { TenantMessagingResource } from './tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from './tenant-email-identity.entity';
+import { ProviderConfigService } from './provider-config.service';
+import { TwilioProvisioningService } from './twilio-provisioning.service';
+import { EmailIdentityService } from './email-identity.service';
+import { Tenant } from '../tenants/tenant.entity';
+import { TenantProvisioningService } from './tenant-provisioning.service';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Credential, PlatformCredential]),
+    TypeOrmModule.forFeature([
+      Credential,
+      PlatformCredential,
+      TenantMessagingResource,
+      TenantEmailIdentity,
+      Tenant,
+    ]),
     CommonModule,
     OperationsModule,
     OnboardingModule,
+    AuditModule,
   ],
   controllers: [
     IntegrationsController,
     AdminSalesBookingController,
     PublicSalesBookingController,
   ],
-  providers: [IntegrationsService, PlatformIntegrationsService, SalesBookingService],
-  exports: [IntegrationsService, PlatformIntegrationsService, SalesBookingService],
+  providers: [
+    IntegrationsService,
+    PlatformIntegrationsService,
+    SalesBookingService,
+    ProviderConfigService,
+    TwilioProvisioningService,
+    EmailIdentityService,
+    TenantProvisioningService,
+  ],
+  exports: [
+    IntegrationsService,
+    PlatformIntegrationsService,
+    SalesBookingService,
+    ProviderConfigService,
+    TwilioProvisioningService,
+    EmailIdentityService,
+    TenantProvisioningService,
+  ],
 })
 export class IntegrationsModule {}

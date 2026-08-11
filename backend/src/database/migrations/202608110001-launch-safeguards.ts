@@ -98,6 +98,24 @@ export class LaunchSafeguards1786406400001 implements MigrationInterface {
     `);
 
     await queryRunner.query(`
+      CREATE TABLE IF NOT EXISTS "communication_suppressions" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        "tenant_id" uuid NOT NULL REFERENCES "tenants"("id") ON DELETE CASCADE,
+        "channel" varchar(20) NOT NULL,
+        "value" text NOT NULL,
+        "reason" varchar(80) NOT NULL,
+        "source" varchar(80) NOT NULL,
+        "permanent" boolean NOT NULL DEFAULT true,
+        "expires_at" timestamptz,
+        "last_observed_at" timestamptz NOT NULL DEFAULT now(),
+        "created_at" timestamptz NOT NULL DEFAULT now(),
+        "updated_at" timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT "CK_communication_suppression_channel" CHECK ("channel" IN ('sms', 'email')),
+        CONSTRAINT "UQ_communication_suppression_destination" UNIQUE ("tenant_id", "channel", "value")
+      )
+    `);
+
+    await queryRunner.query(`
       INSERT INTO "usage_policies" (
         "scope_type", "scope_id", "max_sms_per_hour", "max_sms_per_day",
         "max_emails_per_hour", "max_emails_per_day", "max_ai_calls_per_day",
@@ -120,6 +138,7 @@ export class LaunchSafeguards1786406400001 implements MigrationInterface {
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query('DROP TABLE IF EXISTS "communication_suppressions"');
     await queryRunner.query('DROP TABLE IF EXISTS "usage_reservations"');
     await queryRunner.query('DROP TABLE IF EXISTS "usage_buckets"');
     await queryRunner.query('DROP TABLE IF EXISTS "usage_policies"');

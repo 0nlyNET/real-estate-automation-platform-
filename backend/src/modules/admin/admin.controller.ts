@@ -14,6 +14,7 @@ import {
   Req,
   Res,
   UseGuards,
+  Optional,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -52,6 +53,8 @@ import {
 } from '../integrations/integrations.dto';
 import type { ManagedMessagingProvider } from '../integrations/platform-integrations.service';
 import { LimitsService } from '../limits/limits.service';
+import { TenantProvisioningService } from '../integrations/tenant-provisioning.service';
+import { TwilioProvisioningService } from '../integrations/twilio-provisioning.service';
 
 @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 @Controller('admin')
@@ -64,6 +67,8 @@ export class AdminController {
     private readonly serviceControl: ServiceControlService,
     private readonly platformIntegrations: PlatformIntegrationsService,
     private readonly limits: LimitsService,
+    @Optional() private readonly provisioning?: TenantProvisioningService,
+    @Optional() private readonly twilioProvisioning?: TwilioProvisioningService,
   ) {}
 
   @Get('overview')
@@ -87,6 +92,15 @@ export class AdminController {
     return this.limits.publicPolicy(
       await this.limits.ensureTenantPolicy(tenantId),
     );
+  }
+
+  @Get('tenants/:tenantId/usage-report')
+  @UseGuards(PlatformAdminGuard)
+  tenantUsageReport(
+    @Param('tenantId') tenantId: string,
+    @Query('days') days?: string,
+  ) {
+    return this.limits.tenantUsageReport(tenantId, Number(days || 30));
   }
 
   @Put('tenants/:tenantId/usage-policy')
@@ -363,6 +377,33 @@ export class AdminController {
   @Get('tenants/:tenantId/integrations')
   tenantIntegrations(@Param('tenantId') tenantId: string) {
     return this.platformIntegrations.tenantSummary(tenantId);
+  }
+
+  @Post('tenants/:tenantId/provisioning/reconcile')
+  @UseGuards(PlatformAdminGuard)
+  reconcileTenantProvisioning(@Param('tenantId') tenantId: string) {
+    if (!this.provisioning) throw new BadRequestException('Provisioning service unavailable');
+    return this.provisioning.reconcileTenantProvisioning(tenantId);
+  }
+
+  @Patch('tenants/:tenantId/provisioning/twilio-compliance')
+  @UseGuards(PlatformAdminGuard)
+  setTwilioCompliance(
+    @Param('tenantId') tenantId: string,
+    @Body() body: {
+      status: 'not_started' | 'pending' | 'approved' | 'blocked';
+      customerProfileSid?: string;
+      brandSid?: string;
+      campaignSid?: string;
+    },
+  ) {
+    if (!['not_started', 'pending', 'approved', 'blocked'].includes(body.status)) {
+      throw new BadRequestException('Invalid Twilio compliance status');
+    }
+    if (!this.twilioProvisioning) {
+      throw new BadRequestException('Twilio provisioning service unavailable');
+    }
+    return this.twilioProvisioning.setComplianceStatus(tenantId, body.status, body);
   }
 
   @Put('tenants/:tenantId/integrations/twilio')

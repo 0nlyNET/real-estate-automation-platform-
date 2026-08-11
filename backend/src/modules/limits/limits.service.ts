@@ -37,6 +37,14 @@ export type UsagePolicyInput = {
 
 export const PLATFORM_SCOPE_ID = 'platform';
 
+export function isHardLimitExceeded(
+  current: number,
+  requested: number,
+  limit: number,
+) {
+  return current + requested > limit;
+}
+
 export function defaultTenantUsagePolicy(scopeId: string): Partial<UsagePolicy> {
   return {
     scopeType: 'tenant',
@@ -200,6 +208,52 @@ export class LimitsService {
     return { ok: true };
   }
 
+  async tenantUsageReport(tenantId: string, days = 30) {
+    const safeDays = Math.max(1, Math.min(366, Math.floor(days)));
+    const since = new Date(Date.now() - safeDays * 86_400_000);
+    const [tenant, rows] = await Promise.all([
+      this.dataSource.getRepository(Tenant).findOne({ where: { id: tenantId } }),
+      this.dataSource
+        .getRepository(UsageReservation)
+        .createQueryBuilder('usage')
+        .select('usage.metric', 'metric')
+        .addSelect('SUM(usage.quantity)', 'quantity')
+        .addSelect('SUM(usage.estimatedCostUsd)', 'estimatedCostUsd')
+        .where('usage.tenantId = :tenantId', { tenantId })
+        .andWhere('usage.createdAt >= :since', { since })
+        .groupBy('usage.metric')
+        .getRawMany(),
+    ]);
+    if (!tenant) throw new BadRequestException('Tenant not found');
+    const usage = Object.fromEntries(
+      rows.map((row) => [
+        String(row.metric),
+        {
+          quantity: Number(row.quantity || 0),
+          estimatedCostUsd: Number(row.estimatedCostUsd || 0),
+        },
+      ]),
+    );
+    const estimatedProviderCostUsd = Object.values(usage).reduce(
+      (sum, item: any) => sum + Number(item.estimatedCostUsd || 0),
+      0,
+    );
+    const recurringRevenueUsd = Number(tenant.stripeUnitAmount || 0) / 100;
+    const normalizedRevenueUsd =
+      tenant.billingInterval === 'year' ? recurringRevenueUsd / 12 : recurringRevenueUsd;
+    return {
+      tenantId,
+      periodDays: safeDays,
+      since,
+      usage,
+      estimatedProviderCostUsd,
+      normalizedMonthlyRevenueUsd: normalizedRevenueUsd,
+      estimatedContributionMarginUsd: normalizedRevenueUsd - estimatedProviderCostUsd,
+      currency: tenant.stripeCurrency || 'usd',
+      note: 'Provider costs are estimates from configured unit costs; reconcile against provider invoices.',
+    };
+  }
+
   async reserveUsage(input: {
     tenantId: string;
     metric: UsageMetric;
@@ -275,7 +329,7 @@ export class LimitsService {
       for (const evaluation of evaluations) {
         if (!evaluation.policy.enabled) continue;
         const hardCost = Number(evaluation.policy.hardCostThresholdUsd);
-        if (hardCost > 0 && evaluation.dayCost + cost >= hardCost) {
+        if (hardCost > 0 && isHardLimitExceeded(evaluation.dayCost, cost, hardCost)) {
           return {
             ok: false,
             code: 'COST_LIMIT',
@@ -286,9 +340,9 @@ export class LimitsService {
         }
         if (
           (evaluation.hourLimit !== null &&
-            evaluation.hourQuantity + quantity >= evaluation.hourLimit) ||
+            isHardLimitExceeded(evaluation.hourQuantity, quantity, evaluation.hourLimit)) ||
           (evaluation.dayLimit !== null &&
-            evaluation.dayQuantity + quantity >= evaluation.dayLimit)
+            isHardLimitExceeded(evaluation.dayQuantity, quantity, evaluation.dayLimit))
         ) {
           return {
             ok: false,

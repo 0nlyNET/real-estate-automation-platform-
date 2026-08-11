@@ -8,6 +8,12 @@ import { decryptIntegrationPayload } from './integrations.service';
 import { PlatformCredential } from './platform-credential.entity';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { sanitizeOperationalText } from '../../common/operational-log';
+import { TenantMessagingResource } from './tenant-messaging-resource.entity';
+import { TenantEmailIdentity } from './tenant-email-identity.entity';
+import { TwilioProvisioningService } from './twilio-provisioning.service';
+import { EmailIdentityService } from './email-identity.service';
+import { ProviderConfigService } from './provider-config.service';
+import { sendSendGridEmail, sendTwilioSms } from '../../common/providers';
 
 export type ManagedMessagingProvider = 'twilio' | 'sendgrid';
 
@@ -80,6 +86,15 @@ export class PlatformIntegrationsService {
     @InjectRepository(Credential)
     private readonly tenantCredentials: Repository<Credential>,
     @Optional() private readonly onboarding?: OnboardingService,
+    @Optional()
+    @InjectRepository(TenantMessagingResource)
+    private readonly messagingResources?: Repository<TenantMessagingResource>,
+    @Optional()
+    @InjectRepository(TenantEmailIdentity)
+    private readonly emailIdentities?: Repository<TenantEmailIdentity>,
+    @Optional() private readonly twilioProvisioning?: TwilioProvisioningService,
+    @Optional() private readonly emailIdentityService?: EmailIdentityService,
+    @Optional() private readonly providerConfig?: ProviderConfigService,
   ) {}
 
   private async platformRow(provider: ManagedMessagingProvider) {
@@ -189,6 +204,7 @@ export class PlatformIntegrationsService {
   }
 
   async savePlatformTwilio(dto: { accountSid: string; authToken: string }) {
+    const previous = (await this.platformPayload('twilio')) as TwilioPlatformPayload | null;
     const accountSid = String(dto.accountSid || '').trim();
     const authToken = String(dto.authToken || '').trim();
     if (!accountSid.startsWith('AC') || !authToken) {
@@ -203,7 +219,22 @@ export class PlatformIntegrationsService {
       error: null,
     };
     await this.savePlatformPayload('twilio', payload);
-    await this.propagateTwilio(payload);
+    if (
+      previous?.accountSid &&
+      previous.accountSid !== accountSid &&
+      this.messagingResources
+    ) {
+      const resources = await this.messagingResources.find();
+      for (const resource of resources) {
+        resource.smsStatus = 'blocked';
+        resource.lastError = 'Twilio parent account changed; ownership reconciliation is required';
+        await this.messagingResources.save(resource);
+        await this.onboarding?.invalidateLaunchEvidence(resource.tenantId, {
+          reason: 'Platform Twilio parent account changed',
+          retestMessaging: true,
+        });
+      }
+    }
     return this.platformSummary();
   }
 
@@ -220,57 +251,20 @@ export class PlatformIntegrationsService {
       error: null,
     };
     await this.savePlatformPayload('sendgrid', payload);
-    await this.propagateSendGrid(payload);
+    if (this.emailIdentities) {
+      const identities = await this.emailIdentities.find();
+      for (const identity of identities) {
+        identity.emailStatus = 'testing';
+        identity.lastVerifiedAt = null;
+        identity.lastError = 'Retest after platform SendGrid key changed';
+        await this.emailIdentities.save(identity);
+        await this.onboarding?.invalidateLaunchEvidence(identity.tenantId, {
+          reason: 'Platform SendGrid credential changed',
+          retestMessaging: true,
+        });
+      }
+    }
     return this.platformSummary();
-  }
-
-  private async propagateTwilio(platform: TwilioPlatformPayload) {
-    const rows = await this.tenantCredentials.find({
-      where: { provider: 'twilio' },
-      relations: ['tenant'],
-    });
-    for (const row of rows) {
-      const current = decryptIntegrationPayload(row.encryptedValue) || {};
-      row.encryptedValue = encryptPayload({
-        ...current,
-        accountSid: platform.accountSid,
-        authToken: platform.authToken,
-        configured: Boolean(current.fromNumber),
-        connected: false,
-        managedByPlatform: true,
-        error: null,
-        lastSync: nowIso(),
-      });
-      await this.tenantCredentials.save(row);
-      await this.onboarding?.invalidateLaunchEvidence(row.tenant.id, {
-        reason: 'Platform Twilio credentials changed',
-        retestMessaging: true,
-      });
-    }
-  }
-
-  private async propagateSendGrid(platform: SendGridPlatformPayload) {
-    const rows = await this.tenantCredentials.find({
-      where: { provider: 'sendgrid' },
-      relations: ['tenant'],
-    });
-    for (const row of rows) {
-      const current = decryptIntegrationPayload(row.encryptedValue) || {};
-      row.encryptedValue = encryptPayload({
-        ...current,
-        apiKey: platform.apiKey,
-        configured: Boolean(current.fromEmail),
-        connected: false,
-        managedByPlatform: true,
-        error: null,
-        lastSync: nowIso(),
-      });
-      await this.tenantCredentials.save(row);
-      await this.onboarding?.invalidateLaunchEvidence(row.tenant.id, {
-        reason: 'Platform SendGrid credentials changed',
-        retestMessaging: true,
-      });
-    }
   }
 
   async testPlatformTwilio(dto: { fromNumber?: string; toNumber?: string; message?: string }) {
@@ -398,6 +392,43 @@ export class PlatformIntegrationsService {
   }
 
   async tenantSummary(tenantId: string) {
+    if (this.messagingResources && this.emailIdentities) {
+      const [twilio, sendgrid] = await Promise.all([
+        this.messagingResources.findOne({ where: { tenantId } }),
+        this.emailIdentities.findOne({ where: { tenantId } }),
+      ]);
+      return {
+        twilio: {
+          configured: Boolean(twilio?.twilioSubaccountSid),
+          connected: twilio?.smsStatus === 'ready',
+          status: twilio?.smsStatus || 'disconnected',
+          error: twilio?.lastError || null,
+          lastSync: twilio?.updatedAt || null,
+          managedByPlatform: true,
+          display: {
+            fromNumber: twilio?.phoneNumber || null,
+            complianceStatus: twilio?.a2pComplianceStatus || 'not_started',
+            customerProfileSid: twilio?.a2pCustomerProfileSid || null,
+            brandSid: twilio?.a2pBrandSid || null,
+            campaignSid: twilio?.a2pCampaignSid || null,
+          },
+        },
+        sendgrid: {
+          configured: Boolean(sendgrid),
+          connected: sendgrid?.emailStatus === 'ready',
+          status: sendgrid?.emailStatus || 'disconnected',
+          error: sendgrid?.lastError || null,
+          lastSync: sendgrid?.updatedAt || null,
+          managedByPlatform: true,
+          display: {
+            fromEmail: sendgrid?.fromEmail || null,
+            fromName: sendgrid?.fromName || null,
+            inboundAddress: sendgrid?.inboundAddress || null,
+            reputationStatus: sendgrid?.reputationStatus || null,
+          },
+        },
+      };
+    }
     const rows = await this.tenantCredentials.find({
       where: { tenant: { id: tenantId } as any },
       relations: ['tenant'],
@@ -435,43 +466,17 @@ export class PlatformIntegrationsService {
   }
 
   async assignTwilio(tenantId: string, dto: { fromNumber: string }) {
-    const platform = (await this.platformPayload('twilio')) as TwilioPlatformPayload | null;
-    if (!platform?.accountSid || !platform?.authToken) {
-      throw new BadRequestException('Save the platform Twilio credentials first');
+    void dto;
+    if (!this.twilioProvisioning) {
+      throw new BadRequestException('Managed Twilio provisioning service is unavailable');
     }
-    const fromNumber = normalizePhoneE164(dto.fromNumber);
-    if (!fromNumber) throw new BadRequestException('Twilio phone number is invalid');
-    const existing = await this.tenantRow(tenantId, 'twilio');
-    const current = existing
-      ? decryptIntegrationPayload(existing.encryptedValue)
-      : null;
-    if (
-      normalizePhoneE164(current?.fromNumber) === fromNumber &&
-      existing?.routingKey === fromNumber &&
-      current?.accountSid === platform.accountSid &&
-      current?.authToken === platform.authToken
-    ) {
-      return this.tenantSummary(tenantId);
-    }
-    await this.saveTenantPayload(
-      tenantId,
-      'twilio',
-      {
-        configured: true,
-        connected: false,
-        managedByPlatform: true,
-        accountSid: platform.accountSid,
-        authToken: platform.authToken,
-        fromNumber,
-        lastSync: nowIso(),
-        error: null,
-      },
-      fromNumber,
-    );
+    await this.twilioProvisioning.provisionTenant(tenantId);
+    const legacy = await this.tenantRow(tenantId, 'twilio');
+    if (legacy) await this.tenantCredentials.remove(legacy);
     await this.onboarding?.invalidateLaunchEvidence(tenantId, {
-      reason: 'Client Twilio sender assignment changed',
+      reason: 'Managed Twilio resources were provisioned or reconciled',
       retestMessaging: true,
-      twilioApproval: true,
+      twilioApproval: false,
     });
     return this.tenantSummary(tenantId);
   }
@@ -480,58 +485,18 @@ export class PlatformIntegrationsService {
     tenantId: string,
     dto: { fromEmail: string; fromName?: string; inboundAddress?: string },
   ) {
-    const platform = (await this.platformPayload('sendgrid')) as SendGridPlatformPayload | null;
-    if (!platform?.apiKey) {
-      throw new BadRequestException('Save the platform SendGrid API key first');
+    if (!this.emailIdentityService) {
+      throw new BadRequestException('Managed SendGrid identity service is unavailable');
     }
-    const fromEmail = email(dto.fromEmail, 'From email');
-    const inboundAddress = dto.inboundAddress
-      ? email(dto.inboundAddress, 'Inbound address')
-      : null;
-    const fromName = String(dto.fromName || '').trim();
-    if (!fromName) {
-      throw new BadRequestException('Client sender name is required');
-    }
-    if (!inboundAddress) {
-      throw new BadRequestException(
-        'A unique inbound reply address is required',
-      );
-    }
-    const existing = await this.tenantRow(tenantId, 'sendgrid');
-    const current = existing
-      ? decryptIntegrationPayload(existing.encryptedValue)
-      : null;
-    if (
-      String(current?.fromEmail || '').trim().toLowerCase() === fromEmail &&
-      String(current?.fromName || '').trim() === fromName &&
-      String(current?.inboundAddress || '').trim().toLowerCase() ===
-        inboundAddress &&
-      String(existing?.routingKey || '').trim().toLowerCase() ===
-        inboundAddress &&
-      current?.apiKey === platform.apiKey
-    ) {
-      return this.tenantSummary(tenantId);
-    }
-    await this.saveTenantPayload(
-      tenantId,
-      'sendgrid',
-      {
-        configured: true,
-        connected: false,
-        managedByPlatform: true,
-        apiKey: platform.apiKey,
-        fromEmail,
-        fromName,
-        inboundAddress,
-        lastSync: nowIso(),
-        error: null,
-      },
-      inboundAddress,
-    );
+    await this.emailIdentityService.provisionTenant(tenantId, {
+      fromName: dto.fromName,
+    });
+    const legacy = await this.tenantRow(tenantId, 'sendgrid');
+    if (legacy) await this.tenantCredentials.remove(legacy);
     await this.onboarding?.invalidateLaunchEvidence(tenantId, {
-      reason: 'Client SendGrid sender or inbound routing assignment changed',
+      reason: 'Managed SendGrid identity was provisioned or reconciled',
       retestMessaging: true,
-      sendgridApproval: true,
+      sendgridApproval: false,
     });
     return this.tenantSummary(tenantId);
   }
@@ -540,6 +505,34 @@ export class PlatformIntegrationsService {
     tenantId: string,
     dto: { toNumber?: string; message?: string },
   ) {
+    if (this.providerConfig && this.twilioProvisioning) {
+      const config = await this.providerConfig.resolveTwilio(tenantId, {
+        allowTesting: true,
+      });
+      if (!config) {
+        throw new BadRequestException(
+          'Managed Twilio resources are not ready for controlled testing',
+        );
+      }
+      const to = dto.toNumber ? normalizePhoneE164(dto.toNumber) : null;
+      if (!to) throw new BadRequestException('A test recipient number is required');
+      try {
+        await sendTwilioSms({
+          accountSid: config.accountSid,
+          authToken: config.authToken,
+          to,
+          body: String(dto.message || 'RealtyTechAI controlled SMS test'),
+          statusCallback: String(process.env.TWILIO_STATUS_CALLBACK_URL || ''),
+          ...(config.messagingServiceSid
+            ? { messagingServiceSid: config.messagingServiceSid }
+            : { from: config.fromNumber as string }),
+        });
+        await this.twilioProvisioning.markValidated(tenantId);
+        return { ok: true };
+      } catch (error: any) {
+        return { ok: false, error: sanitizeOperationalText(error?.message || 'Twilio test failed') };
+      }
+    }
     const row = await this.tenantRow(tenantId, 'twilio');
     const payload = row ? decryptIntegrationPayload(row.encryptedValue) : null;
     if (!row || !payload?.fromNumber) {
@@ -566,6 +559,34 @@ export class PlatformIntegrationsService {
   }
 
   async testTenantSendGrid(tenantId: string, dto: { toEmail?: string }) {
+    if (this.providerConfig && this.emailIdentityService) {
+      const config = await this.providerConfig.resolveSendGrid(tenantId, {
+        allowTesting: true,
+      });
+      if (!config) {
+        throw new BadRequestException(
+          'Managed SendGrid identity is not ready for controlled testing',
+        );
+      }
+      const to = dto.toEmail ? email(dto.toEmail, 'Test recipient') : null;
+      if (!to) throw new BadRequestException('A test recipient email is required');
+      try {
+        await sendSendGridEmail({
+          apiKey: config.apiKey,
+          to,
+          fromEmail: config.fromEmail,
+          fromName: config.fromName,
+          replyTo: config.inboundAddress,
+          subject: `${config.fromName} controlled email test`,
+          text: 'This is a controlled RealtyTechAI email delivery test.',
+          categories: ['transactional'],
+        });
+        await this.emailIdentityService.markVerified(tenantId);
+        return { ok: true };
+      } catch (error: any) {
+        return { ok: false, error: sanitizeOperationalText(error?.message || 'SendGrid test failed') };
+      }
+    }
     const row = await this.tenantRow(tenantId, 'sendgrid');
     const payload = row ? decryptIntegrationPayload(row.encryptedValue) : null;
     if (!row || !payload?.fromEmail) {
@@ -646,6 +667,23 @@ export class PlatformIntegrationsService {
   }
 
   async removeTenantProvider(tenantId: string, provider: ManagedMessagingProvider) {
+    if (provider === 'twilio' && this.messagingResources) {
+      const resource = await this.messagingResources.findOne({ where: { tenantId } });
+      if (resource) {
+        resource.smsStatus = 'blocked';
+        resource.lastError = 'Managed SMS was disabled by a platform operator';
+        await this.messagingResources.save(resource);
+      }
+    }
+    if (provider === 'sendgrid' && this.emailIdentities) {
+      const identity = await this.emailIdentities.findOne({ where: { tenantId } });
+      if (identity) {
+        identity.emailStatus = 'blocked';
+        identity.reputationStatus = 'paused';
+        identity.lastError = 'Managed email was disabled by a platform operator';
+        await this.emailIdentities.save(identity);
+      }
+    }
     const row = await this.tenantRow(tenantId, provider);
     if (row) {
       await this.tenantCredentials.remove(row);
@@ -662,6 +700,30 @@ export class PlatformIntegrationsService {
   async removePlatformProvider(provider: ManagedMessagingProvider) {
     const row = await this.platformRow(provider);
     if (row) await this.platformCredentials.remove(row);
+    if (provider === 'twilio' && this.messagingResources) {
+      const resources = await this.messagingResources.find();
+      for (const resource of resources) {
+        resource.smsStatus = 'blocked';
+        resource.lastError = 'Platform Twilio credentials were removed';
+        await this.messagingResources.save(resource);
+        await this.onboarding?.invalidateLaunchEvidence(resource.tenantId, {
+          reason: 'Platform Twilio credentials were removed',
+          retestMessaging: true,
+        });
+      }
+    }
+    if (provider === 'sendgrid' && this.emailIdentities) {
+      const identities = await this.emailIdentities.find();
+      for (const identity of identities) {
+        identity.emailStatus = 'blocked';
+        identity.lastError = 'Platform SendGrid credentials were removed';
+        await this.emailIdentities.save(identity);
+        await this.onboarding?.invalidateLaunchEvidence(identity.tenantId, {
+          reason: 'Platform SendGrid credentials were removed',
+          retestMessaging: true,
+        });
+      }
+    }
     const tenantRows = await this.tenantCredentials.find({
       where: { provider },
       relations: ['tenant'],

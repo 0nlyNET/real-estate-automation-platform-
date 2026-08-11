@@ -97,12 +97,12 @@ Record the tester, UTC timestamp, deployed commit, tenant ID, Stripe mode, and e
 ## Test 10 — Integrations
 
 - Pass/fail: [ ] PASS [ ] FAIL
-- Preconditions: Client authorization and test-mode/approved Twilio and SendGrid credentials; Meta only if included; exact callbacks configured.
-- Exact action: Save each enabled provider credential, inspect the API/UI response, run its connection test, deliberately fail one test, then correct the credential and retest. For Meta, authorize and select the intended Page.
-- Expected result: Secrets are encrypted at rest, never returned, and UI values are masked. Credential changes reset connection status. Success/failure, sanitized detail, and timestamp are recorded. Failure appears as `integration_test_failure` in the operator queue.
-- Evidence to retain: Masked screenshots, safe credential-row prefix check (`v1:` only), provider activity IDs, test timestamps, operations-task ID.
-- Failure response: Leave the provider disconnected and tenant inactive; rotate any credential exposed during testing.
-- Rollback action: Disconnect the integration, revoke the provider credential/token, and reconnect only after the callback and routing checks pass.
+- Preconditions: Client authorization; approved platform-owned Twilio and SendGrid parent accounts; final callback URLs and sending/reply domains configured; Meta only if included.
+- Exact action: From the owner workspace, reconcile tenant provisioning and verify the Twilio child account, Messaging Service, dedicated number, compliance state, SendGrid sender, and unguessable inbound address. Run the controlled SMS/email tests, deliberately fail one provider request, then reconcile and retest. For Meta, authorize and select the intended Page.
+- Expected result: The client is never asked for provider secrets. Parent credentials remain server-side; tenant-scoped resources are encrypted and never returned. Provisioning is resumable, callbacks route to exactly one tenant, test results are recorded, and failures appear in the operator queue.
+- Evidence to retain: Secret-free client and owner screenshots, provider resource IDs, exact routing identities, test timestamps, and operations-task ID.
+- Failure response: Leave the resource blocked and tenant inactive; rotate a parent or tenant credential only if it was exposed.
+- Rollback action: Block the tenant resource, reconcile the provider asset inventory, and resume provisioning only after callback, compliance, and routing checks pass.
 
 ## Test 11 — Safe activation
 
