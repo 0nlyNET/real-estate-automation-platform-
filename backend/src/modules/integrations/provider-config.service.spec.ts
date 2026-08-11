@@ -27,10 +27,12 @@ describe('ProviderConfigService tenant isolation', () => {
     const twilioRows: Record<string, any> = {
       'tenant-a': {
         tenantId: 'tenant-a', smsStatus: 'ready', twilioParentAccountSid: 'AC-parent', twilioSubaccountSid: 'AC-a',
+        twilioApiKeySid: 'SK-a', encryptedApiSecret: encryptString('secret-a'),
         encryptedAuthToken: encryptString('token-a'), phoneNumber: '+15550000001', messagingServiceSid: 'MG-a',
       },
       'tenant-b': {
         tenantId: 'tenant-b', smsStatus: 'ready', twilioParentAccountSid: 'AC-parent', twilioSubaccountSid: 'AC-b',
+        twilioApiKeySid: 'SK-b', encryptedApiSecret: encryptString('secret-b'),
         encryptedAuthToken: encryptString('token-b'), phoneNumber: '+15550000002', messagingServiceSid: 'MG-b',
       },
     };
@@ -53,10 +55,11 @@ describe('ProviderConfigService tenant isolation', () => {
     );
 
     await expect(service.resolveTwilio('tenant-a')).resolves.toMatchObject({
-      accountSid: 'AC-a', authToken: 'token-a', fromNumber: '+15550000001',
+      accountSid: 'AC-a', authUsername: 'SK-a', authToken: 'secret-a',
+      credentialType: 'scoped_api_key', fromNumber: '+15550000001',
     });
     await expect(service.resolveSendGrid('tenant-b')).resolves.toMatchObject({
-      apiKey: 'SG.platform-only', fromEmail: 'b@send.example.com', inboundAddress: 'token-b@reply.example.com',
+      connected: true, apiKey: 'SG.platform-only', fromEmail: 'b@send.example.com', inboundAddress: 'token-b@reply.example.com',
     });
     expect(await service.resolveTwilio('tenant-a')).not.toMatchObject({ accountSid: 'AC-b' });
   });

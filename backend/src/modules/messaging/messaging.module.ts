@@ -21,6 +21,9 @@ import { TenantSettings } from '../settings/tenant-settings.entity';
 import { MessageSafetyService } from './message-safety.service';
 import { LimitsModule } from '../limits/limits.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
+import { SendDecision } from './send-decision.entity';
+import { SendDecisionService } from './send-decision.service';
+import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
 
 @Module({
   imports: [
@@ -32,6 +35,8 @@ import { IntegrationsModule } from '../integrations/integrations.module';
       Credential,
       TenantSettings,
       Appointment,
+      SendDecision,
+      SequenceEnrollment,
     ]),
     SequencesModule,
     ComplianceModule,
@@ -42,7 +47,12 @@ import { IntegrationsModule } from '../integrations/integrations.module';
     IntegrationsModule,
   ],
   controllers: [MessagingController],
-  providers: [MessagingService, InboxSendService, MessageSafetyService],
+  providers: [
+    MessagingService,
+    InboxSendService,
+    MessageSafetyService,
+    SendDecisionService,
+  ],
   exports: [MessagingService, MessageSafetyService],
 })
 export class MessagingModule {}

@@ -86,4 +86,55 @@ describe('public client applications', () => {
     ).resolves.toEqual({ ok: true, received: true });
     expect(pub.submitInquiry).not.toHaveBeenCalled();
   });
+
+  it('automatically converts an accepted application into a client workspace', async () => {
+    const application: any = {
+      id: 'application-1',
+      name: 'Jordan Client',
+      company: 'Sunset Realty',
+      email: 'owner@sunset.example.com',
+      status: 'qualified',
+      assignedOperatorId: 'operator-1',
+      convertedTenantId: null,
+    };
+    const applications = {
+      findOne: jest.fn().mockResolvedValue(application),
+      findOneOrFail: jest.fn(async () => ({
+        ...application,
+        status: 'accepted',
+        convertedTenantId: 'tenant-1',
+      })),
+      save: jest.fn(async (value) => value),
+    };
+    const admin = {
+      createClient: jest.fn().mockResolvedValue({ tenantId: 'tenant-1' }),
+    };
+    const operations = {
+      resolveRecoverableTasks: jest.fn().mockResolvedValue(1),
+    };
+    const service = new PublicService(
+      applications as any,
+      {} as any,
+      operations as any,
+      undefined,
+      undefined,
+      admin as any,
+    );
+
+    await expect(
+      service.updateApplication('application-1', { status: 'accepted' }),
+    ).resolves.toMatchObject({ convertedTenantId: 'tenant-1' });
+    expect(admin.createClient).toHaveBeenCalledWith({
+      businessName: 'Sunset Realty',
+      ownerEmail: 'owner@sunset.example.com',
+      assignedOperatorId: 'operator-1',
+      applicationId: 'application-1',
+    });
+    expect(operations.resolveRecoverableTasks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: 'new_application',
+        relatedEntityId: 'application-1',
+      }),
+    );
+  });
 });

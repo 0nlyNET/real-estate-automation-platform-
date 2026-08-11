@@ -15,13 +15,18 @@ TypeORM migrations before application rollout.
    account can create subaccounts, API keys, Messaging Services, and numbers.
 4. For a paid tenant, run the provisioning reconciliation endpoint. The worker
    persists each created SID immediately and resumes at the next missing step.
-5. Record the tenant's Customer Profile, Brand, Campaign, and approval status.
-   Live readiness cannot pass until status is `approved` and a controlled test
-   marks the resource `ready`.
+5. Complete the parent account's Primary Customer Profile once, then configure
+   its SID plus the current Secondary Profile and A2P Trust Product policy SIDs.
+   RealtyTechAI creates tenant business/representative objects, evaluates and
+   submits the secondary profile and trust product, creates the Brand and
+   Campaign, and durably polls provider status. A rejection becomes an
+   `ACTION_REQUIRED` exception with Twilio's sanitized correction reason.
 
 Never copy the parent Auth Token into a tenant credential row. Tenant webhook
-signature verification uses the encrypted subaccount Auth Token; outbound sends
-use the subaccount configuration resolved on the server.
+signature verification and provisioning use the encrypted subaccount Auth
+Token; outbound runtime sends use the tenant-scoped API Key SID and secret.
+Twilio does not expose an API-key secret after creation, so reconciliation
+removes a detected unusable orphan key before creating one replacement.
 
 ## 2. Platform SendGrid and DNS setup
 
@@ -54,11 +59,12 @@ identifiers, records a sanitized error, releases its lease, and creates one
 deduplicated owner task. A successful retry resolves that recoverable task.
 It must never guess a tenant for an unknown number or reply token.
 
-Stripe checkout completion and successful invoice payment request provider
-reconciliation. Owner compliance changes and successful controlled tests also
-reconcile immediately; a bounded background reconciliation pass covers relevant
-configuration changes without depending on an open browser. Provider failures
-do not invalidate or retry a verified Stripe event; they become owner-visible
+Stripe checkout completion and successful invoice payment durably enqueue
+provider reconciliation and automatically record signed billing readiness.
+Provider, A2P, quality, health/stalled-worker, retention, and offboarding jobs
+use PostgreSQL schedules, leases, retries, and backoff and do not depend on an
+open browser or a particular application instance. Provider failures do not
+invalidate or retry a verified Stripe event; they become owner-visible
 exceptions.
 
 ## 4. Callback checklist
@@ -84,9 +90,12 @@ messaging compliance, SendGrid identity, affirmative consent configuration,
 quiet hours, safety incidents, policy acknowledgements, and fresh controlled
 tests.
 
-Run test SMS, test email, test lead/follow-up, inbound SMS, inbound email, STOP,
-unsubscribe, provider rejection, and notification tests using owned test
-destinations. `tenant.lifecycleStatus=ACTIVE` and
+Start a `test_run` with explicit owned SMS/email recipients. The isolated lead
+is tagged with that run and passes through normal normalization, limits,
+sequence, PostgreSQL worker, safety, provider, callback, reply, suppression,
+and notification paths. Provider callbacks—not manually checked boxes—record
+test evidence. Run SMS, email, inbound replies, STOP, unsubscribe, a safe
+provider rejection, and notification checks. `tenant.lifecycleStatus=ACTIVE` and
 `tenant_settings.automationsEnabled=true` are written only by successful
 activation after every required item passes.
 
@@ -138,14 +147,13 @@ restore evidence exists.
 
 ## 10. Offboarding and retention
 
-An owner-controlled export includes workspace settings, users, leads and their
-conversation history, sequences, appointments, consent/opt-out history, audit
-history, support records, and billing records. Subscription cancellation pauses
-automation and opens an offboarding task; it does not immediately erase client
-data. Apply the counsel-approved retention schedule to business data, messages,
-consent, audit, and billing categories. Keep deletion requests and execution
-evidence auditable, and remove or release provider resources only after the
-approved retention/offboarding decision.
+An owner-controlled export includes leads, contact data, conversation history,
+appointments, lead status, and reports. Subscription cancellation durably
+pauses automation and both sending identities, starts the configured retention
+window, and schedules anonymization. Business/contact/message PII is removed at
+the deadline; immutable audit, consent evidence, and billing records remain for
+their separately approved legal retention. Offboarding requests and execution
+timestamps remain auditable.
 
 ## Owner-controlled external gates
 

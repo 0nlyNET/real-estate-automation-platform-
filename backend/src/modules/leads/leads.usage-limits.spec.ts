@@ -22,7 +22,12 @@ describe('LeadsService usage reservations', () => {
       {} as any,
       {} as any,
       {} as any,
-      { findById: jest.fn().mockResolvedValue({ id: 'tenant-a' }) } as any,
+      {
+        findById: jest.fn().mockResolvedValue({
+          id: 'tenant-a',
+          lifecycleStatus: 'ACTIVE',
+        }),
+      } as any,
       {} as any,
       {} as any,
       {} as any,

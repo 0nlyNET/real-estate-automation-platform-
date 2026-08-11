@@ -23,16 +23,17 @@ export class EmailIdentityService {
     if (!tenant) throw new BadRequestException('Tenant not found');
     const sendingDomain = requiredDomain('SENDGRID_SENDING_DOMAIN');
     const replyDomain = requiredDomain('SENDGRID_REPLY_DOMAIN');
-    const slug = String(tenant.name || tenant.id || 'client')
+    const slug = String(tenant.name || 'client')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '')
-      .slice(0, 40) || 'client';
+      .slice(0, 32) || 'client';
+    const senderLocalPart = `${slug}-${tenant.id.replace(/-/g, '').slice(0, 8)}`;
     const replyToken = randomBytes(18).toString('base64url').toLowerCase();
     const saved = await this.identities.save(
       this.identities.create({
         tenantId,
-        fromEmail: `${slug}@${sendingDomain}`,
+        fromEmail: `${senderLocalPart}@${sendingDomain}`,
         fromName: String(input?.fromName || tenant.name).trim(),
         replyToken,
         inboundAddress: `${replyToken}@${replyDomain}`,
@@ -42,6 +43,9 @@ export class EmailIdentityService {
         emailStatus: 'testing',
         lastVerifiedAt: null,
         lastError: null,
+        customDomain: null,
+        sendgridSubuserId: null,
+        domainVerificationStatus: 'platform_authenticated',
       }),
     );
     await this.audit?.recordSystemEvent({

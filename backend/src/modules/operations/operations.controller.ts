@@ -38,6 +38,11 @@ export class OperationsController {
     });
   }
 
+  @Get('exceptions')
+  exceptions() {
+    return this.operations.exceptionSummary();
+  }
+
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateOperationsTaskDto) {
     return this.operations.updateTask(id, {

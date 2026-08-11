@@ -224,6 +224,8 @@ export default function OnboardingPage() {
                     <Field label="Website" type="url" value={data.businessIdentity.website} onChange={(value) => field("businessIdentity", "website", value)} />
                     <Field label="Areas you serve (comma-separated)" value={listValue("businessIdentity", "serviceAreas")} onChange={(value) => csv("businessIdentity", "serviceAreas", value)} />
                     <Field label="Best account-owner email" type="email" value={data.contacts.accountOwner} onChange={(value) => field("contacts", "accountOwner", value)} />
+                    <Field label="Controlled SMS test phone" value={data.contacts.controlledTestPhone} onChange={(value) => field("contacts", "controlledTestPhone", value)} />
+                    <Field label="Controlled email test recipient" type="email" value={data.contacts.controlledTestEmail || data.contacts.accountOwner} onChange={(value) => field("contacts", "controlledTestEmail", value)} />
                     <Field label="Billing email (if different)" type="email" value={data.contacts.billingContact} onChange={(value) => field("contacts", "billingContact", value)} />
                     <Field label="Time zone" value={settings.timeZone} onChange={(value) => setSettings((current) => ({ ...current, timeZone: value }))} />
                   </div>

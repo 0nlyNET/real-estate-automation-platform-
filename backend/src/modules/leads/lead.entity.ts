@@ -41,6 +41,10 @@ export type LeadStage =
   },
 )
 export class Lead extends BaseEntity {
+  @Index()
+  @Column({ name: 'test_run_id', type: 'uuid', nullable: true })
+  testRunId?: string | null;
+
   @Column({ name: 'full_name' })
   fullName!: string;
 

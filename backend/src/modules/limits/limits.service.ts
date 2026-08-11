@@ -14,7 +14,12 @@ import { UsagePolicy, UsagePolicyScope } from './usage-policy.entity';
 import { UsageReservation } from './usage-reservation.entity';
 
 export type LimitCheckResult =
-  | { ok: true; duplicate?: boolean; warnings?: string[] }
+  | {
+      ok: true;
+      duplicate?: boolean;
+      warnings?: string[];
+      reservationId?: string;
+    }
   | {
       ok: false;
       code: 'PLAN_BLOCKED' | 'LIMIT_LEADS' | 'USAGE_LIMIT' | 'COST_LIMIT';
@@ -149,6 +154,15 @@ export class LimitsService {
   }
 
   async updateTenantPolicy(tenantId: string, input: UsagePolicyInput) {
+    const tenant = await this.dataSource.getRepository(Tenant).findOne({
+      where: { id: tenantId },
+    });
+    if (!tenant) throw new BadRequestException('Tenant not found');
+    if (tenant.lifecycleStatus === 'ACTIVE' && input.enabled !== true) {
+      throw new BadRequestException(
+        'Required usage protections cannot be disabled while a tenant is ACTIVE',
+      );
+    }
     const policy = await this.ensureTenantPolicy(tenantId);
     const before = this.publicPolicy(policy);
     Object.assign(policy, this.validatePolicy(input));
@@ -165,6 +179,16 @@ export class LimitsService {
   }
 
   async updatePlatformPolicy(input: UsagePolicyInput) {
+    if (input.enabled !== true) {
+      const activeTenants = await this.dataSource.getRepository(Tenant).count({
+        where: { lifecycleStatus: 'ACTIVE' },
+      });
+      if (activeTenants > 0) {
+        throw new BadRequestException(
+          'Platform usage protections cannot be disabled while tenants are ACTIVE',
+        );
+      }
+    }
     let policy = await this.getPlatformPolicy();
     if (!policy) {
       policy = this.policies.create(defaultPlatformUsagePolicy());
@@ -313,12 +337,15 @@ export class LimitsService {
 
     const decision = await this.dataSource.transaction(async (manager) => {
       const reservations = manager.getRepository(UsageReservation);
-      if (
-        await reservations.findOne({
+      const existingReservation = await reservations.findOne({
           where: { idempotencyKey: input.idempotencyKey },
-        })
-      ) {
-        return { ok: true, duplicate: true } as LimitCheckResult;
+        });
+      if (existingReservation) {
+        return {
+          ok: true,
+          duplicate: true,
+          reservationId: existingReservation.id,
+        } as LimitCheckResult;
       }
 
       const policies = manager.getRepository(UsagePolicy);
@@ -346,12 +373,15 @@ export class LimitsService {
           `usage:${policy.scopeType}:${policy.scopeId}`,
         ]);
       }
-      if (
-        await reservations.findOne({
+      const lockedReservation = await reservations.findOne({
           where: { idempotencyKey: input.idempotencyKey },
-        })
-      ) {
-        return { ok: true, duplicate: true } as LimitCheckResult;
+        });
+      if (lockedReservation) {
+        return {
+          ok: true,
+          duplicate: true,
+          reservationId: lockedReservation.id,
+        } as LimitCheckResult;
       }
       const evaluations = await Promise.all(
         activePolicies.map((policy) =>
@@ -412,7 +442,7 @@ export class LimitsService {
           cost,
         );
       }
-      await reservations.save(
+      const reservation = await reservations.save(
         reservations.create({
           tenantId: input.tenantId,
           idempotencyKey: input.idempotencyKey.slice(0, 255),
@@ -425,7 +455,11 @@ export class LimitsService {
       const warnings = evaluations.flatMap((evaluation) =>
         this.warningReasons(evaluation, quantity, cost),
       );
-      return { ok: true, warnings } as LimitCheckResult;
+      return {
+        ok: true,
+        warnings,
+        reservationId: reservation?.id,
+      } as LimitCheckResult;
     });
 
     if (!decision.ok) {

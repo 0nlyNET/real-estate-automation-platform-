@@ -28,13 +28,14 @@ export class HealthController {
     }
   }
 
-  @Get('readiness')
+  @Get(['readiness', 'ready'])
   async readiness(@Res({ passthrough: true }) response: Response) {
     const configuration = environmentReadiness();
     let database: Record<string, unknown> = { status: 'down' };
     let schema: Record<string, unknown> = { status: 'unknown' };
     let migrations: Record<string, unknown> = { status: 'unknown' };
     let credentialStorage: Record<string, unknown> = { status: 'unknown' };
+    let durableWorkers: Record<string, unknown> = { status: 'unknown' };
 
     try {
       await this.dataSource.query('SELECT 1');
@@ -45,6 +46,23 @@ export class HealthController {
 
       const pending = await this.dataSource.showMigrations();
       migrations = { status: pending ? 'down' : 'up', pending };
+
+      const workerRows: Array<{ failed: string; stalled: string }> =
+        await this.dataSource.query(
+          `SELECT
+             COUNT(*) FILTER (WHERE status = 'failed')::text AS failed,
+             COUNT(*) FILTER (
+               WHERE status = 'running' AND lease_expires_at < NOW()
+             )::text AS stalled
+           FROM durable_jobs`,
+        );
+      const failed = Number(workerRows[0]?.failed || 0);
+      const stalled = Number(workerRows[0]?.stalled || 0);
+      durableWorkers = {
+        status: failed || stalled ? 'down' : 'up',
+        failed,
+        stalled,
+      };
 
       if (report.ok) {
         const rows: Array<{ count: string | number }> = await this.dataSource.query(
@@ -68,6 +86,7 @@ export class HealthController {
       schema.status === 'up' &&
       migrations.status === 'up' &&
       credentialStorage.status === 'up' &&
+      durableWorkers.status === 'up' &&
       configuration.platform.status === 'up' &&
       configuration.encryption.status === 'up' &&
       configuration.systemEmail.status !== 'down' &&
@@ -82,6 +101,7 @@ export class HealthController {
       migrations,
       configuration,
       credentialStorage,
+      durableWorkers,
     };
   }
 }

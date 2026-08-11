@@ -59,7 +59,6 @@ describe('operator-controlled workspace activation', () => {
         'contacts',
         'consent_policy',
         'test_lead',
-        'provider_rejection',
         'client_approval',
         'operator_approval',
         'billing_evidence',
@@ -97,16 +96,20 @@ describe('operator-controlled workspace activation', () => {
         publicBusinessName: 'Lakeview Realty',
         primaryMarket: 'Austin, TX',
       },
-      contacts: Object.fromEntries(
-        [
-          'accountOwner',
-          'billingContact',
-          'operationsContact',
-          'supportContact',
-          'approvalContact',
-          'escalationContact',
-        ].map((key) => [key, `${key}@lakeview.example`]),
-      ),
+      contacts: {
+        ...Object.fromEntries(
+          [
+            'accountOwner',
+            'billingContact',
+            'operationsContact',
+            'supportContact',
+            'approvalContact',
+            'escalationContact',
+          ].map((key) => [key, `${key}@lakeview.example`]),
+        ),
+        controlledTestPhone: '+14155550123',
+        controlledTestEmail: 'controlled@lakeview.example',
+      },
       serviceScope: {
         selectedPackage: 'RealtyTechAI managed service',
         includedChannels: ['sms', 'email'],
@@ -311,21 +314,44 @@ describe('operator-controlled workspace activation', () => {
     };
     const service = new OnboardingService(
       records as any,
+      {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'tenant-1',
+          lifecycleStatus: 'TESTING',
+        }),
+      } as any,
       {} as any,
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'test-run-1',
+          tenantId: 'tenant-1',
+          status: 'running',
+          expiresAt: new Date(Date.now() + 60_000),
+          checks: {},
+        }),
+        save: jest.fn(async (value) => value),
+      } as any,
     );
     await service.recordAutomatedTestEvidence('tenant-1', {
       inboundSms: true,
       stop: true,
+      testRunId: 'test-run-1',
     });
     const firstSmsEvidence = record.inboundSmsTestedAt;
     await service.recordAutomatedTestEvidence('tenant-1', {
       inboundSms: true,
       inboundEmail: true,
       providerRejection: true,
+      testRunId: 'test-run-1',
     });
     expect(record).toMatchObject({
       inboundSmsTestedAt: firstSmsEvidence,

@@ -105,7 +105,9 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
         });
         return;
       }
-      await this.entitlements.assertAllowed(tenantId, 'enroll_lead');
+      await this.entitlements.assertAllowed(tenantId, 'enroll_lead', {
+        controlledTest: Boolean(lead.testRunId),
+      });
       const existing = await this.enrollmentRepository.findOne({
         where: { tenantId, leadId: lead.id, status: 'active' },
       });
@@ -362,7 +364,9 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async assertSequenceCanActivate(tenantId: string, sequence: Sequence) {
-    await this.entitlements.assertAllowed(tenantId, 'start_automation');
+    // This flag selects a configured automation for controlled testing and for
+    // later live use. Runtime entitlement checks still gate every enrollment
+    // and send, so configuration can safely be completed before activation.
     const steps = sequence.steps || (await this.stepRepository.find({
       where: { sequence: { id: sequence.id } as Sequence },
     }));
@@ -544,7 +548,12 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const entitlement = await this.entitlements.evaluate(enrollment.tenantId, 'run_sequence_step');
+    const entitlement = await this.entitlements.evaluate(
+      enrollment.tenantId,
+      'run_sequence_step',
+      new Date(),
+      { controlledTest: Boolean(lead.testRunId) },
+    );
     if (!entitlement.allowed) {
       await this.logLeadEvent(lead, 'sequence_held', { reasons: entitlement.reasons });
       await this.releaseEnrollment(id, new Date(Date.now() + 5 * 60_000));

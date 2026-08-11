@@ -1,17 +1,17 @@
 import {
   Injectable,
   Logger,
-  OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { operationalEvent } from '../../common/operational-log';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OperationsService } from '../operations/operations.service';
 import { ServiceControlService } from '../service-control/service-control.service';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Tenant } from '../tenants/tenant.entity';
+import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 
 type QualitySeverity = 'healthy' | 'warning' | 'serious' | 'extreme';
 
@@ -35,10 +35,9 @@ export type TenantQualityReport = {
 
 @Injectable()
 export class TenantQualityMonitorService
-  implements OnModuleInit, OnModuleDestroy
+  implements OnModuleInit
 {
   private readonly logger = new Logger(TenantQualityMonitorService.name);
-  private timer?: NodeJS.Timeout;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -46,24 +45,21 @@ export class TenantQualityMonitorService
     private readonly operations: OperationsService,
     private readonly serviceControl: ServiceControlService,
     private readonly audit: AuditService,
+    @Optional() private readonly durableJobs?: DurableJobsService,
   ) {}
 
   onModuleInit() {
-    if (process.env.NODE_ENV === 'test') return;
-    this.timer = setInterval(() => {
-      void this.checkActiveTenants().catch((error: unknown) =>
-        this.logger.error(
-          operationalEvent('tenant_quality_monitor_failed', {
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        ),
-      );
-    }, 5 * 60_000);
-    this.timer.unref?.();
-  }
-
-  onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
+    if (!this.durableJobs) return;
+    this.durableJobs.register('safety.quality_scan', async () => {
+      await this.checkActiveTenants();
+      return { nextRunAt: new Date(Date.now() + 5 * 60_000) };
+    });
+    if (process.env.NODE_ENV !== 'test') {
+      void this.durableJobs.schedule({
+        taskType: 'safety.quality_scan',
+        dedupeKey: 'recurring:safety.quality_scan',
+      });
+    }
   }
 
   async checkActiveTenants(now = new Date()) {

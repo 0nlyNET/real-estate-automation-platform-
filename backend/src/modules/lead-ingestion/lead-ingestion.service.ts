@@ -38,6 +38,7 @@ import {
 import { RealtorLeadAdapter } from "./realtor-lead.adapter";
 import { ZillowLeadAdapter } from "./zillow-lead.adapter";
 import { LimitsService } from "../limits/limits.service";
+import { assertLeadAcceptance } from "../leads/lead-acceptance";
 
 type HeaderMap = Record<string, string | string[] | undefined>;
 
@@ -80,6 +81,9 @@ export class LeadIngestionService {
     const payload = parseProviderPayload(input.body);
     const provider = this.resolveProvider(payload, input.headers);
     const tenantId = await this.resolveTenant(provider, apiKey);
+    const tenant = await this.tenantRepository.findOne({ where: { id: tenantId } });
+    if (!tenant) throw new UnauthorizedException("Invalid ingestion tenant");
+    assertLeadAcceptance(tenant, { source: `provider:${provider}` });
     const adapter = this.adapters.get(provider);
     if (!adapter) throw new BadRequestException("Unsupported lead provider");
 
@@ -127,6 +131,14 @@ export class LeadIngestionService {
       payloadMetadata: Record<string, unknown>;
     },
   ): Promise<LeadIngestionResult> {
+    const tenant = await manager.getRepository(Tenant).findOne({
+      where: { id: input.normalized.tenantId },
+      lock: { mode: 'pessimistic_read' },
+    });
+    if (!tenant) throw new UnauthorizedException('Invalid ingestion tenant');
+    assertLeadAcceptance(tenant, {
+      source: `provider:${input.normalized.provider}`,
+    });
     const lockKey = [
       "lead-ingestion",
       input.normalized.tenantId,
@@ -136,12 +148,21 @@ export class LeadIngestionService {
     await manager.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
       lockKey,
     ]);
-    const contactLock = sha256(
-      [input.normalized.email ?? "", input.normalized.phone ?? ""].join("|"),
-    );
-    await manager.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
-      `lead-contact:${input.normalized.tenantId}:${contactLock}`,
-    ]);
+    const contactLocks = [
+      input.normalized.email
+        ? `lead-dedup:${input.normalized.tenantId}:email:${input.normalized.email}`
+        : null,
+      input.normalized.phone
+        ? `lead-dedup:${input.normalized.tenantId}:phone:${input.normalized.phone}`
+        : null,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .sort();
+    for (const contactLock of contactLocks) {
+      await manager.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        contactLock,
+      ]);
+    }
 
     const eventRepository = manager.getRepository(LeadIngestionEvent);
     const duplicate = await eventRepository.findOne({

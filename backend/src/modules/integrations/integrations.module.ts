@@ -21,6 +21,8 @@ import { EmailIdentityService } from './email-identity.service';
 import { Tenant } from '../tenants/tenant.entity';
 import { TenantProvisioningService } from './tenant-provisioning.service';
 import { AuditModule } from '../audit/audit.module';
+import { TwilioComplianceService } from './twilio-compliance.service';
+import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
 
 @Module({
   imports: [
@@ -30,6 +32,7 @@ import { AuditModule } from '../audit/audit.module';
       TenantMessagingResource,
       TenantEmailIdentity,
       Tenant,
+      OnboardingRecord,
     ]),
     CommonModule,
     OperationsModule,
@@ -49,6 +52,7 @@ import { AuditModule } from '../audit/audit.module';
     TwilioProvisioningService,
     EmailIdentityService,
     TenantProvisioningService,
+    TwilioComplianceService,
   ],
   exports: [
     IntegrationsService,
@@ -58,6 +62,7 @@ import { AuditModule } from '../audit/audit.module';
     TwilioProvisioningService,
     EmailIdentityService,
     TenantProvisioningService,
+    TwilioComplianceService,
   ],
 })
 export class IntegrationsModule {}

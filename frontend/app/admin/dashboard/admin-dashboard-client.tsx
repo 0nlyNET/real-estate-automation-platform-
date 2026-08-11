@@ -110,6 +110,44 @@ type SystemHealth = {
   }
 }
 
+type SetupChecker = {
+  ready: boolean
+  groups: Record<
+    string,
+    Array<{
+      label: string
+      status: "ready" | "action_required"
+      nextAction?: string | null
+      detail?: unknown
+    }>
+  >
+}
+
+type OwnerExceptions = {
+  status: "HEALTHY" | "ACTION REQUIRED"
+  action: "NO ACTION" | "REVIEW EXCEPTIONS"
+  exceptions: Array<{
+    id: string
+    tenantId?: string | null
+    severity: string
+    category: string
+    problem: string
+    providerError?: string | null
+    automaticAttempts: Array<{
+      operation: string
+      attempts: number
+      maxAttempts: number
+      status: string
+      lastError?: string | null
+      lastChecked: string
+    }>
+    recommendedAction: string
+    firstDetected: string
+    lastChecked: string
+    status: string
+  }>
+}
+
 type Operator = { id: string; email: string; platformRole: "super_admin" | "staff" }
 
 type PlatformAccessUser = {
@@ -412,7 +450,7 @@ const viewDataSections: Record<AdminView, DataSection[]> = {
   tasks: ["tasks", "operators", "clients"],
   support: ["support", "operators", "clients"],
   billing: ["billing", "clients"],
-  health: ["health", "ai"],
+  health: ["health", "ai", "clients"],
   audit: ["audit"],
   settings: ["ai", "access"],
 }
@@ -531,6 +569,8 @@ export function AdminDashboardClient({
   const [overview, setOverview] = useState<Overview | null>(null)
   const [billing, setBilling] = useState<BillingOverview | null>(null)
   const [health, setHealth] = useState<SystemHealth | null>(null)
+  const [setupChecker, setSetupChecker] = useState<SetupChecker | null>(null)
+  const [ownerExceptions, setOwnerExceptions] = useState<OwnerExceptions | null>(null)
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [applications, setApplications] = useState<ProspectApplication[]>([])
   const [tasks, setTasks] = useState<OperationsTask[]>([])
@@ -555,6 +595,8 @@ export function AdminDashboardClient({
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [evidence, setEvidence] = useState<Record<string, string>>({})
   const [technicalEvidence, setTechnicalEvidence] = useState<Record<string, Record<string, string>>>({})
+  const [testSmsRecipient, setTestSmsRecipient] = useState("")
+  const [testEmailRecipient, setTestEmailRecipient] = useState("")
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
 
   const [showCreateClient, setShowCreateClient] = useState(false)
@@ -620,7 +662,16 @@ export function AdminDashboardClient({
           setAppointments(await apiFetch<ClientAppointment[]>("/admin/client-operations/appointments?take=100"))
         if (section === "ai") setAiOverview(await apiFetch<AiOverview>("/admin/ai/overview"))
         if (section === "billing") setBilling(await apiFetch<BillingOverview>("/admin/billing-overview"))
-        if (section === "health") setHealth(await apiFetch<SystemHealth>("/admin/system-health"))
+        if (section === "health") {
+          const [nextHealth, nextSetup, nextExceptions] = await Promise.all([
+            apiFetch<SystemHealth>("/admin/system-health"),
+            apiFetch<SetupChecker>("/admin/setup-checker"),
+            apiFetch<OwnerExceptions>("/admin/operations/exceptions"),
+          ])
+          setHealth(nextHealth)
+          setSetupChecker(nextSetup)
+          setOwnerExceptions(nextExceptions)
+        }
         if (section === "access") setPlatformUsers(await apiFetch<PlatformAccessUser[]>("/admin/platform-access"))
         if (section === "audit") setAuditLogs(await apiFetch<AuditLog[]>("/audit?take=100"))
         loadedSections.current.add(section)
@@ -896,11 +947,14 @@ export function AdminDashboardClient({
   async function startTesting() {
     if (!selectedTenant) return
     try {
-      const status = await apiFetch<TenantReadiness>(
-        `/admin/tenants/${selectedTenant.id}/testing`,
-        { method: "POST" },
-      )
-      setReadiness(status)
+      await apiFetch(`/admin/tenants/${selectedTenant.id}/testing/run`, {
+        method: "POST",
+        body: {
+          smsRecipient: testSmsRecipient.trim() || undefined,
+          emailRecipient: testEmailRecipient.trim() || undefined,
+        },
+      })
+      await refreshReadiness()
       setTenants((current) =>
         current.map((tenant) =>
           tenant.id === selectedTenant.id
@@ -911,7 +965,7 @@ export function AdminDashboardClient({
       setSelectedTenant((current) =>
         current ? { ...current, lifecycleStatus: "TESTING" } : current,
       )
-      setNotice("Controlled testing mode started. Live automation remains off.")
+      setNotice("The controlled lead entered the real queue. Provider callbacks and replies will record evidence automatically.")
     } catch (cause) {
       setError(messageFor(cause, "Testing mode could not be started"))
     }
@@ -1967,6 +2021,19 @@ export function AdminDashboardClient({
                       ))}
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      <Input
+                        className="max-w-xs"
+                        placeholder="Controlled SMS recipient"
+                        value={testSmsRecipient}
+                        onChange={(event) => setTestSmsRecipient(event.target.value)}
+                      />
+                      <Input
+                        className="max-w-xs"
+                        type="email"
+                        placeholder="Controlled email recipient"
+                        value={testEmailRecipient}
+                        onChange={(event) => setTestEmailRecipient(event.target.value)}
+                      />
                       <Button variant="outline" onClick={() => void saveUsagePolicy()}>
                         Save safety limits
                       </Button>
@@ -1987,18 +2054,11 @@ export function AdminDashboardClient({
                 ) : null}
                 <Section
                   title="Launch review"
-                  subtitle="Record controlled-test evidence and approvals without changing client-entered data."
+                  subtitle="Provider callbacks and controlled test runs record technical evidence automatically. Use backfill only for historical externally observed evidence."
                 >
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => void recordEvidence({ billingVerifiedAt: new Date().toISOString() })}
-                      disabled={!isOwner}
-                    >
-                      Billing verified
-                    </Button>
                     <Button variant="outline" onClick={() => void recordEvidence({ operatorApproved: true })}>
-                      Operator review approved
+                      Optional final owner approval
                     </Button>
                   </div>
                   <div className="grid gap-3 lg:grid-cols-2">
@@ -2043,67 +2103,13 @@ export function AdminDashboardClient({
                     {readiness?.externalProviderApprovals.twilio.required ? (
                       <div className="space-y-2 rounded-md border p-3">
                         <div className="text-sm font-medium">Twilio external approval</div>
-                        <p className="text-xs text-muted-foreground">Current status: {readiness.externalProviderApprovals.twilio.status.replaceAll("_", " ")}. Record only the provider-issued registration, Trust Hub, or A2P reference.</p>
-                        <Input
-                          placeholder="Twilio approval or case reference"
-                          value={technicalEvidenceValue("twilioApproval")}
-                          onChange={(event) => updateTechnicalEvidence("twilioApproval", event.target.value)}
-                        />
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            variant="outline"
-                            disabled={!technicalEvidenceValue("twilioApproval").trim()}
-                            onClick={() => void recordEvidence({ providerTests: {
-                              twilioMessagingApprovalStatus: "approved",
-                              twilioApprovalReference: technicalEvidenceValue("twilioApproval").trim(),
-                            } })}
-                          >
-                            Record provider approval
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            disabled={!technicalEvidenceValue("twilioApproval").trim()}
-                            onClick={() => void recordEvidence({ providerTests: {
-                              twilioMessagingApprovalStatus: "blocked",
-                              twilioApprovalReference: technicalEvidenceValue("twilioApproval").trim(),
-                            } })}
-                          >
-                            Mark provider blocked
-                          </Button>
-                        </div>
+                        <p className="text-xs text-muted-foreground">Current status: {readiness.externalProviderApprovals.twilio.status.replaceAll("_", " ")}. RealtyTechAI submits and polls Trust Hub/A2P automatically; a provider rejection becomes a client-correctable exception.</p>
                       </div>
                     ) : null}
                     {readiness?.externalProviderApprovals.sendgrid.required ? (
                       <div className="space-y-2 rounded-md border p-3">
                         <div className="text-sm font-medium">SendGrid external verification</div>
-                        <p className="text-xs text-muted-foreground">Current status: {readiness.externalProviderApprovals.sendgrid.status.replaceAll("_", " ")}. Record only the provider-issued sender or domain verification reference.</p>
-                        <Input
-                          placeholder="SendGrid verification reference"
-                          value={technicalEvidenceValue("sendgridApproval")}
-                          onChange={(event) => updateTechnicalEvidence("sendgridApproval", event.target.value)}
-                        />
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            variant="outline"
-                            disabled={!technicalEvidenceValue("sendgridApproval").trim()}
-                            onClick={() => void recordEvidence({ providerTests: {
-                              sendgridSenderVerificationStatus: "approved",
-                              sendgridApprovalReference: technicalEvidenceValue("sendgridApproval").trim(),
-                            } })}
-                          >
-                            Record provider verification
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            disabled={!technicalEvidenceValue("sendgridApproval").trim()}
-                            onClick={() => void recordEvidence({ providerTests: {
-                              sendgridSenderVerificationStatus: "blocked",
-                              sendgridApprovalReference: technicalEvidenceValue("sendgridApproval").trim(),
-                            } })}
-                          >
-                            Mark provider blocked
-                          </Button>
-                        </div>
+                        <p className="text-xs text-muted-foreground">Current status: {readiness.externalProviderApprovals.sendgrid.status.replaceAll("_", " ")}. The platform-authenticated sending and reply domains are reused securely; tenant credentials are never required.</p>
                       </div>
                     ) : null}
                   </div>
@@ -3296,6 +3302,70 @@ export function AdminDashboardClient({
               />
             </div>
           )}
+          <Section
+            title="Owner exceptions"
+            subtitle="Healthy clients need no review; only unresolved exceptions appear here."
+          >
+            {ownerExceptions?.status === "HEALTHY" ? (
+              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-4">
+                <StatusBadge value="HEALTHY · NO ACTION" tone="success" />
+              </div>
+            ) : ownerExceptions?.exceptions.length ? (
+              ownerExceptions.exceptions.map((item) => (
+                <div key={item.id} className="space-y-3 rounded-md border p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="font-medium">{tenantName(item.tenantId || "")} · {label(item.category)}</div>
+                      <p className="mt-1 text-sm text-muted-foreground">{item.problem}</p>
+                    </div>
+                    <SeverityBadge
+                      severity={item.severity === "critical" ? "critical" : item.severity === "high" ? "high" : "medium"}
+                      label={item.severity}
+                    />
+                  </div>
+                  {item.providerError ? <p className="text-sm"><span className="font-medium">Provider:</span> {item.providerError}</p> : null}
+                  <p className="text-sm"><span className="font-medium">Recommended action:</span> {item.recommendedAction}</p>
+                  <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+                    <span>Automatic attempts: {item.automaticAttempts.reduce((sum, attempt) => sum + attempt.attempts, 0)}</span>
+                    <span>First detected: {new Date(item.firstDetected).toLocaleString()}</span>
+                    <span>Last checked: {new Date(item.lastChecked).toLocaleString()}</span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">Exception status is loading.</p>
+            )}
+          </Section>
+          <Section
+            title="Production setup checker"
+            subtitle="One-time platform credentials, infrastructure, and verification evidence. Secrets are never displayed."
+          >
+            {setupChecker ? (
+              Object.entries(setupChecker.groups).map(([group, items]) => (
+                <div key={group} className="rounded-md border p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="font-medium">{label(group)}</div>
+                    <StatusBadge
+                      value={items.every((item) => item.status === "ready") ? "Ready" : "Action required"}
+                      tone={items.every((item) => item.status === "ready") ? "success" : "warning"}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    {items.map((item) => (
+                      <div key={item.label} className="flex items-start justify-between gap-4 text-sm">
+                        <span>{item.label}</span>
+                        <span className="max-w-xl text-right text-muted-foreground">
+                          {item.status === "ready" ? "Configured" : item.nextAction || "Action required"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">Setup checks are loading.</p>
+            )}
+          </Section>
         </div>
       ) : null}
 

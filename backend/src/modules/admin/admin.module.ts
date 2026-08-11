@@ -24,6 +24,8 @@ import { ServiceControlModule } from '../service-control/service-control.module'
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { ClientSuspensionController } from './client-suspension.controller';
 import { LimitsModule } from '../limits/limits.module';
+import { TestingModule } from '../testing/testing.module';
+import { OffboardingModule } from '../offboarding/offboarding.module';
 
 @Module({
   imports: [
@@ -48,8 +50,11 @@ import { LimitsModule } from '../limits/limits.module';
     ServiceControlModule,
     IntegrationsModule,
     LimitsModule,
+    TestingModule,
+    OffboardingModule,
   ],
   controllers: [AdminController, ClientSuspensionController],
   providers: [AdminService],
+  exports: [AdminService],
 })
 export class AdminModule {}

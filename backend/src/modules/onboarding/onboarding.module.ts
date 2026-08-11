@@ -13,6 +13,7 @@ import { LimitsModule } from '../limits/limits.module';
 import { AuditModule } from '../audit/audit.module';
 import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
 import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
+import { TestRun } from '../testing/test-run.entity';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entit
       SequenceStep,
       TenantMessagingResource,
       TenantEmailIdentity,
+      TestRun,
     ]),
     OperationsModule,
     CommonModule,

@@ -27,6 +27,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { configuredBillingGraceDays } from '../entitlements/entitlement.service';
 import { ServiceControlService } from '../service-control/service-control.service';
 import { TenantProvisioningService } from '../integrations/tenant-provisioning.service';
+import { OnboardingService } from '../onboarding/onboarding.service';
+import { OffboardingService } from '../offboarding/offboarding.service';
 
 const OPEN_SUBSCRIPTION_STATES = new Set([
   'active',
@@ -77,6 +79,10 @@ export class BillingService {
     private readonly serviceControl?: ServiceControlService,
     @Optional()
     private readonly provisioning?: TenantProvisioningService,
+    @Optional()
+    private readonly onboarding?: OnboardingService,
+    @Optional()
+    private readonly offboarding?: OffboardingService,
   ) {
     const key = process.env.STRIPE_SECRET_KEY?.trim();
     this.stripe = key ? new Stripe(key) : null;
@@ -622,8 +628,7 @@ export class BillingService {
   private async triggerProvisioningSafely(tenantId: string) {
     if (!this.provisioning) return;
     try {
-      const result = await this.provisioning.reconcileTenantProvisioning(tenantId);
-      if (!result.ok) throw new Error(result.errors.join('; '));
+      await this.provisioning.scheduleTenant(tenantId);
     } catch (error) {
       await this.operations?.createTask({
         tenantId,
@@ -789,6 +794,12 @@ export class BillingService {
       billingStateUpdatedAt: new Date(),
       ...(deleted ? { lifecycleStatus: 'CANCELED' as const } : {}),
     });
+    await this.onboarding?.recordBillingFromStripe({
+      tenantId,
+      eventReference: latestInvoiceId || subscription.id,
+      eligible: !deleted && ['active', 'trialing'].includes(subscription.status),
+      subscriptionStatus: deleted ? 'canceled' : subscription.status,
+    });
     if (deleted && this.settingsRepo) {
       await this.settingsRepo.update({ tenantId }, { automationsEnabled: false });
       await this.operations?.createTask({
@@ -801,6 +812,11 @@ export class BillingService {
         relatedEntityType: 'tenant',
         relatedEntityId: tenantId,
         dedupeOpen: true,
+      });
+      await this.offboarding?.request({
+        tenantId,
+        reason: 'Stripe subscription ended',
+        requestedById: null,
       });
     }
     if (!deleted && status === 'unpaid') {

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { EmailIdentityService } from './email-identity.service';
 import { PlatformIntegrationsService } from './platform-integrations.service';
 import { TwilioProvisioningService } from './twilio-provisioning.service';
@@ -9,11 +9,12 @@ import { Tenant, TenantProvisioningStatus } from '../tenants/tenant.entity';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { OperationsService } from '../operations/operations.service';
 import { sanitizeOperationalText } from '../../common/operational-log';
+import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
+import { TwilioComplianceService } from './twilio-compliance.service';
 
 @Injectable()
-export class TenantProvisioningService implements OnModuleInit, OnModuleDestroy {
+export class TenantProvisioningService implements OnModuleInit {
   private readonly logger = new Logger(TenantProvisioningService.name);
-  private timer?: NodeJS.Timeout;
 
   constructor(
     private readonly twilio: TwilioProvisioningService,
@@ -25,20 +26,52 @@ export class TenantProvisioningService implements OnModuleInit, OnModuleDestroy 
     private readonly tenants: Repository<Tenant>,
     private readonly onboarding: OnboardingService,
     private readonly operations: OperationsService,
+    @Optional() private readonly durableJobs?: DurableJobsService,
+    @Optional() private readonly compliance?: TwilioComplianceService,
   ) {}
 
   onModuleInit() {
+    if (!this.durableJobs) return;
+    this.durableJobs.register('tenant.provision', async (job) => {
+      if (!job.tenantId) throw new Error('Provisioning job is missing tenantId');
+      try {
+        await this.reconcileTenantProvisioning(job.tenantId);
+      } catch (error: any) {
+        if (job.attemptCount >= job.maxAttempts) {
+          await this.operations.createTask({
+            tenantId: job.tenantId,
+            category: 'provider_configuration',
+            title: 'Managed provider retries were exhausted',
+            description: sanitizeOperationalText(error?.message || error),
+            priority: 'high',
+            relatedEntityType: 'tenant',
+            relatedEntityId: job.tenantId,
+            dedupeOpen: true,
+          });
+        }
+        throw error;
+      }
+    });
+    this.durableJobs.register('tenant.provisioning_scan', async () => {
+      await this.reconcilePendingTenants();
+      return { nextRunAt: new Date(Date.now() + 15 * 60_000) };
+    });
     if (process.env.NODE_ENV !== 'test') {
-      this.timer = setInterval(
-        () => void this.reconcilePendingTenants().catch(() => undefined),
-        15 * 60 * 1_000,
-      );
-      this.timer.unref();
+      void this.durableJobs.schedule({
+        taskType: 'tenant.provisioning_scan',
+        dedupeKey: 'recurring:tenant.provisioning_scan',
+      });
     }
   }
 
-  onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
+  scheduleTenant(tenantId: string, nextRunAt = new Date()) {
+    if (!this.durableJobs) return this.reconcileTenantProvisioning(tenantId);
+    return this.durableJobs.schedule({
+      taskType: 'tenant.provision',
+      tenantId,
+      dedupeKey: `tenant.provision:${tenantId}`,
+      nextRunAt,
+    });
   }
 
   private async saveState(
@@ -116,6 +149,9 @@ export class TenantProvisioningService implements OnModuleInit, OnModuleDestroy 
         (value) => ({ status: 'fulfilled', value }) as const,
         (reason) => ({ status: 'rejected', reason }) as const,
       ));
+      if (results[results.length - 1].status === 'fulfilled') {
+        await this.compliance?.schedule(tenantId);
+      }
     } else {
       results.push({ status: 'fulfilled', value: null });
     }
@@ -139,6 +175,10 @@ export class TenantProvisioningService implements OnModuleInit, OnModuleDestroy 
     const resources = await this.integrations.tenantSummary(tenantId);
     if (errors.length) {
       const summary = sanitizeOperationalText(errors.join('; '), 1_000);
+      if (errors.every(isTransientProvisioningError)) {
+        await this.saveState(tenant, tenant.provisioningStatus, summary);
+        throw new Error(summary);
+      }
       await this.saveState(tenant, 'ACTION_REQUIRED', summary);
       await this.operations.createTask({
         tenantId,
@@ -164,6 +204,21 @@ export class TenantProvisioningService implements OnModuleInit, OnModuleDestroy 
           ? 'COMPLIANCE_PENDING'
           : 'TESTING';
     await this.saveState(tenant, status);
+    if (status === 'TESTING' && !before.enabledServices.sms && this.durableJobs) {
+      const record = await this.onboarding.getOrCreate(tenantId);
+      await this.durableJobs.schedule({
+        taskType: 'testing.start',
+        tenantId,
+        dedupeKey: `testing.start:${tenantId}`,
+        payload: {
+          smsRecipient: null,
+          emailRecipient:
+            record.contacts?.controlledTestEmail ||
+            record.contacts?.accountOwner ||
+            null,
+        },
+      });
+    }
     await this.operations.resolveRecoverableTasks({
       tenantId,
       category: 'provider_configuration',
@@ -178,4 +233,10 @@ export class TenantProvisioningService implements OnModuleInit, OnModuleDestroy 
       resources,
     };
   }
+}
+
+function isTransientProvisioningError(message: string) {
+  return /\b(408|409|425|429|5\d\d)\b|abort|timeout|timed out|network|fetch failed|ECONN|EAI_AGAIN|socket|connection reset|temporar/i.test(
+    message,
+  );
 }

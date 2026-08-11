@@ -83,4 +83,15 @@ describe('TenantProvisioningService', () => {
       }),
     );
   });
+
+  it('retries a transient provider failure without immediately paging the owner', async () => {
+    const item = harness({
+      emailError: new Error('SendGrid request failed (503): temporarily unavailable'),
+    });
+    await expect(
+      item.service.reconcileTenantProvisioning('tenant-a'),
+    ).rejects.toThrow('503');
+    expect(item.tenant.provisioningStatus).toBe('SMS_PROVISIONING');
+    expect(item.operations.createTask).not.toHaveBeenCalled();
+  });
 });

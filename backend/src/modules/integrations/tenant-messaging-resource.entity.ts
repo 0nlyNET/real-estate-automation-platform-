@@ -37,6 +37,9 @@ export class TenantMessagingResource extends BaseEntity {
   @Column({ name: 'a2p_customer_profile_sid', type: 'varchar', nullable: true })
   a2pCustomerProfileSid!: string | null;
 
+  @Column({ name: 'a2p_trust_product_sid', type: 'varchar', nullable: true })
+  a2pTrustProductSid!: string | null;
+
   @Column({ name: 'a2p_brand_sid', type: 'varchar', nullable: true })
   a2pBrandSid!: string | null;
 
@@ -45,6 +48,18 @@ export class TenantMessagingResource extends BaseEntity {
 
   @Column({ name: 'a2p_compliance_status', default: 'not_started' })
   a2pComplianceStatus!: string;
+
+  @Column({ name: 'a2p_provider_status', type: 'varchar', nullable: true })
+  a2pProviderStatus!: string | null;
+
+  @Column({ name: 'a2p_rejection_reason', type: 'text', nullable: true })
+  a2pRejectionReason!: string | null;
+
+  @Column({ name: 'a2p_last_checked_at', type: 'timestamptz', nullable: true })
+  a2pLastCheckedAt!: Date | null;
+
+  @Column({ name: 'a2p_next_poll_at', type: 'timestamptz', nullable: true })
+  a2pNextPollAt!: Date | null;
 
   @Column({ name: 'sms_status', default: 'pending' })
   smsStatus!: 'pending' | 'provisioning' | 'testing' | 'ready' | 'blocked' | 'failed';

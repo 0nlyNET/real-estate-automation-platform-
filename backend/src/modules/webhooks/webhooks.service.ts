@@ -36,6 +36,8 @@ import { TenantMessagingResource } from '../integrations/tenant-messaging-resour
 import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 import { decryptString } from '../../common/crypto-secrets';
 import { LimitsService } from '../limits/limits.service';
+import { Tenant } from '../tenants/tenant.entity';
+import { assertLeadAcceptance } from '../leads/lead-acceptance';
 
 export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
@@ -175,9 +177,13 @@ export class WebhooksService {
       }
       if (next.status === 'canceled') message.canceledAt = message.canceledAt || now;
       await this.messagesRepo.save(message);
-      if (next.status === 'failed') {
+      if (next.status === 'failed' || next.status === 'delivered') {
         await this.recordReadinessEvidenceSafely(message.lead.tenantId, {
-          providerRejection: true,
+          ...(next.status === 'failed' ? { providerRejection: true } : {}),
+          ...(next.status === 'delivered' ? { outboundDelivered: true } : {}),
+          ...(message.lead.testRunId
+            ? { testRunId: message.lead.testRunId }
+            : {}),
         });
       }
       if (next.status === 'failed' && this.operations) {
@@ -547,13 +553,19 @@ export class WebhooksService {
       });
       return { status: 'ignored' } as const;
     }
-    await this.recordReadinessEvidenceSafely(tenantId, {
-      inboundSms: true,
-      stop: effectiveStopKeyword,
-    });
+    const readinessLead = typeof (this.leads as any).getLeadById === 'function'
+      ? await this.leads.getLeadById(tenantId, persisted.leadId).catch(() => null)
+      : null;
     if (!effectiveStopKeyword) {
       await this.sequences.stopForLead(tenantId, persisted.leadId, 'reply');
     }
+    await this.recordReadinessEvidenceSafely(tenantId, {
+      inboundSms: true,
+      stop: effectiveStopKeyword,
+      ...(readinessLead?.testRunId
+        ? { testRunId: readinessLead.testRunId }
+        : {}),
+    });
     if (!effectiveStopKeyword && persisted.messageId) {
       await this.queueAiSafely({
         tenantId,
@@ -681,9 +693,9 @@ export class WebhooksService {
       }),
     );
     if (!persisted.leadId) return { status: 'ignored' } as const;
-    await this.recordReadinessEvidenceSafely(tenantId, {
-      inboundEmail: true,
-    });
+    const readinessLead = typeof (this.leads as any).getLeadById === 'function'
+      ? await this.leads.getLeadById(tenantId, persisted.leadId).catch(() => null)
+      : null;
     if (stopKeyword) {
       await this.compliance.addOptOut(
         tenantId,
@@ -698,6 +710,12 @@ export class WebhooksService {
       persisted.leadId,
       stopKeyword ? 'opt_out' : 'reply',
     );
+    await this.recordReadinessEvidenceSafely(tenantId, {
+      inboundEmail: true,
+      ...(readinessLead?.testRunId
+        ? { testRunId: readinessLead.testRunId }
+        : {}),
+    });
     if (!stopKeyword && persisted.messageId) {
       await this.queueAiSafely({
         tenantId,
@@ -745,7 +763,18 @@ export class WebhooksService {
       if (result.deliveryFailed && result.message?.lead) {
         await this.recordReadinessEvidenceSafely(
           result.message.lead.tenantId,
-          { providerRejection: true },
+          {
+            providerRejection: true,
+            testRunId: result.message.lead.testRunId,
+          },
+        );
+      } else if (result.message?.lead?.testRunId) {
+        await this.recordReadinessEvidenceSafely(
+          result.message.lead.tenantId,
+          {
+            outboundDelivered: true,
+            testRunId: result.message.lead.testRunId,
+          },
         );
       }
 
@@ -1426,6 +1455,9 @@ export class WebhooksService {
     await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
       input.providerMessageId,
     ]);
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `lead-dedup:${input.tenantId}:email:${input.from}`,
+    ]);
     const messageRepository = manager.getRepository(Message);
     const leadRepository = manager.getRepository(Lead);
     const leadEventRepository = manager.getRepository(LeadEvent);
@@ -1447,6 +1479,12 @@ export class WebhooksService {
       where: { tenantId: input.tenantId, email: input.from },
     });
     if (!lead) {
+      const tenant = await manager.getRepository(Tenant).findOne({
+        where: { id: input.tenantId },
+        lock: { mode: 'pessimistic_read' },
+      });
+      if (!tenant) throw new BadRequestException('Inbound tenant not found');
+      assertLeadAcceptance(tenant, { source: 'sendgrid_inbound' });
       lead = await leadRepository.save(
         leadRepository.create({
           tenantId: input.tenantId,
@@ -1562,6 +1600,8 @@ export class WebhooksService {
       inboundEmail?: boolean;
       stop?: boolean;
       providerRejection?: boolean;
+      outboundDelivered?: boolean;
+      testRunId?: string | null;
     },
   ) {
     if (!this.onboarding) return;

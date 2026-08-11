@@ -68,9 +68,14 @@ export class TwilioProvisioningService {
         phoneNumberSid: null,
         phoneNumber: null,
         a2pCustomerProfileSid: null,
+        a2pTrustProductSid: null,
         a2pBrandSid: null,
         a2pCampaignSid: null,
         a2pComplianceStatus: 'not_started',
+        a2pProviderStatus: null,
+        a2pRejectionReason: null,
+        a2pLastCheckedAt: null,
+        a2pNextPollAt: null,
         smsStatus: 'pending',
         smsLastVerifiedAt: null,
         provisioningStep: 'created',
@@ -89,6 +94,7 @@ export class TwilioProvisioningService {
     await this.resources.save(row);
 
     try {
+      const ownershipName = `RealtyTechAI tenant ${tenant.id}`;
       if (
         row.twilioParentAccountSid &&
         row.twilioParentAccountSid !== platform.accountSid
@@ -98,12 +104,27 @@ export class TwilioProvisioningService {
         );
       }
       if (!row.twilioSubaccountSid) {
-        const created = await twilioRequest(
-          `https://api.twilio.com/2010-04-01/Accounts.json`,
+        const accounts = await twilioRequest(
+          'https://api.twilio.com/2010-04-01/Accounts.json?PageSize=1000',
           platform.accountSid,
           platform.authToken,
-          { FriendlyName: `RealtyTechAI - ${tenant.name}` },
         );
+        let created = findNamedResource(accounts.accounts, ownershipName);
+        if (!created) {
+          created = await twilioRequest(
+            'https://api.twilio.com/2010-04-01/Accounts.json',
+            platform.accountSid,
+            platform.authToken,
+            { FriendlyName: ownershipName },
+          );
+        }
+        if (!created.auth_token && created.sid) {
+          created = await twilioRequest(
+            `https://api.twilio.com/2010-04-01/Accounts/${created.sid}.json`,
+            platform.accountSid,
+            platform.authToken,
+          );
+        }
         row.twilioSubaccountSid = String(created.sid);
         row.twilioParentAccountSid = String(platform.accountSid);
         row.encryptedAuthToken = encryptString(String(created.auth_token));
@@ -123,11 +144,27 @@ export class TwilioProvisioningService {
       if (!subaccountToken) throw new Error('Twilio subaccount auth token is unavailable');
 
       if (!row.twilioApiKeySid) {
+        const keys = await twilioRequest(
+          `https://api.twilio.com/2010-04-01/Accounts/${row.twilioSubaccountSid}/Keys.json?PageSize=1000`,
+          row.twilioSubaccountSid,
+          subaccountToken,
+        );
+        const unusableKey = findNamedResource(keys.keys, ownershipName);
+        // Twilio returns an API-key secret only once. If a process crashed after
+        // creation but before persistence, remove that unusable orphan before
+        // creating its replacement so reconciliation never accumulates keys.
+        if (unusableKey?.sid) {
+          await twilioDelete(
+            `https://api.twilio.com/2010-04-01/Accounts/${row.twilioSubaccountSid}/Keys/${unusableKey.sid}.json`,
+            row.twilioSubaccountSid,
+            subaccountToken,
+          );
+        }
         const key = await twilioRequest(
           `https://api.twilio.com/2010-04-01/Accounts/${row.twilioSubaccountSid}/Keys.json`,
           row.twilioSubaccountSid,
           subaccountToken,
-          { FriendlyName: 'RealtyTechAI application' },
+          { FriendlyName: ownershipName },
         );
         row.twilioApiKeySid = String(key.sid);
         row.encryptedApiSecret = encryptString(String(key.secret));
@@ -135,15 +172,39 @@ export class TwilioProvisioningService {
         await this.resources.save(row);
       }
       if (!row.messagingServiceSid) {
-        const service = await twilioRequest(
-          'https://messaging.twilio.com/v1/Services',
+        const services = await twilioRequest(
+          'https://messaging.twilio.com/v1/Services?PageSize=1000',
           row.twilioSubaccountSid,
           subaccountToken,
-          { FriendlyName: `RealtyTechAI - ${tenant.name}` },
         );
+        const service =
+          findNamedResource(services.services, ownershipName) ||
+          (await twilioRequest(
+            'https://messaging.twilio.com/v1/Services',
+            row.twilioSubaccountSid,
+            subaccountToken,
+            { FriendlyName: ownershipName },
+          ));
         row.messagingServiceSid = String(service.sid);
         row.provisioningStep = 'messaging_service_created';
         await this.resources.save(row);
+      }
+      if (!row.phoneNumberSid) {
+        const ownedNumbers = await twilioRequest(
+          `https://api.twilio.com/2010-04-01/Accounts/${row.twilioSubaccountSid}/IncomingPhoneNumbers.json?PageSize=1000`,
+          row.twilioSubaccountSid,
+          subaccountToken,
+        );
+        const ownedNumber = findNamedResource(
+          ownedNumbers.incoming_phone_numbers,
+          ownershipName,
+        );
+        if (ownedNumber) {
+          row.phoneNumberSid = String(ownedNumber.sid);
+          row.phoneNumber = String(ownedNumber.phone_number);
+          row.provisioningStep = 'number_purchased';
+          await this.resources.save(row);
+        }
       }
       if (!row.phoneNumberSid) {
         const country = String(process.env.TWILIO_DEFAULT_COUNTRY || 'US').toUpperCase();
@@ -161,7 +222,7 @@ export class TwilioProvisioningService {
           `https://api.twilio.com/2010-04-01/Accounts/${row.twilioSubaccountSid}/IncomingPhoneNumbers.json`,
           row.twilioSubaccountSid,
           subaccountToken,
-          { PhoneNumber: candidate },
+          { PhoneNumber: candidate, FriendlyName: ownershipName },
         );
         row.phoneNumberSid = String(purchased.sid);
         row.phoneNumber = String(purchased.phone_number);
@@ -176,12 +237,22 @@ export class TwilioProvisioningService {
         });
       }
       if (row.provisioningStep === 'number_purchased') {
-        await twilioRequest(
-          `https://messaging.twilio.com/v1/Services/${row.messagingServiceSid}/PhoneNumbers`,
+        const attached = await twilioRequest(
+          `https://messaging.twilio.com/v1/Services/${row.messagingServiceSid}/PhoneNumbers?PageSize=1000`,
           row.twilioSubaccountSid,
           subaccountToken,
-          { PhoneNumberSid: row.phoneNumberSid },
         );
+        const alreadyAttached = Array.isArray(attached.phone_numbers) &&
+          attached.phone_numbers.some((item: TwilioJson) =>
+            String(item.phone_number_sid || item.sid) === String(row.phoneNumberSid));
+        if (!alreadyAttached) {
+          await twilioRequest(
+            `https://messaging.twilio.com/v1/Services/${row.messagingServiceSid}/PhoneNumbers`,
+            row.twilioSubaccountSid,
+            subaccountToken,
+            { PhoneNumberSid: row.phoneNumberSid },
+          );
+        }
         row.provisioningStep = 'number_attached';
         await this.resources.save(row);
       }
@@ -288,6 +359,32 @@ export class TwilioProvisioningService {
       },
     });
     return saved;
+  }
+}
+
+function findNamedResource(items: unknown, friendlyName: string) {
+  if (!Array.isArray(items)) return null;
+  return items.find(
+    (item: TwilioJson) => String(item.friendly_name || '') === friendlyName,
+  ) || null;
+}
+
+async function twilioDelete(
+  url: string,
+  accountSid: string,
+  authToken: string,
+) {
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
+    },
+  });
+  if (!response.ok && response.status !== 404) {
+    const text = await response.text();
+    throw new Error(
+      `Twilio delete failed (${response.status}): ${text.slice(0, 300)}`,
+    );
   }
 }
 

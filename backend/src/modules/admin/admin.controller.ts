@@ -55,6 +55,8 @@ import type { ManagedMessagingProvider } from '../integrations/platform-integrat
 import { LimitsService } from '../limits/limits.service';
 import { TenantProvisioningService } from '../integrations/tenant-provisioning.service';
 import { TwilioProvisioningService } from '../integrations/twilio-provisioning.service';
+import { TestingService } from '../testing/testing.service';
+import { OffboardingService } from '../offboarding/offboarding.service';
 
 @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 @Controller('admin')
@@ -69,6 +71,8 @@ export class AdminController {
     private readonly limits: LimitsService,
     @Optional() private readonly provisioning?: TenantProvisioningService,
     @Optional() private readonly twilioProvisioning?: TwilioProvisioningService,
+    @Optional() private readonly testing?: TestingService,
+    @Optional() private readonly offboarding?: OffboardingService,
   ) {}
 
   @Get('overview')
@@ -154,10 +158,50 @@ export class AdminController {
     return this.onboarding.beginTesting(tenantId, req.user.sub);
   }
 
+  @Post('tenants/:tenantId/testing/run')
+  @UseGuards(PlatformAdminGuard)
+  runControlledTesting(
+    @Param('tenantId') tenantId: string,
+    @Req() req: any,
+    @Body() body: { smsRecipient?: string; emailRecipient?: string },
+  ) {
+    if (!this.testing) throw new BadRequestException('Testing service unavailable');
+    return this.testing.start(tenantId, req.user.sub, body);
+  }
+
+  @Get('tenants/:tenantId/testing/runs')
+  testingRuns(@Param('tenantId') tenantId: string) {
+    if (!this.testing) throw new BadRequestException('Testing service unavailable');
+    return this.testing.list(tenantId);
+  }
+
   @Post('tenants/:tenantId/pause')
   @UseGuards(PlatformAdminGuard)
   pause(@Param('tenantId') tenantId: string) {
     return this.onboarding.pause(tenantId);
+  }
+
+  @Post('tenants/:tenantId/offboarding')
+  @UseGuards(PlatformAdminGuard)
+  requestOffboarding(
+    @Param('tenantId') tenantId: string,
+    @Req() req: any,
+    @Body() body: { reason: string; retentionDays?: number },
+  ) {
+    if (!this.offboarding) throw new BadRequestException('Offboarding service unavailable');
+    return this.offboarding.request({
+      tenantId,
+      reason: body.reason,
+      retentionDays: body.retentionDays,
+      requestedById: req.user.sub,
+    });
+  }
+
+  @Get('tenants/:tenantId/offboarding/export')
+  @UseGuards(PlatformAdminGuard)
+  exportOffboarding(@Param('tenantId') tenantId: string) {
+    if (!this.offboarding) throw new BadRequestException('Offboarding service unavailable');
+    return this.offboarding.export(tenantId);
   }
 
   @Post('tenants/:tenantId/suspend')
@@ -194,6 +238,72 @@ export class AdminController {
   @UseGuards(PlatformAdminGuard)
   async systemHealth() {
     return this.admin.systemHealth();
+  }
+
+  @Get('setup-checker')
+  @UseGuards(PlatformAdminGuard)
+  async setupChecker() {
+    const [health, providers] = await Promise.all([
+      this.admin.systemHealth(),
+      this.platformIntegrations.platformSummary(),
+    ]);
+    const configured = (name: string) =>
+      Boolean(String(process.env[name] || '').trim());
+    const item = (
+      label: string,
+      passed: boolean,
+      nextAction: string,
+      detail?: unknown,
+    ) => ({
+      label,
+      status: passed ? 'ready' : 'action_required',
+      nextAction: passed ? null : nextAction,
+      ...(detail === undefined ? {} : { detail }),
+    });
+    const groups = {
+      twilio: [
+        item('Parent account connection', providers.twilio.connected, 'Save and test the Twilio parent Account SID and Auth Token.'),
+        item('Inbound SMS webhook', configured('TWILIO_WEBHOOK_URL'), 'Configure the public HTTPS Twilio inbound webhook URL.'),
+        item('Delivery callback', configured('TWILIO_STATUS_CALLBACK_URL'), 'Configure the public HTTPS Twilio status callback URL.'),
+        item('Primary compliance profile', configured('TWILIO_PRIMARY_CUSTOMER_PROFILE_SID'), 'Complete the one-time Twilio primary profile and save its BU SID.'),
+        item('Secondary profile policy', configured('TWILIO_SECONDARY_PROFILE_POLICY_SID'), 'Save Twilio’s current Secondary Customer Profile policy SID.'),
+        item('A2P trust policy', configured('TWILIO_A2P_TRUST_PRODUCT_POLICY_SID'), 'Save Twilio’s current A2P Trust Product policy SID.'),
+      ],
+      sendgrid: [
+        item('Parent account connection', providers.sendgrid.connected, 'Save and test the SendGrid parent API key.'),
+        item('Authenticated sending domain', configured('SENDGRID_SENDING_DOMAIN'), 'Authenticate the sending domain with SPF and DKIM, then configure it.'),
+        item('Inbound parse domain', configured('SENDGRID_REPLY_DOMAIN'), 'Configure the unique inbound reply domain.'),
+        item('Authenticated inbound webhook', configured('SENDGRID_INBOUND_USERNAME') && configured('SENDGRID_INBOUND_PASSWORD'), 'Configure inbound parse webhook authentication.'),
+      ],
+      openai: [
+        item('API key', configured('OPENAI_API_KEY'), 'Configure the platform OpenAI API key.'),
+        item('Model', configured('OPENAI_MODEL'), 'Pin the approved production model.'),
+      ],
+      stripe: [
+        item('Secret key', configured('STRIPE_SECRET_KEY'), 'Configure the Stripe production secret key.'),
+        item('Signed webhook', configured('STRIPE_WEBHOOK_SECRET'), 'Configure and verify the Stripe webhook signing secret.'),
+        item('Monthly price', configured('STRIPE_PRICE_SERVICE_MONTH'), 'Configure the managed-service monthly price ID.'),
+        item('Setup price', configured('STRIPE_PRICE_SETUP_ONCE'), 'Configure the one-time setup price ID.'),
+      ],
+      database: [
+        item('Database connection', health.dbConnected === true, 'Restore the production database connection.'),
+        item('Schema synchronization disabled', process.env.TYPEORM_SYNC === 'false', 'Set TYPEORM_SYNC=false and deploy migrations.'),
+      ],
+      application: [
+        item('Integration encryption', health.environment.encryption.status === 'up', 'Configure a protected 32-byte integration encryption key.'),
+        item('Public API URL', configured('PUBLIC_API_URL'), 'Configure the public HTTPS API origin.'),
+        item('Public app URL', configured('PUBLIC_APP_URL'), 'Configure the public HTTPS application origin.'),
+        item('Platform owner', configured('PLATFORM_ADMIN_EMAILS'), 'Configure at least one platform owner email.'),
+        item('External uptime monitor', configured('EXTERNAL_UPTIME_MONITOR_URL'), 'Create an external monitor for /health/live and /health/ready, then record its URL.'),
+      ],
+    };
+    const all = Object.values(groups).flat();
+    return {
+      ready: all.every((entry) => entry.status === 'ready'),
+      actionRequired: all.filter((entry) => entry.status !== 'ready').length,
+      groups,
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   @Get('tenants')

@@ -1,15 +1,15 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, LessThan, Repository } from 'typeorm';
 import { operationalEvent } from '../../common/operational-log';
 import { StripeWebhookEvent } from '../billing/stripe-webhook-event.entity';
 import { AdminNotification } from './notification.entity';
 import { AiRun } from '../ai/ai-run.entity';
+import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 
 @Injectable()
-export class RetentionService implements OnModuleInit, OnModuleDestroy {
+export class RetentionService implements OnModuleInit {
   private readonly logger = new Logger(RetentionService.name);
-  private timer?: NodeJS.Timeout;
 
   constructor(
     @InjectRepository(StripeWebhookEvent)
@@ -18,18 +18,21 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
     private readonly notifications: Repository<AdminNotification>,
     @InjectRepository(AiRun)
     private readonly aiRuns: Repository<AiRun>,
+    @Optional() private readonly durableJobs?: DurableJobsService,
   ) {}
 
   onModuleInit() {
+    if (!this.durableJobs) return;
+    this.durableJobs.register('retention.cleanup', async () => {
+      await this.run();
+      return { nextRunAt: new Date(Date.now() + 24 * 60 * 60_000) };
+    });
     if (process.env.NODE_ENV !== 'test') {
-      void this.run().catch(() => undefined);
-      this.timer = setInterval(() => void this.run().catch(() => undefined), 24 * 60 * 60 * 1000);
-      this.timer.unref();
+      void this.durableJobs.schedule({
+        taskType: 'retention.cleanup',
+        dedupeKey: 'recurring:retention.cleanup',
+      });
     }
-  }
-
-  onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
   }
 
   retentionDays() {

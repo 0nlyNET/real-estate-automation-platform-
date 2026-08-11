@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, LessThan, MoreThan, Not, Repository } from 'typeorm';
 import { environmentReadiness } from '../../common/environment-readiness';
@@ -11,11 +11,11 @@ import { AiRun } from '../ai/ai-run.entity';
 import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
 import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 import { OperationsTask } from '../operations/operations-task.entity';
+import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 
 @Injectable()
-export class HealthMonitorService implements OnModuleInit, OnModuleDestroy {
+export class HealthMonitorService implements OnModuleInit {
   private readonly logger = new Logger(HealthMonitorService.name);
-  private timer?: NodeJS.Timeout;
   private failures = 0;
   private incidentOpen = false;
 
@@ -36,17 +36,21 @@ export class HealthMonitorService implements OnModuleInit, OnModuleDestroy {
     private readonly emailIdentities?: Repository<TenantEmailIdentity>,
     @Optional() @InjectRepository(OperationsTask)
     private readonly operationsTasks?: Repository<OperationsTask>,
+    @Optional() private readonly durableJobs?: DurableJobsService,
   ) {}
 
   onModuleInit() {
+    if (!this.durableJobs) return;
+    this.durableJobs.register('health.critical_scan', async () => {
+      await this.check();
+      return { nextRunAt: new Date(Date.now() + 5 * 60_000) };
+    });
     if (process.env.NODE_ENV !== 'test') {
-      this.timer = setInterval(() => void this.check().catch(() => undefined), 5 * 60 * 1000);
-      this.timer.unref();
+      void this.durableJobs.schedule({
+        taskType: 'health.critical_scan',
+        dedupeKey: 'recurring:health.critical_scan',
+      });
     }
-  }
-
-  onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
   }
 
   async check(now = new Date()) {

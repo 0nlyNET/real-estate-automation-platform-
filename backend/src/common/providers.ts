@@ -67,6 +67,7 @@ export async function sendSendGridEmail(
 type TwilioSms = {
   accountSid: string;
   authToken: string;
+  authUsername?: string;
   to: string;
   body: string;
   from?: string;
@@ -84,7 +85,7 @@ export async function sendTwilioSms(message: TwilioSms): Promise<{ sid?: string;
   const response = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Basic ${Buffer.from(`${message.accountSid}:${message.authToken}`).toString('base64')}`,
+      Authorization: `Basic ${Buffer.from(`${message.authUsername || message.accountSid}:${message.authToken}`).toString('base64')}`,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: form,

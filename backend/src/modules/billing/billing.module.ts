@@ -11,6 +11,8 @@ import { TenantSettings } from '../settings/tenant-settings.entity';
 import { BillingEvent } from './billing-event.entity';
 import { ServiceControlModule } from '../service-control/service-control.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
+import { OnboardingModule } from '../onboarding/onboarding.module';
+import { OffboardingModule } from '../offboarding/offboarding.module';
 
 @Module({
   imports: [
@@ -18,6 +20,8 @@ import { IntegrationsModule } from '../integrations/integrations.module';
     CommonModule,
     ServiceControlModule,
     IntegrationsModule,
+    OnboardingModule,
+    OffboardingModule,
     TypeOrmModule.forFeature([StripeWebhookEvent, BillingEvent, Tenant, TenantSettings]),
   ],
   controllers: [BillingController],

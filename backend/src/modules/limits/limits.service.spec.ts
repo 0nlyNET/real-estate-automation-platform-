@@ -89,4 +89,57 @@ describe('LimitsService hard limits', () => {
     );
     expect(notifications.createForPlatform).toHaveBeenCalled();
   });
+
+  it('rejects silently disabling a tenant policy while ACTIVE', async () => {
+    const policies = {
+      findOne: jest.fn(),
+      save: jest.fn(),
+      create: jest.fn((value) => value),
+    };
+    const tenants = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'tenant-1',
+        lifecycleStatus: 'ACTIVE',
+      }),
+    };
+    const service = new LimitsService(
+      { getRepository: jest.fn(() => tenants) } as any,
+      policies as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await expect(
+      service.updateTenantPolicy('tenant-1', {
+        ...(defaultTenantUsagePolicy('tenant-1') as any),
+        enabled: false,
+      }),
+    ).rejects.toThrow('cannot be disabled while a tenant is ACTIVE');
+    expect(policies.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects disabling the platform policy while any tenant is ACTIVE', async () => {
+    const policies = {
+      findOne: jest.fn(),
+      save: jest.fn(),
+      create: jest.fn((value) => value),
+    };
+    const tenants = { count: jest.fn().mockResolvedValue(1) };
+    const service = new LimitsService(
+      { getRepository: jest.fn(() => tenants) } as any,
+      policies as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await expect(
+      service.updatePlatformPolicy({
+        ...(defaultPlatformUsagePolicy() as any),
+        enabled: false,
+      }),
+    ).rejects.toThrow('cannot be disabled while tenants are ACTIVE');
+    expect(policies.save).not.toHaveBeenCalled();
+  });
 });

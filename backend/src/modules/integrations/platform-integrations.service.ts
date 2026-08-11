@@ -520,6 +520,7 @@ export class PlatformIntegrationsService {
         await sendTwilioSms({
           accountSid: config.accountSid,
           authToken: config.authToken,
+          authUsername: config.authUsername,
           to,
           body: String(dto.message || 'RealtyTechAI controlled SMS test'),
           statusCallback: String(process.env.TWILIO_STATUS_CALLBACK_URL || ''),

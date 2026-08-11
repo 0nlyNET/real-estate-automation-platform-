@@ -7,6 +7,7 @@ import { ProspectApplication } from './prospect-application.entity';
 import { operationalEvent } from '../../common/operational-log';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlatformOperatorsService } from '../../common/platform-operators.service';
+import { AdminService } from '../admin/admin.service';
 
 type Inquiry = {
   name?: string;
@@ -32,6 +33,7 @@ export class PublicService {
     private readonly operations: OperationsService,
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly platformOperators?: PlatformOperatorsService,
+    @Optional() private readonly admin?: AdminService,
   ) {}
 
   async submitInquiry(inquiry: Inquiry) {
@@ -183,13 +185,38 @@ export class PublicService {
     const application = await this.applications.findOne({ where: { id } });
     if (!application) throw new NotFoundException('Application not found');
     const previousStatus = application.status;
-    if (patch.status !== undefined) application.status = patch.status;
+    if (patch.status !== undefined && patch.status !== 'accepted') {
+      application.status = patch.status;
+    }
     if (patch.operatorNotes !== undefined)
       application.operatorNotes = patch.operatorNotes;
     if (patch.assignedOperatorId !== undefined)
       await this.platformOperators?.requireAssignable(patch.assignedOperatorId);
     if (patch.assignedOperatorId !== undefined)
       application.assignedOperatorId = patch.assignedOperatorId;
+    if (
+      patch.status === 'accepted' &&
+      previousStatus !== 'accepted' &&
+      !application.convertedTenantId
+    ) {
+      if (!this.admin) throw new Error('Workspace provisioning is unavailable');
+      await this.applications.save(application);
+      await this.admin.createClient({
+        businessName: application.company || application.name,
+        ownerEmail: application.email,
+        assignedOperatorId: application.assignedOperatorId,
+        applicationId: application.id,
+      });
+      await this.operations.resolveRecoverableTasks({
+        tenantId: null,
+        category: 'new_application',
+        relatedEntityType: 'prospect_application',
+        relatedEntityId: application.id,
+        evidenceNote: 'The approved application was converted automatically.',
+      });
+      return this.applications.findOneOrFail({ where: { id } });
+    }
+    if (patch.status === 'accepted') application.status = 'accepted';
     const saved = await this.applications.save(application);
     if (
       patch.status !== undefined &&

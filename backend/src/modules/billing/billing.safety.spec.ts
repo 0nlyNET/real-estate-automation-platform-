@@ -24,7 +24,13 @@ describe('Stripe billing safety controls', () => {
     process.env = { ...original };
   });
 
-  function setup(options: { tenant?: any; eventRepo?: any; serviceControl?: any } = {}) {
+  function setup(options: {
+    tenant?: any;
+    eventRepo?: any;
+    serviceControl?: any;
+    provisioning?: any;
+    onboarding?: any;
+  } = {}) {
     const tenant = options.tenant || {
       id: 'tenant-1',
       status: 'incomplete',
@@ -48,6 +54,8 @@ describe('Stripe billing safety controls', () => {
       undefined,
       undefined,
       options.serviceControl as any,
+      options.provisioning as any,
+      options.onboarding as any,
     );
     return { service, tenant, tenants, settings, operations };
   }
@@ -188,6 +196,53 @@ describe('Stripe billing safety controls', () => {
     expect(operations.createTask).toHaveBeenCalledWith(
       expect.objectContaining({ category: 'unknown_stripe_price', priority: 'critical' }),
     );
+  });
+
+  it('turns a verified Stripe subscription into billing readiness automatically', async () => {
+    const onboarding = {
+      recordBillingFromStripe: jest.fn().mockResolvedValue({ billingReady: true }),
+    };
+    const { service } = setup({ onboarding });
+    const subscription = {
+      id: 'sub_ready',
+      status: 'active',
+      customer: 'cus_1',
+      metadata: { tenantId: 'tenant-1' },
+      cancel_at_period_end: false,
+      cancel_at: null,
+      canceled_at: null,
+      ended_at: null,
+      trial_start: null,
+      trial_end: null,
+      latest_invoice: 'in_paid',
+      items: {
+        data: [{
+          current_period_start: 1_784_419_200,
+          current_period_end: 1_787_011_200,
+          price: { id: 'price_service_month', product: 'prod_1' },
+        }],
+      },
+    };
+    (service as any).stripe = {
+      webhooks: {
+        constructEvent: jest.fn().mockReturnValue({
+          id: 'evt_ready',
+          type: 'customer.subscription.updated',
+          created: 1_784_419_200,
+          data: { object: subscription },
+        }),
+      },
+    };
+
+    await expect(service.handleWebhook(Buffer.from('{}'), 'valid')).resolves.toEqual({
+      received: true,
+    });
+    expect(onboarding.recordBillingFromStripe).toHaveBeenCalledWith({
+      tenantId: 'tenant-1',
+      eventReference: 'sub_ready',
+      eligible: true,
+      subscriptionStatus: 'active',
+    });
   });
 
   it('creates one live invoice summary and one notification when Stripe retries a paid invoice', async () => {

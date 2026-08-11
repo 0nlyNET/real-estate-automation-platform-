@@ -5,6 +5,7 @@ import { BaseEntity } from '../../common/base.entity';
 @Index('UQ_tenant_email_identities_tenant', ['tenantId'], { unique: true })
 @Index('UQ_tenant_email_identities_reply_token', ['replyToken'], { unique: true })
 @Index('UQ_tenant_email_identities_inbound', ['inboundAddress'], { unique: true })
+@Index('UQ_tenant_email_identities_from_email', ['fromEmail'], { unique: true })
 export class TenantEmailIdentity extends BaseEntity {
   @Column({ name: 'tenant_id', type: 'uuid' })
   tenantId!: string;
@@ -38,4 +39,17 @@ export class TenantEmailIdentity extends BaseEntity {
 
   @Column({ name: 'last_error', type: 'text', nullable: true })
   lastError!: string | null;
+
+  @Column({ name: 'custom_domain', type: 'varchar', nullable: true })
+  customDomain!: string | null;
+
+  @Column({ name: 'sendgrid_subuser_id', type: 'varchar', nullable: true })
+  sendgridSubuserId!: string | null;
+
+  @Column({ name: 'domain_verification_status', default: 'platform_authenticated' })
+  domainVerificationStatus!:
+    | 'platform_authenticated'
+    | 'pending'
+    | 'verified'
+    | 'failed';
 }

@@ -8,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 
 import { IntakeLeadDto } from './dto/intake-lead.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
@@ -31,6 +31,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { normalizePhoneE164 } from '../../common/phone';
 import { createHash } from 'crypto';
 import { LimitsService } from '../limits/limits.service';
+import { assertLeadAcceptance, LeadAcceptanceContext } from './lead-acceptance';
 
 @Injectable()
 export class LeadsService {
@@ -62,7 +63,41 @@ export class LeadsService {
     private readonly complianceService: ComplianceService,
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly limits?: LimitsService,
+    @Optional() private readonly dataSource?: DataSource,
   ) {}
+
+  private async withDedupLock<T>(
+    tenantId: string,
+    email: string | undefined,
+    phone: string | undefined,
+    callback: () => Promise<T>,
+  ) {
+    if (!this.dataSource?.createQueryRunner) return callback();
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    const lockNames = [
+      email ? `lead-dedup:${tenantId}:email:${email}` : null,
+      phone ? `lead-dedup:${tenantId}:phone:${phone}` : null,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .sort();
+    if (lockNames.length === 0) return callback();
+    const locked: string[] = [];
+    try {
+      for (const lockName of lockNames) {
+        await runner.query('SELECT pg_advisory_lock(hashtext($1))', [lockName]);
+        locked.push(lockName);
+      }
+      return await callback();
+    } finally {
+      for (const lockName of locked.reverse()) {
+        await runner
+          .query('SELECT pg_advisory_unlock(hashtext($1))', [lockName])
+          .catch(() => undefined);
+      }
+      await runner.release();
+    }
+  }
 
   private async applyRoutingRules(lead: Lead) {
     const assignment = await this.routingService.routeLead(lead);
@@ -209,8 +244,13 @@ export class LeadsService {
   // Public intake (webhook/forms/FB)
   // -------------------------
 
-  async intake(tenantId: string, payload: IntakeLeadDto): Promise<Lead> {
+  async intake(
+    tenantId: string,
+    payload: IntakeLeadDto,
+    acceptance: LeadAcceptanceContext = { source: 'external' },
+  ): Promise<Lead> {
     const tenant = await this.requireTenant(tenantId);
+    assertLeadAcceptance(tenant, acceptance);
 
     const fullName = this.normalizeName(payload.fullName ?? undefined);
     if (!fullName) throw new Error('fullName is required');
@@ -218,6 +258,7 @@ export class LeadsService {
     const email = this.normalizeEmail(payload.email ?? undefined);
     const phone = this.normalizePhone(payload.phone ?? undefined);
 
+    return this.withDedupLock(tenant.id, email, phone, async () => {
     const existing = await this.findDuplicateLead({ tenantId: tenant.id, email, phone });
     if (existing) {
       this.logger.log(`Deduped lead ${existing.id}`);
@@ -256,6 +297,7 @@ export class LeadsService {
       emailEligible: this.isEligibleEmail(email),
       smsEligible: this.isEligiblePhone(phone),
       communicationStatus: 'active',
+      testRunId: acceptance.controlledTest ? acceptance.testRunId : null,
 
       source: this.normalizeString(payload.source) || 'Website',
       location: this.normalizeString(payload.location),
@@ -310,6 +352,7 @@ export class LeadsService {
     await this.sequencesService.startForLead(saved);
 
     return saved;
+    });
   }
 
   // -------------------------
@@ -322,6 +365,7 @@ export class LeadsService {
     ctx?: { userId?: string; role?: UserRole },
   ): Promise<Lead> {
     const tenant = await this.requireTenant(tenantId);
+    assertLeadAcceptance(tenant, { source: 'manual' });
 
     const fullName = this.normalizeName(payload.fullName ?? undefined);
     if (!fullName) throw new Error('fullName is required');
@@ -329,6 +373,7 @@ export class LeadsService {
     const email = this.normalizeEmail(payload.email ?? undefined);
     const phone = this.normalizePhone(payload.phone ?? undefined);
 
+    return this.withDedupLock(tenant.id, email, phone, async () => {
     const existing = await this.findDuplicateLead({ tenantId: tenant.id, email, phone });
     if (existing) {
       await this.logLeadEvent(existing, 'deduped', payload as any);
@@ -446,6 +491,7 @@ export class LeadsService {
     }
 
     return saved;
+    });
   }
 
   // -------------------------
@@ -574,6 +620,7 @@ export class LeadsService {
 
   async createSampleLeads(tenantId: string | undefined): Promise<Lead[]> {
     const tenant = await this.requireTenant(tenantId);
+    assertLeadAcceptance(tenant, { source: 'sample_leads' });
 
     const now = Date.now();
 

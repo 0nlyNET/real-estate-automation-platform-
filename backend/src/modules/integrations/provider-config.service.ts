@@ -28,18 +28,21 @@ export class ProviderConfigService {
     const platform = await this.platformCredentials.findOne({ where: { provider: 'twilio' } });
     const root = platform ? decryptIntegrationPayload(platform.encryptedValue) : null;
     const accountSid = resource.twilioSubaccountSid;
-    const authToken = resource.encryptedAuthToken
-      ? decryptString(resource.encryptedAuthToken)
+    const apiSecret = resource.encryptedApiSecret
+      ? decryptString(resource.encryptedApiSecret)
       : null;
     if (
       !root?.accountSid ||
       !accountSid ||
-      !authToken ||
+      !resource.twilioApiKeySid ||
+      !apiSecret ||
       resource.twilioParentAccountSid !== root.accountSid
     ) return null;
     return {
       accountSid,
-      authToken,
+      authToken: apiSecret,
+      authUsername: resource.twilioApiKeySid,
+      credentialType: 'scoped_api_key' as const,
       fromNumber: resource.phoneNumber || undefined,
       messagingServiceSid: resource.messagingServiceSid || undefined,
     };
@@ -59,6 +62,7 @@ export class ProviderConfigService {
     const root = platform ? decryptIntegrationPayload(platform.encryptedValue) : null;
     if (!root?.apiKey) return null;
     return {
+      connected: true,
       apiKey: String(root.apiKey),
       fromEmail: identity.fromEmail,
       fromName: identity.fromName,

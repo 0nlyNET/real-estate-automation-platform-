@@ -27,6 +27,7 @@ import { LimitsService } from '../limits/limits.service';
 import { AuditService } from '../audit/audit.service';
 import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
 import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
+import { TestRun } from '../testing/test-run.entity';
 
 type ReadinessCategory =
   | 'client_information'
@@ -142,6 +143,9 @@ export class OnboardingService {
     @Optional()
     @InjectRepository(TenantEmailIdentity)
     private readonly emailIdentities?: Repository<TenantEmailIdentity>,
+    @Optional()
+    @InjectRepository(TestRun)
+    private readonly testRuns?: Repository<TestRun>,
   ) {}
 
   async getOrCreate(tenantId: string) {
@@ -315,6 +319,29 @@ export class OnboardingService {
     return this.records.save(record);
   }
 
+  async recordBillingFromStripe(input: {
+    tenantId: string;
+    eventReference: string;
+    eligible: boolean;
+    subscriptionStatus: string;
+  }) {
+    const record = await this.getOrCreate(input.tenantId);
+    record.billingVerifiedAt = input.eligible ? new Date() : null;
+    const verifiedItems = { ...(record.verifiedItems || {}) } as Record<string, any>;
+    if (input.eligible) {
+      verifiedItems.billing_evidence = {
+        verifiedAt: record.billingVerifiedAt!.toISOString(),
+        verifiedBy: 'system:stripe',
+        eventReference: input.eventReference,
+        subscriptionStatus: input.subscriptionStatus,
+      };
+    } else {
+      delete verifiedItems.billing_evidence;
+    }
+    record.verifiedItems = verifiedItems;
+    return this.records.save(record);
+  }
+
   async recordOperatorEvidence(
     tenantId: string,
     patch: Record<string, any>,
@@ -408,9 +435,21 @@ export class OnboardingService {
       inboundEmail?: boolean;
       stop?: boolean;
       providerRejection?: boolean;
+      outboundDelivered?: boolean;
+      testRunId?: string | null;
     },
   ) {
     const record = await this.getOrCreate(tenantId);
+    const tenant = await this.tenants.findOne({ where: { id: tenantId } });
+    if (
+      tenant?.lifecycleStatus !== 'TESTING' ||
+      !evidence.testRunId ||
+      !this.testRuns
+    ) return record;
+    const run = await this.testRuns.findOne({
+      where: { id: evidence.testRunId, tenantId, status: 'running' },
+    });
+    if (!run || run.expiresAt <= new Date()) return record;
     const now = new Date();
     const verifiedItems = { ...(record.verifiedItems || {}) };
     let changed = false;
@@ -447,6 +486,49 @@ export class OnboardingService {
       'provider_rejection',
       evidence.providerRejection,
     );
+    if (evidence.outboundDelivered && !record.testLeadCompletedAt) {
+      record.testLeadCompletedAt = now;
+      verifiedItems.test_lead = {
+        verifiedAt: now.toISOString(),
+        verifiedBy: 'system:provider_callback',
+        testRunId: run.id,
+      };
+      run.checks = { ...run.checks, outbound: 'delivered' };
+      record.providerTests = {
+        ...(record.providerTests || {}),
+        endToEndTestReference: `test-run:${run.id}`,
+        endToEndTestRecordedAt: now.toISOString(),
+      };
+      changed = true;
+    }
+    if (evidence.inboundSms || evidence.inboundEmail || evidence.stop) {
+      run.checks = {
+        ...run.checks,
+        ...(evidence.inboundSms ? { inboundSms: 'passed' } : {}),
+        ...(evidence.inboundEmail ? { inboundEmail: 'passed' } : {}),
+        ...(evidence.stop ? { stop: 'passed' } : {}),
+      };
+    }
+    if (evidence.providerRejection) {
+      run.checks = { ...run.checks, providerRejection: 'passed' };
+      record.providerTests = {
+        ...(record.providerTests || {}),
+        providerRejectionReference: `test-run:${run.id}`,
+        providerRejectionRecordedAt: now.toISOString(),
+      };
+      changed = true;
+    }
+    const checks = run.checks as Record<string, unknown>;
+    const passed =
+      checks.outbound === 'delivered' &&
+      (!record.smsEnabled ||
+        (checks.inboundSms === 'passed' && checks.stop === 'passed')) &&
+      (!record.emailEnabled || checks.inboundEmail === 'passed');
+    if (passed) {
+      run.status = 'passed';
+      run.completedAt = now;
+    }
+    await this.testRuns.save(run);
     if (!changed) return record;
     record.verifiedItems = verifiedItems;
     return this.records.save(record);
@@ -457,6 +539,7 @@ export class OnboardingService {
       .createQueryBuilder('step')
       .innerJoin('step.sequence', 'sequence')
       .where('sequence.tenant_id = :tenantId', { tenantId })
+      .andWhere('sequence.active = true')
       .andWhere('step.approval_status = :approved', { approved: 'approved' })
       .andWhere('step.active = true')
       .select('step.channel', 'channel')
@@ -572,11 +655,13 @@ export class OnboardingService {
     );
     const twilioRuntimeReady = managedTwilio
       ? Boolean(
-          managedTwilio.smsStatus === 'ready' &&
+          ['testing', 'ready'].includes(managedTwilio.smsStatus) &&
             managedTwilio.twilioSubaccountSid &&
             managedTwilio.messagingServiceSid &&
             managedTwilio.phoneNumber &&
             managedTwilio.encryptedAuthToken &&
+            managedTwilio.twilioApiKeySid &&
+            managedTwilio.encryptedApiSecret &&
             approvedPhone === normalizePhoneE164(managedTwilio.phoneNumber),
         )
       : Boolean(
@@ -604,7 +689,7 @@ export class OnboardingService {
       .toLowerCase();
     const sendgridRuntimeReady = managedEmail
       ? Boolean(
-          managedEmail.emailStatus === 'ready' &&
+          ['testing', 'ready'].includes(managedEmail.emailStatus) &&
             managedEmail.reputationStatus !== 'blocked' &&
             validEmail(managedEmail.fromEmail) &&
             validEmail(managedEmail.inboundAddress) &&
@@ -671,6 +756,23 @@ export class OnboardingService {
       true,
       {
         nextAction: `Provide valid values for: ${invalidContacts.join(', ')}.`,
+      },
+    );
+    const controlledTestPhone = normalizePhoneE164(
+      String(record.contacts.controlledTestPhone || ''),
+    );
+    const controlledTestEmail = String(
+      record.contacts.controlledTestEmail || record.contacts.accountOwner || '',
+    );
+    add(
+      'controlled_test_destinations',
+      'Controlled SMS and email test destinations are valid',
+      (!record.smsEnabled || Boolean(controlledTestPhone)) &&
+        (!record.emailEnabled || validEmail(controlledTestEmail)),
+      record.smsEnabled || record.emailEnabled,
+      {
+        nextAction:
+          'Provide destinations you control for the automated end-to-end SMS and email tests.',
       },
     );
     add(
@@ -1008,7 +1110,9 @@ export class OnboardingService {
       'A controlled end-to-end test lead completed',
       Boolean(
         freshDate(record.testLeadCompletedAt) &&
-          hasText(providerTests, 'endToEndTestReference'),
+          (hasText(providerTests, 'endToEndTestReference') ||
+            (record.verifiedItems as any)?.test_lead?.verifiedBy ===
+              'system:provider_callback'),
       ),
       true,
       {
@@ -1063,7 +1167,7 @@ export class OnboardingService {
             (record.verifiedItems as any)?.provider_rejection?.verifiedBy ===
               'system:webhook'),
       ),
-      true,
+      false,
       {
         category: 'controlled_live_test',
         responsibleParty: 'jayden',
@@ -1095,13 +1199,13 @@ export class OnboardingService {
     );
     add(
       'billing_evidence',
-      'Billing state was verified by an operator',
+      'Billing readiness was verified from signed Stripe state',
       Boolean(record.billingVerifiedAt),
       true,
       {
         category: 'billing',
-        responsibleParty: 'jayden',
-        nextAction: 'Verify the current billing state through the owner-only control.',
+        responsibleParty: 'platform',
+        nextAction: 'Complete payment so Stripe can confirm an eligible subscription state.',
       },
     );
     add(
@@ -1156,8 +1260,8 @@ export class OnboardingService {
     const testingBlockers = blockers.filter(
       (item) =>
         item.category !== 'controlled_live_test' &&
-        item.category !== 'client_approval' &&
-        item.category !== 'platform_approval' &&
+        item.key !== 'client_approval' &&
+        item.key !== 'operator_approval' &&
         item.key !== 'global_pause',
     );
     return {
