@@ -26,6 +26,8 @@ import { ClientSuspensionController } from './client-suspension.controller';
 import { LimitsModule } from '../limits/limits.module';
 import { TestingModule } from '../testing/testing.module';
 import { OffboardingModule } from '../offboarding/offboarding.module';
+import { AccountInvitation } from '../auth/account-invitation.entity';
+import { AiModule } from '../ai/ai.module';
 
 @Module({
   imports: [
@@ -42,6 +44,7 @@ import { OffboardingModule } from '../offboarding/offboarding.module';
       OperationsTask,
       SupportTicket,
       BillingEvent,
+      AccountInvitation,
     ]),
     CommonModule,
     AuditModule,
@@ -52,6 +55,7 @@ import { OffboardingModule } from '../offboarding/offboarding.module';
     LimitsModule,
     TestingModule,
     OffboardingModule,
+    AiModule,
   ],
   controllers: [AdminController, ClientSuspensionController],
   providers: [AdminService],

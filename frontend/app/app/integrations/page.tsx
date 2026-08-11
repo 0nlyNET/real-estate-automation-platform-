@@ -93,6 +93,31 @@ type RealtorCredentials = {
   warning: string
 }
 
+type ZapierConnection = {
+  id: string
+  status: "active" | "revoked" | "error"
+  secretLast4: string
+  inboundUrl: string
+  lastUsedAt: string | null
+  lastTestedAt: string | null
+  lastError: string | null
+  configuration: { label?: string }
+}
+
+type ZapierCredential = ZapierConnection & { credential: string; notice: string }
+
+type WebhookSubscription = {
+  id: string
+  eventType: string
+  targetUrl: string
+  status: "active" | "paused" | "revoked"
+  secretLast4: string
+  failureCount: number
+  lastSuccessAt: string | null
+  lastError: string | null
+  signingSecret?: string
+}
+
 function statusBadge(item?: Integration | null) {
   if (item?.status === "connected") return <Badge>Connected</Badge>
   if (item?.status === "error") return <Badge variant="destructive">Needs attention</Badge>
@@ -117,6 +142,8 @@ async function fetchIntegrationData() {
     apiFetch<TenantSettings>("/settings/tenant"),
     apiFetch<Me>("/me"),
     apiFetch<RealtorSetup>("/integrations/realtor-com"),
+    apiFetch<ZapierConnection[]>("/integrations/crm/connections/zapier"),
+    apiFetch<WebhookSubscription[]>("/integrations/crm/webhooks"),
   ])
 }
 
@@ -132,6 +159,12 @@ export default function IntegrationsPage() {
   const [realtorCredentials, setRealtorCredentials] = useState<RealtorCredentials | null>(null)
   const [facebookPages, setFacebookPages] = useState<FacebookPage[]>([])
   const [facebookPageId, setFacebookPageId] = useState("")
+  const [zapierConnections, setZapierConnections] = useState<ZapierConnection[]>([])
+  const [zapierCredential, setZapierCredential] = useState<ZapierCredential | null>(null)
+  const [webhooks, setWebhooks] = useState<WebhookSubscription[]>([])
+  const [webhookSecret, setWebhookSecret] = useState("")
+  const [webhookEventType, setWebhookEventType] = useState("lead.qualified")
+  const [webhookTargetUrl, setWebhookTargetUrl] = useState("")
 
   const canManage = role === "owner" || role === "admin"
   const byProvider = useMemo(
@@ -144,22 +177,26 @@ export default function IntegrationsPage() {
   const facebookWebhookUrl = facebookStatus?.display?.webhookUrl || ""
 
   const load = useCallback(async () => {
-    const [items, tenantSettings, me, realtor] = await fetchIntegrationData()
+    const [items, tenantSettings, me, realtor, zapier, subscriptions] = await fetchIntegrationData()
     setIntegrations(items)
     setSettings(tenantSettings)
     setRole(me.role)
     setRealtorSetup(realtor)
+    setZapierConnections(zapier)
+    setWebhooks(subscriptions)
   }, [])
 
   useEffect(() => {
     let alive = true
     fetchIntegrationData()
-      .then(([items, tenantSettings, me, realtor]) => {
+      .then(([items, tenantSettings, me, realtor, zapier, subscriptions]) => {
         if (!alive) return
         setIntegrations(items)
         setSettings(tenantSettings)
         setRole(me.role)
         setRealtorSetup(realtor)
+        setZapierConnections(zapier)
+        setWebhooks(subscriptions)
       })
       .catch((error) => {
         if (!alive) return
@@ -350,6 +387,108 @@ export default function IntegrationsPage() {
     }
   }
 
+  const createZapierConnection = async () => {
+    setBusy("zapier-create")
+    try {
+      const created = await apiFetch<ZapierCredential>("/integrations/crm/connections/zapier", {
+        method: "POST",
+        body: { label: "Zapier" },
+      })
+      setZapierCredential(created)
+      await load()
+      toast({ title: "Zapier credential created", description: "Copy it now. It will not be shown again." })
+    } catch (error) {
+      toast({ title: "Could not create Zapier connection", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const rotateZapierConnection = async (id: string) => {
+    setBusy(`zapier-rotate-${id}`)
+    try {
+      const rotated = await apiFetch<ZapierCredential>(`/integrations/crm/connections/zapier/${id}/rotate`, { method: "POST" })
+      setZapierCredential(rotated)
+      await load()
+      toast({ title: "Zapier credential rotated", description: "The previous credential stopped working immediately." })
+    } catch (error) {
+      toast({ title: "Could not rotate Zapier credential", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const testZapierConnection = async (id: string) => {
+    setBusy(`zapier-test-${id}`)
+    try {
+      await apiFetch(`/integrations/crm/connections/zapier/${id}/test`, { method: "POST" })
+      await load()
+      toast({ title: "Controlled Zapier test accepted", description: "The test event entered the current isolated readiness run." })
+    } catch (error) {
+      toast({ title: "Zapier test could not run", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const revokeZapierConnection = async (id: string) => {
+    setBusy(`zapier-revoke-${id}`)
+    try {
+      await apiFetch(`/integrations/crm/connections/zapier/${id}`, { method: "DELETE" })
+      if (zapierCredential?.id === id) setZapierCredential(null)
+      await load()
+      toast({ title: "Zapier connection revoked" })
+    } catch (error) {
+      toast({ title: "Could not revoke Zapier connection", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const createWebhook = async () => {
+    setBusy("webhook-create")
+    setWebhookSecret("")
+    try {
+      const created = await apiFetch<WebhookSubscription>("/integrations/crm/webhooks", {
+        method: "POST",
+        body: { eventType: webhookEventType, targetUrl: webhookTargetUrl.trim() },
+      })
+      setWebhookSecret(created.signingSecret || "")
+      setWebhookTargetUrl("")
+      await load()
+      toast({ title: "Outbound webhook created", description: "Copy the signing secret now." })
+    } catch (error) {
+      toast({ title: "Could not create webhook", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const testWebhook = async (id: string) => {
+    setBusy(`webhook-test-${id}`)
+    try {
+      await apiFetch(`/integrations/crm/webhooks/${id}/test`, { method: "POST" })
+      toast({ title: "Webhook test queued", description: "Durable delivery retries automatically on transient failures." })
+    } catch (error) {
+      toast({ title: "Could not queue webhook test", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const revokeWebhook = async (id: string) => {
+    setBusy(`webhook-revoke-${id}`)
+    try {
+      await apiFetch(`/integrations/crm/webhooks/${id}`, { method: "DELETE" })
+      await load()
+      toast({ title: "Outbound webhook revoked" })
+    } catch (error) {
+      toast({ title: "Could not revoke webhook", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const endpoint = settings
     ? `${API_URL.replace(/\/+$/, "")}${settings.intake.endpointPath}`
     : ""
@@ -424,6 +563,26 @@ export default function IntegrationsPage() {
             )}
             {sendgridStatus?.display?.inboundAddress ? <p className="text-sm text-muted-foreground">Reply address: {sendgridStatus.display.inboundAddress}</p> : null}
             <p className="text-xs text-muted-foreground">Contact support to change the sender identity or investigate a failed connection.</p>
+          </CardContent>
+        </Card>
+
+        <Card className="xl:col-span-2">
+          <CardHeader className="flex flex-row items-start justify-between gap-4">
+            <div className="space-y-1"><CardTitle className="flex items-center gap-2"><PlugZap className="h-5 w-5" /> Universal CRM connection with Zapier</CardTitle><p className="text-sm text-muted-foreground">Connect Keller Williams Command, Compass, Follow Up Boss, kvCORE, BoomTown, Lofty, Brivity, HighLevel, HubSpot, forms, and other Zapier-supported sources.</p></div>
+            {zapierConnections.some((item) => item.status === "active") ? <Badge>Connected</Badge> : <Badge variant="secondary">Not connected</Badge>}
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <Alert><ShieldCheck /><AlertTitle>Tenant-safe credential</AlertTitle><AlertDescription>Zapier sends a Bearer credential; RealtyTechAI resolves this workspace from that credential. A Zap cannot choose a tenant ID. Retries with the same event ID are deduplicated.</AlertDescription></Alert>
+            {zapierCredential ? <Alert><KeyRound /><AlertTitle>Copy this credential now—it will not be shown again</AlertTitle><AlertDescription className="space-y-3"><div className="flex gap-2"><Input readOnly value={zapierCredential.credential} className="font-mono text-xs" /><Button variant="outline" onClick={() => copy(zapierCredential.credential, "Zapier credential")}><Clipboard /> Copy</Button></div><div className="flex gap-2"><Input readOnly value={zapierCredential.inboundUrl} className="font-mono text-xs" /><Button variant="outline" size="icon" onClick={() => copy(zapierCredential.inboundUrl, "Zapier URL")}><Clipboard /><span className="sr-only">Copy Zapier URL</span></Button></div></AlertDescription></Alert> : null}
+            {zapierConnections.length ? <div className="space-y-3">{zapierConnections.map((connection) => <div key={connection.id} className="space-y-3 rounded-lg border p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{connection.configuration?.label || "Zapier"}</div><div className="text-xs text-muted-foreground">Credential ending {connection.secretLast4} · {connection.lastUsedAt ? `last event ${new Date(connection.lastUsedAt).toLocaleString()}` : "no event received yet"}</div></div><Badge variant={connection.status === "active" ? "default" : "secondary"}>{connection.status}</Badge></div>{connection.lastError ? <p className="text-sm text-destructive">{connection.lastError}</p> : null}{connection.status === "active" && canManage ? <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => testZapierConnection(connection.id)} disabled={Boolean(busy)}><CheckCircle2 /> Send controlled test lead</Button><Button variant="ghost" onClick={() => rotateZapierConnection(connection.id)} disabled={Boolean(busy)}><KeyRound /> Rotate credential</Button><AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" disabled={Boolean(busy)}><Unplug /> Revoke</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Revoke this Zapier credential?</AlertDialogTitle><AlertDialogDescription>Connected Zaps will stop immediately. This cannot be undone; create a new connection if needed.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => revokeZapierConnection(connection.id)}>Revoke</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div> : null}</div>)}</div> : <p className="text-sm text-muted-foreground">Create a connection, copy the one-time credential into Zapier, and map a stable external event ID plus the lead fields.</p>}
+            {canManage ? <Button onClick={createZapierConnection} disabled={Boolean(busy)}><PlugZap /> Create Zapier connection</Button> : null}
+
+            <div className="space-y-4 border-t pt-5">
+              <div><div className="font-medium">Send lead outcomes back to Zapier</div><p className="text-sm text-muted-foreground">Signed webhook events are persisted first and delivered by the durable worker with retries.</p></div>
+              {webhookSecret ? <Alert><KeyRound /><AlertTitle>Copy the signing secret now</AlertTitle><AlertDescription><div className="mt-2 flex gap-2"><Input readOnly value={webhookSecret} className="font-mono text-xs" /><Button variant="outline" onClick={() => copy(webhookSecret, "Webhook signing secret")}><Clipboard /> Copy</Button></div></AlertDescription></Alert> : null}
+              {canManage ? <div className="grid gap-3 lg:grid-cols-[220px_1fr_auto] lg:items-end"><div className="space-y-2"><Label htmlFor="webhook-event">Event</Label><select id="webhook-event" className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={webhookEventType} onChange={(event) => setWebhookEventType(event.target.value)}><option value="lead.created">Lead created</option><option value="lead.engaged">Lead engaged</option><option value="lead.qualified">Lead qualified</option><option value="lead.status_changed">Lead status changed</option><option value="lead.human_handoff">Human handoff</option><option value="appointment.created">Appointment created</option><option value="conversation.summary_ready">Conversation summary ready</option><option value="lead.opted_out">Lead opted out</option></select></div><div className="space-y-2"><Label htmlFor="webhook-target">Zapier Catch Hook URL</Label><Input id="webhook-target" type="url" value={webhookTargetUrl} onChange={(event) => setWebhookTargetUrl(event.target.value)} placeholder="https://hooks.zapier.com/hooks/catch/…" /></div><Button onClick={createWebhook} disabled={Boolean(busy) || !webhookTargetUrl.trim()}>Create webhook</Button></div> : null}
+              {webhooks.length ? <div className="space-y-2">{webhooks.map((webhook) => <div key={webhook.id} className="flex flex-col gap-3 rounded-lg border p-3 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0"><div className="text-sm font-medium">{webhook.eventType}</div><div className="truncate text-xs text-muted-foreground">{webhook.targetUrl} · secret ending {webhook.secretLast4}{webhook.lastSuccessAt ? ` · delivered ${new Date(webhook.lastSuccessAt).toLocaleString()}` : ""}</div>{webhook.lastError ? <div className="text-xs text-destructive">{webhook.lastError}</div> : null}</div>{canManage && webhook.status === "active" ? <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => testWebhook(webhook.id)} disabled={Boolean(busy)}>Send test</Button><Button size="sm" variant="ghost" onClick={() => revokeWebhook(webhook.id)} disabled={Boolean(busy)}>Revoke</Button></div> : <Badge variant="secondary">{webhook.status}</Badge>}</div>)}</div> : null}
+            </div>
           </CardContent>
         </Card>
 

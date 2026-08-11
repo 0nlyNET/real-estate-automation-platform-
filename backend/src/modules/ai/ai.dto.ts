@@ -1,5 +1,6 @@
 import {
   IsArray,
+  ArrayMinSize,
   IsBoolean,
   IsEmail,
   IsIn,
@@ -21,6 +22,24 @@ export class UpdateAiSettingsDto {
   @IsOptional()
   @IsBoolean()
   aiEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  aiFirstResponderEnabled?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsIn(['sms', 'email'], { each: true })
+  allowedChannels?: Array<'sms' | 'email'>;
+
+  @IsOptional()
+  @IsIn(['professional_warm', 'concise', 'friendly'])
+  tone?: 'professional_warm' | 'concise' | 'friendly';
+
+  @IsOptional()
+  @IsIn(['verified_link_only', 'handoff', 'disabled'])
+  bookingBehavior?: 'verified_link_only' | 'handoff' | 'disabled';
 
   @IsOptional()
   @IsIn(['human_only', 'draft', 'controlled_autopilot'])

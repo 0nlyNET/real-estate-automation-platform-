@@ -26,6 +26,18 @@ export class WorkspaceAiSettings {
   @Column({ name: 'ai_enabled', type: 'boolean', default: false })
   aiEnabled!: boolean;
 
+  @Column({ name: 'ai_first_responder_enabled', type: 'boolean', default: true })
+  aiFirstResponderEnabled!: boolean;
+
+  @Column({ name: 'allowed_channels', type: 'simple-array', default: 'sms,email' })
+  allowedChannels!: Array<'sms' | 'email'>;
+
+  @Column({ type: 'varchar', length: 40, default: 'professional_warm' })
+  tone!: 'professional_warm' | 'concise' | 'friendly';
+
+  @Column({ name: 'booking_behavior', type: 'varchar', length: 40, default: 'verified_link_only' })
+  bookingBehavior!: 'verified_link_only' | 'handoff' | 'disabled';
+
   @Column({ name: 'response_mode', type: 'varchar', length: 30, default: 'human_only' })
   responseMode!: AiResponseMode;
 

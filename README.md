@@ -14,6 +14,7 @@ RealtyTechAI is a multi-tenant lead-response and follow-up platform for real est
 - A role-aware owner/staff operating dashboard with real billing summaries, assignments, read-only communications, and 90-day diagnostic retention
 - In-app notifications and standards-based web push for trusted lead, client, support, billing, integration, and health events
 - A default-off controlled AI lead assistant for authenticated inbound SMS/email, draft review, guarded autopilot, persistent human takeover, verified brokerage knowledge, aggregate admin visibility, and tenant/platform emergency pauses
+- Credential-resolved universal Zapier lead intake, durable signed CRM outcome webhooks, automatic lead-first-response AI, and separate restricted client/operations assistants
 
 Provider accounts and production infrastructure are not included. Results, uptime, certifications, and legal compliance depend on the deployment and operating process.
 
@@ -105,6 +106,8 @@ Before accepting a pilot payment, complete:
 - `docs/production-launch-owner-checklist.md`
 - `docs/database-migration-runbook.md`
 - `docs/controlled-ai-lead-agent.md`
+- `docs/managed-crm-ai-autopilot.md`
+- `docs/managed-autopilot-production-uat.md`
 - all 21 journeys in `docs/first-client-uat.md`
 
 ### Facebook Lead Ads production setup

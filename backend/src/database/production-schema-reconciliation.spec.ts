@@ -20,6 +20,7 @@ import { ClientReadinessObservability1786060800002 } from "./migrations/20260807
 import { LaunchSafeguards1786406400001 } from "./migrations/202608110001-launch-safeguards";
 import { ManagedProviderArchitecture1786492800001 } from "./migrations/202608120001-managed-provider-architecture";
 import { TurnkeyLaunchOperation1786579200001 } from "./migrations/202608130001-turnkey-launch-operation";
+import { ManagedCrmAiAutopilot1786665600001 } from "./migrations/202608140001-managed-crm-ai-autopilot";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -124,15 +125,17 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 51,
+      expectedTables: 57,
       actualTables: 12,
       missingTables: [
+        "account_invitations",
         "admin_notification_preferences",
         "admin_notifications",
         "admin_push_subscriptions",
         "agent_presence",
         "ai_runs",
         "appointments",
+        "assistant_runs",
         "billing_events",
         "brokerage_ai_knowledge",
         "communication_suppressions",
@@ -140,6 +143,8 @@ describe("deployed legacy schema reproduction", () => {
         "compliance_optouts",
         "conversation_ai_states",
         "durable_jobs",
+        "integration_delivery_events",
+        "integration_ingress_events",
         "lead_consent_records",
         "lead_handoffs",
         "lead_ingestion_events",
@@ -158,8 +163,10 @@ describe("deployed legacy schema reproduction", () => {
         "support_tickets",
         "teams",
         "tenant_email_identities",
+        "tenant_integration_connections",
         "tenant_messaging_resources",
         "tenant_quiet_hours",
+        "tenant_webhook_subscriptions",
         "test_runs",
         "twilio_inbound_messages",
         "usage_buckets",
@@ -186,12 +193,13 @@ describe("deployed legacy schema reproduction", () => {
     await new LaunchSafeguards1786406400001().up(queryRunner);
     await new ManagedProviderArchitecture1786492800001().up(queryRunner);
     await new TurnkeyLaunchOperation1786579200001().up(queryRunner);
+    await new ManagedCrmAiAutopilot1786665600001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 51,
-      actualTables: 51,
+      expectedTables: 57,
+      actualTables: 57,
       missingTables: [],
       missingColumns: [],
     });
@@ -257,18 +265,20 @@ describe("deployed legacy schema reproduction", () => {
     await new LaunchSafeguards1786406400001().up(queryRunner);
     await new ManagedProviderArchitecture1786492800001().up(queryRunner);
     await new TurnkeyLaunchOperation1786579200001().up(queryRunner);
+    await new ManagedCrmAiAutopilot1786665600001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 51,
-      actualTables: 51,
+      expectedTables: 57,
+      actualTables: 57,
       missingTables: [],
       missingColumns: [],
     });
 
     const rollbackRunner = dataSource.createQueryRunner();
     await rollbackRunner.connect();
+    await new ManagedCrmAiAutopilot1786665600001().down(rollbackRunner);
     await new TurnkeyLaunchOperation1786579200001().down(rollbackRunner);
     await new ManagedProviderArchitecture1786492800001().down(rollbackRunner);
     await new LaunchSafeguards1786406400001().down(rollbackRunner);

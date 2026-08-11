@@ -57,6 +57,8 @@ import { TenantProvisioningService } from '../integrations/tenant-provisioning.s
 import { TwilioProvisioningService } from '../integrations/twilio-provisioning.service';
 import { TestingService } from '../testing/testing.service';
 import { OffboardingService } from '../offboarding/offboarding.service';
+import { AiSetupService } from '../ai/ai-setup.service';
+import { TwilioComplianceService } from '../integrations/twilio-compliance.service';
 
 @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 @Controller('admin')
@@ -73,6 +75,8 @@ export class AdminController {
     @Optional() private readonly twilioProvisioning?: TwilioProvisioningService,
     @Optional() private readonly testing?: TestingService,
     @Optional() private readonly offboarding?: OffboardingService,
+    @Optional() private readonly aiSetup?: AiSetupService,
+    @Optional() private readonly twilioCompliance?: TwilioComplianceService,
   ) {}
 
   @Get('overview')
@@ -243,12 +247,25 @@ export class AdminController {
   @Get('setup-checker')
   @UseGuards(PlatformAdminGuard)
   async setupChecker() {
-    const [health, providers] = await Promise.all([
+    const [health, providers, aiProvider] = await Promise.all([
       this.admin.systemHealth(),
       this.platformIntegrations.platformSummary(),
+      this.aiSetup?.status() || Promise.resolve({
+        configured: false,
+        model: null,
+        lastTestedAt: null,
+        testedModel: null,
+        lastError: null,
+        passed: false,
+      }),
     ]);
     const configured = (name: string) =>
       Boolean(String(process.env[name] || '').trim());
+    const recentEvidence = (name: string, days: number) => {
+      const value = new Date(String(process.env[name] || ''));
+      const age = Date.now() - value.getTime();
+      return Number.isFinite(value.getTime()) && age >= 0 && age <= days * 24 * 60 * 60_000;
+    };
     const item = (
       label: string,
       passed: boolean,
@@ -270,14 +287,34 @@ export class AdminController {
         item('A2P trust policy', configured('TWILIO_A2P_TRUST_PRODUCT_POLICY_SID'), 'Save Twilio’s current A2P Trust Product policy SID.'),
       ],
       sendgrid: [
-        item('Parent account connection', providers.sendgrid.connected, 'Save and test the SendGrid parent API key.'),
-        item('Authenticated sending domain', configured('SENDGRID_SENDING_DOMAIN'), 'Authenticate the sending domain with SPF and DKIM, then configure it.'),
+        item('Unified parent account', providers.sendgrid.connected, 'Save and test the one SendGrid parent API key used by system and tenant sending.'),
+        item('System transactional identity', configured('SENDGRID_FROM_EMAIL') && configured('SENDGRID_FROM_NAME'), 'Configure the verified RealtyTechAI transactional From identity.'),
+        item('Tenant sending domain', configured('SENDGRID_SENDING_DOMAIN'), 'Authenticate the managed tenant sending domain with SPF and DKIM, then configure it.'),
+        item('SPF verification evidence', recentEvidence('SENDGRID_SPF_VERIFIED_AT', 180), 'Verify SPF for the production sending domain and record the verification date.'),
+        item('DKIM verification evidence', recentEvidence('SENDGRID_DKIM_VERIFIED_AT', 180), 'Verify DKIM for the production sending domain and record the verification date.'),
+        item('DMARC verification evidence', recentEvidence('SENDGRID_DMARC_VERIFIED_AT', 180), 'Publish and verify DMARC for the sending domain, then record the verification date.'),
         item('Inbound parse domain', configured('SENDGRID_REPLY_DOMAIN'), 'Configure the unique inbound reply domain.'),
         item('Authenticated inbound webhook', configured('SENDGRID_INBOUND_USERNAME') && configured('SENDGRID_INBOUND_PASSWORD'), 'Configure inbound parse webhook authentication.'),
+        item('Delivery event webhook', configured('SENDGRID_EVENT_WEBHOOK_URL'), 'Configure the SendGrid Event Webhook to POST to /webhooks/sendgrid/events using the protected webhook credentials.'),
       ],
       openai: [
-        item('API key', configured('OPENAI_API_KEY'), 'Configure the platform OpenAI API key.'),
-        item('Model', configured('OPENAI_MODEL'), 'Pin the approved production model.'),
+        item('API key', aiProvider.configured, 'Configure the platform OpenAI API key.'),
+        item('Model', Boolean(aiProvider.model), 'Pin the approved production model.'),
+        item('Controlled request', aiProvider.passed, 'Run POST /admin/ai/provider-test after configuring the key and model.', {
+          lastTestedAt: aiProvider.lastTestedAt,
+          testedModel: aiProvider.testedModel,
+          lastError: aiProvider.lastError,
+        }),
+      ],
+      zapier: [
+        item('Credential-resolved ingress', configured('PUBLIC_API_URL'), 'Configure PUBLIC_API_URL before creating Zapier connection credentials.', {
+          endpointPath: '/integrations/zapier/leads',
+        }),
+        item('Outbound signing encryption', health.environment.encryption.status === 'up', 'Configure the protected integration encryption key.'),
+        item('Zapier webhook host allowlist', true, '', {
+          defaultHost: 'hooks.zapier.com',
+          additionalHosts: String(process.env.OUTBOUND_WEBHOOK_ALLOWED_HOSTS || '').split(',').filter(Boolean),
+        }),
       ],
       stripe: [
         item('Secret key', configured('STRIPE_SECRET_KEY'), 'Configure the Stripe production secret key.'),
@@ -288,13 +325,26 @@ export class AdminController {
       database: [
         item('Database connection', health.dbConnected === true, 'Restore the production database connection.'),
         item('Schema synchronization disabled', process.env.TYPEORM_SYNC === 'false', 'Set TYPEORM_SYNC=false and deploy migrations.'),
+        item('Migrations current', health.migrationsPending === false, 'Deploy every pending application migration before production UAT.'),
+      ],
+      backupRecovery: [
+        item('Restore tested in isolation', recentEvidence('BACKUP_RESTORE_TESTED_AT', 90) && process.env.BACKUP_RESTORE_ISOLATED_VERIFIED === 'true', 'Restore the production backup into an isolated environment, verify leads/messages, and record the test evidence.'),
+        item('RPO at most 1 hour', Number(process.env.BACKUP_RPO_MINUTES) > 0 && Number(process.env.BACKUP_RPO_MINUTES) <= 60, 'Configure and prove an RPO of 60 minutes or less.'),
+        item('RTO at most 4 hours', Number(process.env.BACKUP_RTO_MINUTES) > 0 && Number(process.env.BACKUP_RTO_MINUTES) <= 240, 'Configure and prove an RTO of 240 minutes or less.'),
+        item('Backup retention', Number(process.env.BACKUP_RETENTION_DAYS) >= 7, 'Configure production backup retention and record the retained-day target.'),
+        item('Restore credentials protected', process.env.BACKUP_RESTORE_CREDENTIALS_PROTECTED === 'true', 'Protect and separately control the credentials needed for restore.'),
       ],
       application: [
         item('Integration encryption', health.environment.encryption.status === 'up', 'Configure a protected 32-byte integration encryption key.'),
         item('Public API URL', configured('PUBLIC_API_URL'), 'Configure the public HTTPS API origin.'),
         item('Public app URL', configured('PUBLIC_APP_URL'), 'Configure the public HTTPS application origin.'),
         item('Platform owner', configured('PLATFORM_ADMIN_EMAILS'), 'Configure at least one platform owner email.'),
+      ],
+      monitoring: [
         item('External uptime monitor', configured('EXTERNAL_UPTIME_MONITOR_URL'), 'Create an external monitor for /health/live and /health/ready, then record its URL.'),
+      ],
+      legal: [
+        item('Qualified legal review', recentEvidence('LEGAL_DOCUMENTS_REVIEWED_AT', 365), 'Have qualified counsel review the live terms, privacy, acceptable use, cancellation, messaging consent, and retention documents; then record the review date.'),
       ],
     };
     const all = Object.values(groups).flat();
@@ -373,10 +423,29 @@ export class AdminController {
       metadata: {
         ownerUserId: result.owner.id,
         ownerEmail: result.owner.email,
-        verificationEmailSent: result.verificationEmailSent,
+        invitationEmailSent: result.invitationEmailSent,
       },
     });
 
+    return result;
+  }
+
+  @Post('tenants/:tenantId/invitation/resend')
+  @UseGuards(PlatformAdminGuard)
+  async resendInvitation(@Param('tenantId') tenantId: string, @Req() req: any) {
+    const result = await this.auth.resendInvitation(tenantId);
+    await this.audit.record({
+      tenantId,
+      actorId: String(req.user?.sub || ''),
+      actorEmail: String(req.user?.email || ''),
+      action: 'account.invitation_resent',
+      resourceType: 'tenant',
+      resourceId: tenantId,
+      method: 'POST',
+      path: `/admin/tenants/${tenantId}/invitation/resend`,
+      statusCode: 201,
+      metadata: { ownerUserId: result.ownerUserId, expiresAt: result.expiresAt },
+    });
     return result;
   }
 
@@ -494,6 +563,13 @@ export class AdminController {
   reconcileTenantProvisioning(@Param('tenantId') tenantId: string) {
     if (!this.provisioning) throw new BadRequestException('Provisioning service unavailable');
     return this.provisioning.reconcileTenantProvisioning(tenantId);
+  }
+
+  @Post('tenants/:tenantId/provisioning/twilio-compliance/resubmit')
+  @UseGuards(PlatformAdminGuard)
+  resubmitTwilioCompliance(@Param('tenantId') tenantId: string) {
+    if (!this.twilioCompliance) throw new BadRequestException('Twilio compliance service unavailable');
+    return this.twilioCompliance.resubmitAfterCorrection(tenantId);
   }
 
   @Patch('tenants/:tenantId/provisioning/twilio-compliance')

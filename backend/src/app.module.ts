@@ -41,6 +41,8 @@ import { LimitsModule } from './modules/limits/limits.module';
 import { DurableJobsModule } from './modules/durable-jobs/durable-jobs.module';
 import { TestingModule } from './modules/testing/testing.module';
 import { OffboardingModule } from './modules/offboarding/offboarding.module';
+import { CrmEventsModule } from './modules/crm-events/crm-events.module';
+import { CrmIntegrationsModule } from './modules/crm-integrations/crm-integrations.module';
 
 @Module({
   imports: [
@@ -51,6 +53,7 @@ import { OffboardingModule } from './modules/offboarding/offboarding.module';
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     TypeOrmModule.forRoot(buildDatabaseOptions()),
     DurableJobsModule,
+    CrmEventsModule,
     TenantsModule,
     UsersModule,
     AuthModule,
@@ -82,6 +85,7 @@ import { OffboardingModule } from './modules/offboarding/offboarding.module';
     LimitsModule,
     TestingModule,
     OffboardingModule,
+    CrmIntegrationsModule,
   ],
   controllers: [AppController],
   providers: [

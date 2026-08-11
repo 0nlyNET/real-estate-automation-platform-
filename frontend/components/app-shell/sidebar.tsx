@@ -8,6 +8,7 @@ import {
   Inbox,
   LayoutDashboard,
   LifeBuoy,
+  Bot,
   Plug,
   Users,
 } from "lucide-react"
@@ -20,6 +21,7 @@ const navItems = [
   { label: "Conversations", href: "/app/inbox", icon: Inbox },
   { label: "Appointments", href: "/app/appointments", icon: CalendarDays },
   { label: "Integrations", href: "/app/integrations", icon: Plug },
+  { label: "AI assistant", href: "/app/assistant", icon: Bot },
   { label: "Help", href: "/support", icon: LifeBuoy },
 ]
 

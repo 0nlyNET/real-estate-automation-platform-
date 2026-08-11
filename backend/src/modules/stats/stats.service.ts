@@ -199,7 +199,6 @@ export class StatsService {
         },
         limitations: [
           'No calendar synchronization; verified bookings are unavailable.',
-          'SendGrid event-webhook delivery tracking is not implemented.',
           'Revenue, ROI, closed-deal attribution, social performance, and time saved are not tracked.',
         ],
       },
@@ -243,5 +242,95 @@ export class StatsService {
 
   agentMetrics(tenantId: string) {
     return this.agentPerformance(tenantId);
+  }
+
+  async teamPerformance(
+    tenantId: string,
+    filters: ReportingPeriod & {
+      teamId?: string;
+      agentId?: string;
+      source?: string;
+    },
+  ) {
+    const { from, to } = this.period(filters);
+    const query = this.leads
+      .createQueryBuilder('lead')
+      .leftJoin('lead.assignedToTeam', 'team')
+      .leftJoin('lead.assignedToUser', 'agent')
+      .select("COALESCE(lead.assignedToTeamId::text, 'unassigned')", 'teamId')
+      .addSelect("COALESCE(team.name, 'Unassigned')", 'teamName')
+      .addSelect("COALESCE(lead.assignedToUserId::text, 'unassigned')", 'agentId')
+      .addSelect("COALESCE(agent.email, 'Unassigned')", 'agentEmail')
+      .addSelect("COALESCE(NULLIF(lead.source, ''), 'Unknown')", 'source')
+      .addSelect("TO_CHAR(DATE_TRUNC('day', lead.createdAt), 'YYYY-MM-DD')", 'date')
+      .addSelect('COUNT(*)', 'leads')
+      .addSelect("COUNT(*) FILTER (WHERE lead.stage IN ('qualified','appointment_set','showing_scheduled','offer_out','under_contract','closed'))", 'qualified')
+      .addSelect("COUNT(*) FILTER (WHERE lead.stage = 'appointment_set')", 'appointments')
+      .addSelect("COUNT(*) FILTER (WHERE lead.stage = 'closed')", 'closed')
+      .addSelect('AVG(lead.firstResponseTimeSec) FILTER (WHERE lead.firstResponseTimeSec IS NOT NULL)', 'avgResponseTimeSec')
+      .addSelect(`COALESCE(SUM((
+        SELECT COUNT(*) FROM messages response
+         WHERE response."leadId" = lead.id
+           AND response.direction = 'inbound'
+           AND response.status = 'received'
+           AND response.created_at >= :from
+           AND response.created_at < :to
+      )), 0)`, 'responses')
+      .addSelect(`COALESCE(SUM((
+        SELECT COUNT(*) FROM lead_handoffs handoff
+         WHERE handoff.lead_id = lead.id
+           AND handoff.tenant_id = :tenantId
+           AND handoff.created_at >= :from
+           AND handoff.created_at < :to
+      )), 0)`, 'handoffs')
+      .where('lead.tenantId = :tenantId', { tenantId })
+      .andWhere('lead.createdAt >= :from AND lead.createdAt < :to', { from, to });
+    if (filters.teamId) query.andWhere('lead.assignedToTeamId = :teamId', { teamId: filters.teamId });
+    if (filters.agentId) query.andWhere('lead.assignedToUserId = :agentId', { agentId: filters.agentId });
+    if (filters.source) query.andWhere('lead.source = :source', { source: filters.source.slice(0, 160) });
+    const rows = await query
+      .groupBy("COALESCE(lead.assignedToTeamId::text, 'unassigned')")
+      .addGroupBy("COALESCE(team.name, 'Unassigned')")
+      .addGroupBy("COALESCE(lead.assignedToUserId::text, 'unassigned')")
+      .addGroupBy("COALESCE(agent.email, 'Unassigned')")
+      .addGroupBy("COALESCE(NULLIF(lead.source, ''), 'Unknown')")
+      .addGroupBy("DATE_TRUNC('day', lead.createdAt)")
+      .orderBy("DATE_TRUNC('day', lead.createdAt)", 'DESC')
+      .addOrderBy("COALESCE(team.name, 'Unassigned')", 'ASC')
+      .getRawMany();
+    return {
+      period: { from: from.toISOString(), to: to.toISOString() },
+      filters: {
+        teamId: filters.teamId || null,
+        agentId: filters.agentId || null,
+        source: filters.source || null,
+      },
+      rows: rows.map((row) => ({
+        teamId: row.teamId,
+        teamName: row.teamName,
+        agentId: row.agentId,
+        agentEmail: row.agentEmail,
+        source: row.source,
+        date: row.date,
+        leads: Number(row.leads || 0),
+        responses: Number(row.responses || 0),
+        qualified: Number(row.qualified || 0),
+        appointments: Number(row.appointments || 0),
+        avgResponseTimeSec: row.avgResponseTimeSec == null
+          ? null
+          : Math.round(Number(row.avgResponseTimeSec)),
+        handoffs: Number(row.handoffs || 0),
+        closed: Number(row.closed || 0),
+      })),
+      definitions: {
+        leads: 'Leads created during the selected period.',
+        responses: 'Inbound lead replies received during the selected period.',
+        qualified: 'Leads currently at Qualified or a later pipeline stage.',
+        appointments: 'Those leads whose current stage is Appointment Set.',
+        avgResponseTimeSec: 'Average time from initial contact to the first inbound response.',
+        handoffs: 'Human handoffs created during the selected period.',
+        closed: 'Those leads whose current stage is Closed.',
+      },
+    };
   }
 }

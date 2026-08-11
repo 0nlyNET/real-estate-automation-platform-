@@ -6,6 +6,7 @@ import {
   NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -18,6 +19,7 @@ import { Lead } from '../leads/lead.entity';
 import { Message } from '../messaging/message.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { CreateAppointmentDto, UpdateAppointmentDto, UpdateHandoffDto } from './client-operations.dto';
+import { CrmEventsService } from '../crm-events/crm-events.service';
 
 type AccessContext = { userId?: string; role?: UserRole };
 
@@ -88,6 +90,7 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(LeadEvent)
     private readonly events: Repository<LeadEvent>,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly crmEvents?: CrmEventsService,
   ) {}
 
   onModuleInit() {
@@ -546,6 +549,14 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
       entityType: 'appointment',
       entityId: appointment.id,
     });
+    await this.crmEvents?.publish(tenantId, 'appointment.created', {
+      appointmentId: appointment.id,
+      leadId: lead.id,
+      assignedToUserId: appointment.assignedUserId || null,
+      startsAt: appointment.startsAt.toISOString(),
+      status: appointment.status,
+      source,
+    });
     return appointment;
   }
 
@@ -822,6 +833,14 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
       actionUrl: `/app/dashboard?leadId=${lead.id}`,
       entityType: 'handoff',
       entityId: saved.id,
+    });
+    await this.crmEvents?.publish(lead.tenantId, 'lead.human_handoff', {
+      handoffId: saved.id,
+      leadId: lead.id,
+      assignedToUserId: lead.assignedToUserId || null,
+      priority: saved.priority,
+      reason: saved.reason,
+      dueAt: saved.dueAt?.toISOString() || null,
     });
     return saved;
   }

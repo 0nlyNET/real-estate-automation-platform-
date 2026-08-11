@@ -19,6 +19,7 @@ import { ClientReadinessObservability1786060800002 } from './migrations/20260807
 import { LaunchSafeguards1786406400001 } from './migrations/202608110001-launch-safeguards';
 import { ManagedProviderArchitecture1786492800001 } from './migrations/202608120001-managed-provider-architecture';
 import { TurnkeyLaunchOperation1786579200001 } from './migrations/202608130001-turnkey-launch-operation';
+import { ManagedCrmAiAutopilot1786665600001 } from './migrations/202608140001-managed-crm-ai-autopilot';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -39,6 +40,7 @@ const databaseMigrations = [
   LaunchSafeguards1786406400001,
   ManagedProviderArchitecture1786492800001,
   TurnkeyLaunchOperation1786579200001,
+  ManagedCrmAiAutopilot1786665600001,
 ];
 
 function migrationOptions() {

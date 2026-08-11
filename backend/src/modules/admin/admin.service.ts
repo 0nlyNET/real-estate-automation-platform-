@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, MoreThanOrEqual, Repository } from 'typeorm';
-import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 
 import { Tenant } from '../tenants/tenant.entity';
@@ -25,6 +24,8 @@ import {
   defaultTenantUsagePolicy,
 } from '../limits/limits.service';
 import { UsagePolicy } from '../limits/usage-policy.entity';
+import { AccountInvitation } from '../auth/account-invitation.entity';
+import { hashToken, invitationUrl } from '../auth/auth.service';
 import {
   isPlatformAdminEmail,
   platformAdminEmails,
@@ -83,12 +84,7 @@ export class AdminService {
     const ownerEmail = String(params.ownerEmail || '')
       .trim()
       .toLowerCase();
-    const temporaryPassword = `Temp-${crypto.randomBytes(18).toString('base64url')}`;
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    const verificationTokenHash = crypto
-      .createHash('sha256')
-      .update(verificationToken)
-      .digest('hex');
+    const invitationToken = crypto.randomBytes(32).toString('base64url');
     if (params.assignedOperatorId) {
       await this.platformOperators?.requireAssignable(params.assignedOperatorId);
     }
@@ -112,12 +108,31 @@ export class AdminService {
         const priorOwner = await manager.getRepository(User).findOneOrFail({
           where: { tenantId: priorTenant.id, role: 'owner' },
         });
-        priorOwner.emailVerifyToken = verificationTokenHash;
-        priorOwner.emailVerifyTokenExpiresAt = new Date(
-          Date.now() + 24 * 60 * 60_000,
+        if (priorOwner.passwordHash || priorOwner.isEmailVerified) {
+          return { tenant: priorTenant, owner: priorOwner, invitation: null };
+        }
+        const invitations = manager.getRepository(AccountInvitation);
+        await invitations
+          .createQueryBuilder()
+          .update(AccountInvitation)
+          .set({ revokedAt: new Date() })
+          .where('tenant_id = :tenantId', { tenantId: priorTenant.id })
+          .andWhere('user_id = :userId', { userId: priorOwner.id })
+          .andWhere('used_at IS NULL')
+          .andWhere('revoked_at IS NULL')
+          .execute();
+        const invitation = await invitations.save(
+          invitations.create({
+            tenantId: priorTenant.id,
+            userId: priorOwner.id,
+            tokenHash: hashToken(invitationToken),
+            expiresAt: new Date(Date.now() + 24 * 60 * 60_000),
+            usedAt: null,
+            revokedAt: null,
+            sentAt: null,
+          }),
         );
-        await manager.save(priorOwner);
-        return { tenant: priorTenant, owner: priorOwner };
+        return { tenant: priorTenant, owner: priorOwner, invitation };
       }
       const users = manager.getRepository(User);
       const existing = await users.findOne({ where: { email: ownerEmail } });
@@ -145,14 +160,14 @@ export class AdminService {
           tenantId: tenant.id,
           tenant,
           email: ownerEmail,
-          passwordHash: await bcrypt.hash(temporaryPassword, 12),
+          passwordHash: null,
           role: 'owner',
           teamId: null,
           isEmailVerified: false,
-          emailVerifyToken: verificationTokenHash,
-          emailVerifyTokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          emailVerifyToken: null,
+          emailVerifyTokenExpiresAt: null,
           isActive: true,
-          mustChangePassword: true,
+          mustChangePassword: false,
         }),
       );
 
@@ -185,6 +200,19 @@ export class AdminService {
         usagePolicies.create(defaultTenantUsagePolicy(tenant.id)),
       );
 
+      const invitations = manager.getRepository(AccountInvitation);
+      const invitation = await invitations.save(
+        invitations.create({
+          tenantId: tenant.id,
+          userId: owner.id,
+          tokenHash: hashToken(invitationToken),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60_000),
+          usedAt: null,
+          revokedAt: null,
+          sentAt: null,
+        }),
+      );
+
       if (application) {
         application.status = 'accepted';
         application.convertedTenantId = tenant.id;
@@ -194,28 +222,29 @@ export class AdminService {
         await applications.save(application);
       }
 
-      return { tenant, owner };
+      return { tenant, owner, invitation };
     });
 
-    const frontend = (
-      process.env.FRONTEND_URL || 'http://localhost:3000'
-    ).replace(/\/+$/, '');
-    const verifyLink = `${frontend}/verify-email?token=${verificationToken}`;
-    let verificationEmailSent = false;
+    const invitationLink = invitationUrl(invitationToken);
+    let invitationEmailSent = false;
     try {
-      await this.mail.sendVerificationEmail({ to: ownerEmail, verifyLink });
-      verificationEmailSent = true;
+      if (created.invitation) {
+        await this.mail.sendAccountInvitation({ to: ownerEmail, invitationLink });
+        created.invitation.sentAt = new Date();
+        await this.dataSource.getRepository(AccountInvitation).save(created.invitation);
+        invitationEmailSent = true;
+      }
     } catch (error: unknown) {
       this.logger.warn(
-        `Client created but verification email was not delivered: ${
+        `Client created but invitation email was not delivered: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
       await this.operations?.createTask({
         tenantId: created.tenant.id,
         category: 'notification_failure',
-        title: 'Client verification email failed',
-        description: 'Resend the verification email after system email configuration is restored.',
+        title: 'Client invitation email failed',
+        description: 'Resend the invitation after system email configuration is restored.',
         priority: 'high',
         relatedEntityType: 'user',
         relatedEntityId: created.owner.id,
@@ -253,9 +282,8 @@ export class AdminService {
         role: created.owner.role,
         isEmailVerified: created.owner.isEmailVerified,
       },
-      temporaryPassword,
-      verifyLink,
-      verificationEmailSent,
+      invitationEmailSent,
+      invitationExpiresAt: created.invitation?.expiresAt || null,
     };
   }
 
@@ -769,10 +797,13 @@ export class AdminService {
       .andWhere('m.status = :failed', { failed: 'failed' })
       .getCount();
 
+    const migrationsPending = await this.dataSource.showMigrations().catch(() => true);
+
     return {
       totalMessages24h,
       failedMessages24h,
       dbConnected: true,
+      migrationsPending,
       environment: environmentReadiness(),
     };
   }

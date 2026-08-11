@@ -52,6 +52,9 @@ export class TenantMessagingResource extends BaseEntity {
   @Column({ name: 'a2p_provider_status', type: 'varchar', nullable: true })
   a2pProviderStatus!: string | null;
 
+  @Column({ name: 'a2p_input_hash', type: 'varchar', length: 64, nullable: true })
+  a2pInputHash!: string | null;
+
   @Column({ name: 'a2p_rejection_reason', type: 'text', nullable: true })
   a2pRejectionReason!: string | null;
 

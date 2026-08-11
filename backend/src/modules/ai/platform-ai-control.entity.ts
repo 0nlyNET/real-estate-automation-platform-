@@ -14,6 +14,15 @@ export class PlatformAiControl {
   @Column({ name: 'updated_by_id', type: 'uuid', nullable: true })
   updatedById?: string | null;
 
+  @Column({ name: 'provider_last_tested_at', type: 'timestamptz', nullable: true })
+  providerLastTestedAt?: Date | null;
+
+  @Column({ name: 'provider_test_model', type: 'varchar', length: 120, nullable: true })
+  providerTestModel?: string | null;
+
+  @Column({ name: 'provider_test_error', type: 'text', nullable: true })
+  providerTestError?: string | null;
+
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt!: Date;
 }

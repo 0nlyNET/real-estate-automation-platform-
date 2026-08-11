@@ -26,4 +26,25 @@ export class StatsController {
   async agentMetrics(@Req() req: any) {
     return await this.stats.agentMetrics(req.user?.tenantId);
   }
+
+  @UseGuards(JwtAuthGuard, ServiceAccessGuard, RolesGuard)
+  @RequireServiceAccess()
+  @RequireRole('admin')
+  @Get('teams')
+  teamMetrics(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('teamId') teamId?: string,
+    @Query('agentId') agentId?: string,
+    @Query('source') source?: string,
+  ) {
+    return this.stats.teamPerformance(req.user?.tenantId, {
+      from,
+      to,
+      teamId,
+      agentId,
+      source,
+    });
+  }
 }

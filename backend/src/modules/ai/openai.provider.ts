@@ -193,6 +193,8 @@ export class OpenAiProvider implements AiProvider {
                 requiredDisclaimer: input.knowledge.requiredDisclaimer,
               },
               approvedWorkspacePolicy: {
+                tone: input.settings.tone || 'professional_warm',
+                bookingBehavior: input.settings.bookingBehavior || 'verified_link_only',
                 allowedTopics: input.settings.allowedTopics || [],
                 escalationRules: input.settings.escalationRules || {},
                 maximumAutomaticTurns:

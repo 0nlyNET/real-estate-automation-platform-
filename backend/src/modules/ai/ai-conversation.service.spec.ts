@@ -35,6 +35,8 @@ function fixture(mode: 'draft' | 'controlled_autopilot' = 'draft') {
   const settings = Object.assign(new WorkspaceAiSettings(), {
     tenantId,
     aiEnabled: true,
+    aiFirstResponderEnabled: true,
+    allowedChannels: ['sms', 'email'],
     aiPaused: false,
     responseMode: mode,
     identityLabel: 'the virtual assistant for Lakeview Realty',
@@ -243,6 +245,81 @@ describe('AI conversation workflow', () => {
     jest.useRealTimers();
     if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = originalKey;
+  });
+
+  it('queues an automatic first response without fabricating an inbound message', async () => {
+    const item = fixture('controlled_autopilot');
+    item.lead.smsEligible = true;
+    item.dependencies.runs.findOne.mockResolvedValueOnce(null);
+    item.dependencies.runs.save.mockImplementationOnce(async (value: any) => {
+      value.id = '00000000-0000-4000-8000-000000000099';
+      return value;
+    });
+    await expect(item.service.acceptLead({ tenantId: item.tenantId, leadId: item.lead.id })).resolves.toEqual({
+      status: 'queued', runId: '00000000-0000-4000-8000-000000000099', channel: 'sms',
+    });
+    expect(item.dependencies.runs.create).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: item.tenantId,
+      leadId: item.lead.id,
+      triggeringMessageId: null,
+      triggerType: 'first_response',
+      status: 'queued',
+    }));
+  });
+
+  it('does not queue a first response after a human takes ownership', async () => {
+    const item = fixture('controlled_autopilot');
+    item.lead.smsEligible = true;
+    item.state.ownershipStatus = 'human_handling';
+    await expect(item.service.acceptLead({ tenantId: item.tenantId, leadId: item.lead.id })).resolves.toEqual({
+      status: 'ignored', code: 'HUMAN_CONTROLLED',
+    });
+    expect(item.dependencies.runs.create).not.toHaveBeenCalled();
+  });
+
+  it('honors the approved first-response switch and channel list', async () => {
+    const disabled = fixture('controlled_autopilot');
+    disabled.lead.smsEligible = true;
+    disabled.settings.aiFirstResponderEnabled = false;
+    await expect(disabled.service.acceptLead({ tenantId: disabled.tenantId, leadId: disabled.lead.id }))
+      .resolves.toEqual({ status: 'ignored', code: 'AI_NOT_ENABLED' });
+    expect(disabled.dependencies.runs.create).not.toHaveBeenCalled();
+
+    const emailOnly = fixture('controlled_autopilot');
+    emailOnly.lead.smsEligible = true;
+    emailOnly.lead.emailEligible = true;
+    emailOnly.lead.email = 'jordan@example.com';
+    emailOnly.settings.allowedChannels = ['email'];
+    emailOnly.dependencies.runs.findOne.mockResolvedValueOnce(null);
+    emailOnly.dependencies.runs.save.mockImplementationOnce(async (value: any) => {
+      value.id = '00000000-0000-4000-8000-000000000098';
+      return value;
+    });
+    await expect(emailOnly.service.acceptLead({ tenantId: emailOnly.tenantId, leadId: emailOnly.lead.id }))
+      .resolves.toMatchObject({ status: 'queued', channel: 'email' });
+    expect(emailOnly.dependencies.runs.create).toHaveBeenCalledWith(expect.objectContaining({
+      promptMetadata: expect.objectContaining({ channel: 'email' }),
+    }));
+  });
+
+  it('passes controlled TESTING context to the normal entitlement gate', async () => {
+    process.env.OPENAI_API_KEY = 'test-key';
+    const item = fixture('controlled_autopilot');
+    item.lead.testRunId = '00000000-0000-4000-8000-000000000090';
+    (item.service as any).preflight.mockRestore();
+    await expect((item.service as any).preflight({
+      tenantId: item.tenantId,
+      leadId: item.lead.id,
+      messageId: null,
+      channel: 'sms',
+      triggerType: 'first_response',
+    })).resolves.toMatchObject({ allowed: true, lead: item.lead });
+    expect(item.dependencies.entitlements.evaluate).toHaveBeenCalledWith(
+      item.tenantId,
+      'send_automated_sms',
+      expect.any(Date),
+      { controlledTest: true },
+    );
   });
 
   it.each([

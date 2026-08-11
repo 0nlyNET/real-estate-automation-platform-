@@ -8,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 
 import { IntakeLeadDto } from './dto/intake-lead.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
@@ -32,6 +32,8 @@ import { normalizePhoneE164 } from '../../common/phone';
 import { createHash } from 'crypto';
 import { LimitsService } from '../limits/limits.service';
 import { assertLeadAcceptance, LeadAcceptanceContext } from './lead-acceptance';
+import { CrmEventsService } from '../crm-events/crm-events.service';
+import { AiConversationService } from '../ai/ai-conversation.service';
 
 @Injectable()
 export class LeadsService {
@@ -64,18 +66,22 @@ export class LeadsService {
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly limits?: LimitsService,
     @Optional() private readonly dataSource?: DataSource,
+    @Optional() private readonly crmEvents?: CrmEventsService,
+    @Optional() private readonly aiConversation?: AiConversationService,
   ) {}
 
   private async withDedupLock<T>(
     tenantId: string,
     email: string | undefined,
     phone: string | undefined,
+    testRunId: string | undefined,
     callback: () => Promise<T>,
   ) {
     if (!this.dataSource?.createQueryRunner) return callback();
     const runner = this.dataSource.createQueryRunner();
     await runner.connect();
     const lockNames = [
+      testRunId ? `lead-dedup:${tenantId}:test-run:${testRunId}` : null,
       email ? `lead-dedup:${tenantId}:email:${email}` : null,
       phone ? `lead-dedup:${tenantId}:phone:${phone}` : null,
     ]
@@ -217,10 +223,16 @@ export class LeadsService {
     tenantId: string;
     email?: string;
     phone?: string;
+    testRunId?: string;
   }): Promise<Lead | null> {
+    if (params.testRunId) {
+      return this.leadsRepository.findOne({
+        where: { tenantId: params.tenantId, testRunId: params.testRunId },
+      });
+    }
     const where: Array<Record<string, any>> = [];
-    if (params.email) where.push({ tenantId: params.tenantId, email: params.email });
-    if (params.phone) where.push({ tenantId: params.tenantId, phone: params.phone });
+    if (params.email) where.push({ tenantId: params.tenantId, email: params.email, testRunId: IsNull() });
+    if (params.phone) where.push({ tenantId: params.tenantId, phone: params.phone, testRunId: IsNull() });
     if (where.length === 0) return null;
 
     // Passing array for "where" => OR conditions
@@ -258,8 +270,11 @@ export class LeadsService {
     const email = this.normalizeEmail(payload.email ?? undefined);
     const phone = this.normalizePhone(payload.phone ?? undefined);
 
-    return this.withDedupLock(tenant.id, email, phone, async () => {
-    const existing = await this.findDuplicateLead({ tenantId: tenant.id, email, phone });
+    const testRunId = acceptance.controlledTest
+      ? acceptance.testRunId || undefined
+      : undefined;
+    return this.withDedupLock(tenant.id, email, phone, testRunId, async () => {
+    const existing = await this.findDuplicateLead({ tenantId: tenant.id, email, phone, testRunId });
     if (existing) {
       this.logger.log(`Deduped lead ${existing.id}`);
       await this.logLeadEvent(existing, 'deduped', payload as any);
@@ -271,7 +286,7 @@ export class LeadsService {
       tenantId: tenant.id,
       metric: 'lead',
       idempotencyKey: `lead-intake:${createHash('sha256')
-        .update(`${tenant.id}:${email || ''}:${phone || ''}:${fullName}`)
+        .update(`${tenant.id}:${testRunId || 'live'}:${email || ''}:${phone || ''}:${fullName}`)
         .digest('hex')}`,
     });
     if (usage && !usage.ok) {
@@ -300,6 +315,10 @@ export class LeadsService {
       testRunId: acceptance.controlledTest ? acceptance.testRunId : null,
 
       source: this.normalizeString(payload.source) || 'Website',
+      ingestionProvider: this.normalizeString((payload as any).ingestionProvider),
+      sourceSystem: this.normalizeString((payload as any).sourceSystem),
+      originalSource: this.normalizeString((payload as any).originalSource),
+      externalLeadId: this.normalizeString((payload as any).externalLeadId),
       location: this.normalizeString(payload.location),
       propertyInterest: this.normalizeString(payload.propertyInterest),
 
@@ -333,6 +352,15 @@ export class LeadsService {
     await this.logLeadEvent(saved, 'created', payload as any);
     await this.recordStageChange(saved, null, saved.stage, undefined, 'intake');
     await this.complianceService.recordLeadConsent(tenant.id, saved.id, payload.consent);
+    await this.crmEvents?.publish(tenant.id, 'lead.created', {
+      leadId: saved.id,
+      source: saved.source || null,
+      ingestionProvider: saved.ingestionProvider || null,
+      sourceSystem: saved.sourceSystem || null,
+      assignedToUserId: saved.assignedToUserId || null,
+      assignedToTeamId: saved.assignedToTeamId || null,
+      testRunId: saved.testRunId || null,
+    });
     await this.notifications?.createForTenant({
       tenantId: tenant.id,
       assignedUserId: saved.assignedToUserId,
@@ -347,9 +375,17 @@ export class LeadsService {
       entityId: saved.id,
     });
 
-    // Automation hooks
-    await this.messagingService.queueInstantResponses(saved);
-    await this.sequencesService.startForLead(saved);
+    // AI is the normal first responder when its approved runtime accepts the
+    // lead. Approved templates remain the deterministic fallback.
+    const ai = await this.aiConversation?.acceptLead({
+      tenantId: tenant.id,
+      leadId: saved.id,
+    });
+    const aiQueued = ai?.status === 'queued' || ai?.status === 'duplicate';
+    if (!aiQueued) await this.messagingService.queueInstantResponses(saved);
+    await this.sequencesService.startForLead(saved, {
+      minimumDelayMinutes: aiQueued ? 15 : 0,
+    });
 
     return saved;
     });
@@ -373,7 +409,7 @@ export class LeadsService {
     const email = this.normalizeEmail(payload.email ?? undefined);
     const phone = this.normalizePhone(payload.phone ?? undefined);
 
-    return this.withDedupLock(tenant.id, email, phone, async () => {
+    return this.withDedupLock(tenant.id, email, phone, undefined, async () => {
     const existing = await this.findDuplicateLead({ tenantId: tenant.id, email, phone });
     if (existing) {
       await this.logLeadEvent(existing, 'deduped', payload as any);
@@ -483,11 +519,27 @@ export class LeadsService {
       payload.consent,
       ctx?.userId,
     );
+    await this.crmEvents?.publish(tenant.id, 'lead.created', {
+      leadId: saved.id,
+      source: saved.source || null,
+      ingestionProvider: saved.ingestionProvider || null,
+      sourceSystem: saved.sourceSystem || null,
+      assignedToUserId: saved.assignedToUserId || null,
+      assignedToTeamId: saved.assignedToTeamId || null,
+      testRunId: null,
+    });
 
     const trigger = (payload as any).triggerAutomation !== false;
     if (trigger) {
-      await this.messagingService.queueInstantResponses(saved);
-      await this.sequencesService.startForLead(saved);
+      const ai = await this.aiConversation?.acceptLead({
+        tenantId: tenant.id,
+        leadId: saved.id,
+      });
+      const aiQueued = ai?.status === 'queued' || ai?.status === 'duplicate';
+      if (!aiQueued) await this.messagingService.queueInstantResponses(saved);
+      await this.sequencesService.startForLead(saved, {
+        minimumDelayMinutes: aiQueued ? 15 : 0,
+      });
     }
 
     return saved;
@@ -583,6 +635,13 @@ export class LeadsService {
 
     const saved = await this.leadsRepository.save(lead);
     await this.logLeadEvent(saved, 'updated', payload as any);
+    await this.crmEvents?.publish(tenantId, 'lead.updated', {
+      leadId: saved.id,
+      stage: saved.stage,
+      temperature: saved.temperature,
+      assignedToUserId: saved.assignedToUserId || null,
+      assignedToTeamId: saved.assignedToTeamId || null,
+    });
     if (saved.stage !== previousStage) {
       await this.recordStageChange(
         saved,
@@ -591,8 +650,42 @@ export class LeadsService {
         ctx?.userId,
         'lead_update',
       );
+      await this.crmEvents?.publish(tenantId, 'lead.status_changed', {
+        leadId: saved.id,
+        previousStage,
+        stage: saved.stage,
+        changedByUserId: ctx?.userId || null,
+      });
+      if (saved.stage === 'contacted' || saved.stage === 'qualified') {
+        await this.crmEvents?.publish(
+          tenantId,
+          saved.stage === 'qualified' ? 'lead.qualified' : 'lead.engaged',
+          { leadId: saved.id, previousStage, stage: saved.stage },
+        );
+      }
     }
     return saved;
+  }
+
+  async applyIntegrationAttribution(
+    tenantId: string,
+    leadId: string,
+    attribution: {
+      ingestionProvider?: string | null;
+      sourceSystem?: string | null;
+      originalSource?: string | null;
+      externalLeadId?: string | null;
+    },
+  ) {
+    const lead = await this.leadsRepository.findOne({ where: { id: leadId, tenantId } });
+    if (!lead) throw new NotFoundException('Lead not found');
+    // First-touch attribution is immutable. Later duplicate deliveries remain
+    // visible in integration_ingress_events without overwriting origin data.
+    lead.ingestionProvider ||= attribution.ingestionProvider || null;
+    lead.sourceSystem ||= attribution.sourceSystem || null;
+    lead.originalSource ||= attribution.originalSource || null;
+    lead.externalLeadId ||= attribution.externalLeadId || null;
+    return this.leadsRepository.save(lead);
   }
 
   private recordStageChange(

@@ -13,6 +13,10 @@ import { Textarea } from "@/components/ui/textarea"
 
 type AiSettings = {
   aiEnabled: boolean
+  aiFirstResponderEnabled: boolean
+  allowedChannels: Array<"sms" | "email">
+  tone: "professional_warm" | "concise" | "friendly"
+  bookingBehavior: "verified_link_only" | "handoff" | "disabled"
   responseMode: "human_only" | "draft" | "controlled_autopilot"
   identityLabel?: string | null
   maximumAutomaticTurns: number
@@ -73,6 +77,10 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
   const [mode, setMode] =
     useState<AiSettings["responseMode"]>("human_only")
   const [maximumTurns, setMaximumTurns] = useState(6)
+  const [firstResponder, setFirstResponder] = useState(true)
+  const [allowedChannels, setAllowedChannels] = useState<Array<"sms" | "email">>(["sms", "email"])
+  const [tone, setTone] = useState<AiSettings["tone"]>("professional_warm")
+  const [bookingBehavior, setBookingBehavior] = useState<AiSettings["bookingBehavior"]>("verified_link_only")
   const [publicName, setPublicName] = useState("")
   const [officeEmail, setOfficeEmail] = useState("")
   const [officePhone, setOfficePhone] = useState("")
@@ -94,6 +102,10 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
     setIdentity(next.settings.identityLabel || "")
     setMode(next.settings.responseMode)
     setMaximumTurns(next.settings.maximumAutomaticTurns)
+    setFirstResponder(next.settings.aiFirstResponderEnabled !== false)
+    setAllowedChannels(next.settings.allowedChannels?.length ? next.settings.allowedChannels : ["sms", "email"])
+    setTone(next.settings.tone || "professional_warm")
+    setBookingBehavior(next.settings.bookingBehavior || "verified_link_only")
     setPublicName(next.knowledge.publicName || "")
     setOfficeEmail(next.knowledge.officeEmail || "")
     setOfficePhone(next.knowledge.officePhone || "")
@@ -166,6 +178,10 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
         responseMode: mode,
         identityLabel: identity,
         maximumAutomaticTurns: maximumTurns,
+        aiFirstResponderEnabled: firstResponder,
+        allowedChannels,
+        tone,
+        bookingBehavior,
         confirmControlledAutopilot: controlled,
       },
       "Assistant preferences saved. Approval is required before enabling AI.",
@@ -358,6 +374,22 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
                 disabled={!canManage}
               />
             </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="flex items-start gap-3 rounded-lg border p-3 text-sm">
+              <input type="checkbox" className="mt-1" checked={firstResponder} onChange={(event) => setFirstResponder(event.target.checked)} disabled={!canManage} />
+              <span><span className="block font-medium">Automatic first response</span><span className="text-muted-foreground">When approved autopilot and all deterministic gates pass, AI responds without a per-lead start button.</span></span>
+            </label>
+            <div className="rounded-lg border p-3 text-sm">
+              <div className="font-medium">Allowed AI channels</div>
+              <div className="mt-2 flex gap-4">
+                {(["sms", "email"] as const).map((channel) => <label key={channel} className="flex items-center gap-2"><input type="checkbox" checked={allowedChannels.includes(channel)} disabled={!canManage || (allowedChannels.length === 1 && allowedChannels.includes(channel))} onChange={(event) => setAllowedChannels((current) => event.target.checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel))} />{channel.toUpperCase()}</label>)}
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2"><Label htmlFor="aiTone">Tone</Label><select id="aiTone" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={tone} onChange={(event) => setTone(event.target.value as AiSettings["tone"])} disabled={!canManage}><option value="professional_warm">Professional and warm</option><option value="concise">Concise</option><option value="friendly">Friendly</option></select></div>
+            <div className="space-y-2"><Label htmlFor="aiBooking">Booking behavior</Label><select id="aiBooking" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={bookingBehavior} onChange={(event) => setBookingBehavior(event.target.value as AiSettings["bookingBehavior"])} disabled={!canManage}><option value="verified_link_only">Verified booking link only</option><option value="handoff">Hand off booking requests</option><option value="disabled">Do not handle booking</option></select></div>
           </div>
           {canManage ? (
             <div className="flex flex-wrap gap-2">

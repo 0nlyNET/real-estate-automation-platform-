@@ -1,9 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 
 import { UsersService } from '../users/users.service';
 import { User } from '../users/user.entity';
@@ -11,6 +11,8 @@ import { PasswordResetToken } from './password-reset-token.entity';
 import { isPlatformAdminEmail, resolvePlatformRole } from '../../common/env';
 import { MailService } from '../../mail/mail.service';
 import { OperationsService } from '../operations/operations.service';
+import { AccountInvitation } from './account-invitation.entity';
+import { AuditService } from '../audit/audit.service';
 
 const STANDARD_SESSION_EXPIRES_IN = '12h' as const;
 const REMEMBERED_SESSION_EXPIRES_IN = '30d' as const;
@@ -24,6 +26,11 @@ export class AuthService {
     private readonly passwordResetRepo: Repository<PasswordResetToken>,
     private readonly mail: MailService,
     private readonly operations: OperationsService,
+    @Optional()
+    @InjectRepository(AccountInvitation)
+    private readonly invitations?: Repository<AccountInvitation>,
+    @Optional() private readonly dataSource?: DataSource,
+    @Optional() private readonly audit?: AuditService,
   ) {}
 
   signForUser(user: User, rememberMe = false) {
@@ -100,6 +107,132 @@ export class AuthService {
         isPlatformAdmin: isPlatformAdminEmail(user.email),
         platformRole: resolvePlatformRole(user.email, user.platformRole),
       },
+    };
+  }
+
+  async acceptInvitation(token: string, password: string) {
+    if (!this.dataSource) throw new BadRequestException('Invitation service is unavailable');
+    const rawToken = String(token || '').trim();
+    if (!rawToken) throw new BadRequestException('Missing invitation token');
+    if (String(password || '').length < 12) {
+      throw new BadRequestException('Password must be at least 12 characters');
+    }
+    const tokenHash = hashToken(rawToken);
+    const user = await this.dataSource.transaction(async (manager) => {
+      const invitation = await manager
+        .getRepository(AccountInvitation)
+        .createQueryBuilder('invitation')
+        .setLock('pessimistic_write')
+        .leftJoinAndSelect('invitation.user', 'user')
+        .where('invitation.token_hash = :tokenHash', { tokenHash })
+        .getOne();
+      if (!invitation || !invitation.user) {
+        throw new BadRequestException('Invalid invitation');
+      }
+      if (invitation.usedAt || invitation.revokedAt) {
+        throw new BadRequestException('Invitation already used or replaced');
+      }
+      if (invitation.expiresAt.getTime() <= Date.now()) {
+        throw new BadRequestException('Invitation expired');
+      }
+      if (
+        invitation.user.tenantId !== invitation.tenantId ||
+        !invitation.user.isActive ||
+        invitation.user.passwordHash
+      ) {
+        throw new BadRequestException('Invitation no longer applies to this account');
+      }
+      invitation.usedAt = new Date();
+      const invitedUser = invitation.user;
+      invitedUser.passwordHash = await bcrypt.hash(password, 12);
+      invitedUser.isEmailVerified = true;
+      invitedUser.emailVerifyToken = null;
+      invitedUser.emailVerifyTokenExpiresAt = null;
+      invitedUser.mustChangePassword = false;
+      invitedUser.passwordChangedAt = new Date();
+      invitedUser.sessionVersion += 1;
+      await manager.getRepository(User).save(invitedUser);
+      await manager.getRepository(AccountInvitation).save(invitation);
+      return invitedUser;
+    });
+
+    const claimedAt = await this.usersService.claimWelcomeEmail(user.id);
+    if (claimedAt) {
+      try {
+        await this.mail.sendWelcomeEmail({ to: user.email });
+      } catch {
+        await this.usersService.releaseWelcomeEmail(user.id, claimedAt);
+      }
+    }
+    await this.audit?.recordSystemEvent({
+      tenantId: user.tenantId,
+      eventType: 'account.invitation_accepted',
+      resourceType: 'user',
+      resourceId: user.id,
+      afterState: { isEmailVerified: true, passwordConfigured: true },
+    });
+    return {
+      accessToken: this.signForUser(user),
+      user: this.publicUser(user),
+    };
+  }
+
+  async resendInvitation(tenantId: string) {
+    if (!this.invitations || !this.dataSource) {
+      throw new BadRequestException('Invitation service is unavailable');
+    }
+    const rawToken = crypto.randomBytes(32).toString('base64url');
+    const result = await this.dataSource.transaction(async (manager) => {
+      const users = manager.getRepository(User);
+      const owner = await users.findOne({
+        where: { tenantId, role: 'owner' },
+        order: { createdAt: 'ASC' },
+      });
+      if (!owner) throw new BadRequestException('Workspace owner not found');
+      if (owner.passwordHash || owner.isEmailVerified) {
+        throw new BadRequestException('Owner has already accepted the invitation');
+      }
+      await manager
+        .getRepository(AccountInvitation)
+        .createQueryBuilder()
+        .update(AccountInvitation)
+        .set({ revokedAt: new Date() })
+        .where('tenant_id = :tenantId', { tenantId })
+        .andWhere('user_id = :userId', { userId: owner.id })
+        .andWhere('used_at IS NULL')
+        .andWhere('revoked_at IS NULL')
+        .execute();
+      const invitation = await manager.getRepository(AccountInvitation).save(
+        manager.getRepository(AccountInvitation).create({
+          tenantId,
+          userId: owner.id,
+          tokenHash: hashToken(rawToken),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60_000),
+          usedAt: null,
+          revokedAt: null,
+          sentAt: null,
+        }),
+      );
+      return { owner, invitation };
+    });
+    const invitationLink = invitationUrl(rawToken);
+    await this.mail.sendAccountInvitation({
+      to: result.owner.email,
+      invitationLink,
+    });
+    result.invitation.sentAt = new Date();
+    await this.invitations.save(result.invitation);
+    await this.audit?.recordSystemEvent({
+      tenantId,
+      eventType: 'account.invitation_resent',
+      resourceType: 'account_invitation',
+      resourceId: result.invitation.id,
+      metadata: { ownerUserId: result.owner.id, expiresAt: result.invitation.expiresAt },
+    });
+    return {
+      ok: true,
+      ownerUserId: result.owner.id,
+      expiresAt: result.invitation.expiresAt,
     };
   }
 
@@ -275,4 +408,28 @@ export class AuthService {
     }
     return { ok: true };
   }
+
+  private publicUser(user: User) {
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      tenantId: user.tenantId,
+      isPlatformAdmin: isPlatformAdminEmail(user.email),
+      platformRole: resolvePlatformRole(user.email, user.platformRole),
+    };
+  }
+}
+
+export function hashToken(value: string) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+export function invitationUrl(rawToken: string) {
+  const frontend = (
+    process.env.FRONTEND_URL ||
+    process.env.PUBLIC_APP_URL ||
+    'http://localhost:3000'
+  ).replace(/\/+$/, '');
+  return `${frontend}/accept-invitation?token=${encodeURIComponent(rawToken)}`;
 }

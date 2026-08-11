@@ -24,6 +24,7 @@ import { IntegrationsModule } from '../integrations/integrations.module';
 import { SendDecision } from './send-decision.entity';
 import { SendDecisionService } from './send-decision.service';
 import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
+import { TestRun } from '../testing/test-run.entity';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
       Appointment,
       SendDecision,
       SequenceEnrollment,
+      TestRun,
     ]),
     SequencesModule,
     ComplianceModule,
@@ -53,6 +55,6 @@ import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
     MessageSafetyService,
     SendDecisionService,
   ],
-  exports: [MessagingService, MessageSafetyService],
+  exports: [MessagingService, MessageSafetyService, AiModule],
 })
 export class MessagingModule {}

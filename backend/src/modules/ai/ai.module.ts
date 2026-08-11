@@ -31,6 +31,17 @@ import { OpenAiProvider } from './openai.provider';
 import { PlatformAiControl } from './platform-ai-control.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
 import { LimitsModule } from '../limits/limits.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
+import { StatsModule } from '../stats/stats.module';
+import { SettingsModule } from '../settings/settings.module';
+import { OnboardingModule } from '../onboarding/onboarding.module';
+import { DurableJob } from '../durable-jobs/durable-job.entity';
+import { OperationsTask } from '../operations/operations-task.entity';
+import { AssistantRun } from './assistant-run.entity';
+import { RestrictedAssistantProvider } from './restricted-assistant.provider';
+import { RestrictedAssistantService } from './restricted-assistant.service';
+import { ClientAssistantController, OperationsAssistantController } from './restricted-assistant.controller';
+import { AiSetupService } from './ai-setup.service';
 
 @Module({
   imports: [
@@ -48,6 +59,9 @@ import { LimitsModule } from '../limits/limits.module';
       Tenant,
       LeadHandoff,
       Appointment,
+      AssistantRun,
+      DurableJob,
+      OperationsTask,
     ]),
     CommonModule,
     AuditModule,
@@ -56,8 +70,12 @@ import { LimitsModule } from '../limits/limits.module';
     ClientOperationsModule,
     SequencesModule,
     LimitsModule,
+    IntegrationsModule,
+    StatsModule,
+    SettingsModule,
+    OnboardingModule,
   ],
-  controllers: [AiController, AdminAiController],
+  controllers: [AiController, AdminAiController, ClientAssistantController, OperationsAssistantController],
   providers: [
     AiConfigurationService,
     AiConversationControlService,
@@ -67,12 +85,16 @@ import { LimitsModule } from '../limits/limits.module';
     AiUsageService,
     AiAuditService,
     OpenAiProvider,
+    RestrictedAssistantProvider,
+    RestrictedAssistantService,
+    AiSetupService,
     { provide: AI_PROVIDER, useExisting: OpenAiProvider },
   ],
   exports: [
     AiConfigurationService,
     AiConversationControlService,
     AiConversationService,
+    AiSetupService,
   ],
 })
 export class AiModule {}

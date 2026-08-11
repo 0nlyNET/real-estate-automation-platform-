@@ -88,7 +88,7 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
     return lead;
   }
 
-  async startForLead(lead: Lead) {
+  async startForLead(lead: Lead, options: { minimumDelayMinutes?: number } = {}) {
     const tenantId = lead.tenantId || lead.tenant?.id;
     if (!lead.id || !tenantId) return;
     try {
@@ -146,7 +146,12 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      const nextRunAt = this.computeNextRunAt(new Date(), sequence, 0);
+      const enrolledAt = new Date();
+      const calculated = this.computeNextRunAt(enrolledAt, sequence, 0);
+      const minimumDelay = new Date(
+        enrolledAt.getTime() + Math.max(0, options.minimumDelayMinutes || 0) * 60_000,
+      );
+      const nextRunAt = calculated && calculated > minimumDelay ? calculated : minimumDelay;
       await this.enrollmentRepository.save(
         this.enrollmentRepository.create({
           sequence: { id: sequence.id } as Sequence,

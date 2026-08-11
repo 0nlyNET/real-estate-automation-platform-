@@ -151,6 +151,9 @@ export function environmentReadiness() {
   const platformIssues = production
     ? productionPlatformIssues(REQUIRED_PRODUCTION_VALUES, true)
     : [];
+  const runtimeIssues = production
+    ? productionPlatformIssues(STARTUP_REQUIRED_PRODUCTION_VALUES, false)
+    : [];
 
   const jwtSecret = String(process.env.JWT_SECRET || '').trim();
   const secretIssues = [
@@ -176,6 +179,10 @@ export function environmentReadiness() {
 
   return {
     environment: production ? 'production' : process.env.NODE_ENV || 'development',
+    runtime: {
+      status: production && runtimeIssues.length ? 'down' : 'up',
+      issues: runtimeIssues,
+    },
     platform: {
       status: production && platformIssues.length ? 'down' : 'up',
       issues: platformIssues,
@@ -252,7 +259,7 @@ export function assertProductionEnvironment() {
   if (process.env.NODE_ENV !== 'production') return;
   const report = environmentReadiness();
   const issues = [
-    ...productionPlatformIssues(STARTUP_REQUIRED_PRODUCTION_VALUES, false),
+    ...report.runtime.issues,
     ...report.encryption.issues,
   ];
   if (issues.length) {

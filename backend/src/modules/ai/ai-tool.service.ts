@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -20,11 +21,12 @@ import { BrokerageKnowledge } from './brokerage-knowledge.entity';
 import { ConversationAiState } from './conversation-ai-state.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
 import { PlatformAiControl } from './platform-ai-control.entity';
+import { CrmEventsService } from '../crm-events/crm-events.service';
 
 export type AiToolContext = {
   run: AiRun;
   lead: Lead;
-  triggeringMessage: Message;
+  triggeringMessage: Message | null;
   settings: WorkspaceAiSettings;
   knowledge: BrokerageKnowledge;
   state: ConversationAiState;
@@ -96,6 +98,7 @@ export class AiToolService {
     private readonly entitlements: EntitlementService,
     private readonly clientOperations: ClientOperationsService,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly crmEvents?: CrmEventsService,
   ) {}
 
   async execute(
@@ -153,15 +156,17 @@ export class AiToolService {
       }),
       this.aiSettings.findOne({ where: { tenantId: context.run.tenantId } }),
       this.platformControl.findOne({ where: { id: 'global' } }),
-      this.messages.findOne({
-        where: {
-          id: context.triggeringMessage.id,
-          leadId: context.lead.id,
-          direction: 'inbound',
-        },
-      }),
+      context.triggeringMessage
+        ? this.messages.findOne({
+            where: {
+              id: context.triggeringMessage.id,
+              leadId: context.lead.id,
+              direction: 'inbound',
+            },
+          })
+        : Promise.resolve(null),
     ]);
-    if (!lead || !state || !settings || !trigger) {
+    if (!lead || !state || !settings || (context.triggeringMessage && !trigger)) {
       throw new ForbiddenException({
         code: 'TENANT_CONTEXT_INVALID',
         message: 'The AI tool context is no longer valid.',
@@ -367,6 +372,11 @@ export class AiToolService {
       if (!summary) throw new BadRequestException('summary is required');
       context.lead.conversationSummary = summary;
       await this.leads.save(context.lead);
+      await this.crmEvents?.publish(context.run.tenantId, 'conversation.summary_ready', {
+        leadId: context.lead.id,
+        summary,
+        aiRunId: context.run.id,
+      });
       return { saved: true };
     }
     if (name === 'set_lead_temperature') {
@@ -389,6 +399,9 @@ export class AiToolService {
       return { nextAction };
     }
     if (name === 'send_verified_booking_link') {
+      if ((context.settings.bookingBehavior || 'verified_link_only') !== 'verified_link_only') {
+        throw new BadRequestException('AI booking is configured for human handoff or disabled');
+      }
       const settings = await this.tenantSettings.findOne({
         where: { tenantId: context.run.tenantId },
       });
@@ -405,6 +418,9 @@ export class AiToolService {
       return { bookingLink: link };
     }
     if (name === 'create_or_update_appointment') {
+      if ((context.settings.bookingBehavior || 'verified_link_only') !== 'verified_link_only') {
+        throw new BadRequestException('AI appointment updates are configured for human handoff or disabled');
+      }
       const appointmentId = stringValue(args.appointmentId, 80);
       if (appointmentId) {
         const updated = await this.clientOperations.updateAppointment(
@@ -465,7 +481,7 @@ export class AiToolService {
       const priority = stringValue(args.priority, 20);
       const saved = await this.clientOperations.createHandoff(
         context.lead,
-        context.triggeringMessage.body,
+        context.triggeringMessage?.body || context.lead.notes || 'Initial lead intake',
         {
           priority: ['normal', 'high', 'urgent'].includes(priority)
             ? (priority as 'normal' | 'high' | 'urgent')

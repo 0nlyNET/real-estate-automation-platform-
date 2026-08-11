@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -13,6 +13,7 @@ import { Message } from '../messaging/message.entity';
 import { ConsentEvidenceDto, LeadConsentDto } from './consent.dto';
 import { isOptOutMessage } from '../../common/opt-out';
 import { CommunicationSuppression } from './communication-suppression.entity';
+import { CrmEventsService } from '../crm-events/crm-events.service';
 
 function normalizePhone(v: string) {
   let digits = (v || '').replace(/\D/g, '');
@@ -43,6 +44,7 @@ export class ComplianceService {
     private readonly messageRepo: Repository<Message>,
     @InjectRepository(CommunicationSuppression)
     private readonly suppressionRepo: Repository<CommunicationSuppression>,
+    @Optional() private readonly crmEvents?: CrmEventsService,
   ) {}
 
   async recordLeadConsent(
@@ -249,6 +251,14 @@ export class ComplianceService {
         })
         .execute();
     }
+
+    await this.crmEvents?.publish(tenantId, 'lead.opted_out', {
+      channel,
+      status: 'opted_out',
+      reason,
+      source,
+      affectedLeadIds: leadIds.slice(0, 100),
+    });
 
     return saved;
   }

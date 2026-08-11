@@ -34,18 +34,31 @@ describe('AdminService client onboarding', () => {
       create: jest.fn((value) => value),
       save: jest.fn(async (value) => ({ id: 'usage-policy-1', ...value })),
     };
+    const invitationRepository = {
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({ id: 'invitation-1', ...value })),
+      createQueryBuilder: jest.fn(() => ({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 1 }),
+      })),
+    };
     const manager = {
       getRepository: jest.fn((entity: { name: string }) => {
         if (entity.name === 'Tenant') return tenantRepository;
         if (entity.name === 'UsagePolicy') return usagePolicyRepository;
+        if (entity.name === 'AccountInvitation') return invitationRepository;
         return userRepository;
       }),
     };
     const dataSource = {
       transaction: jest.fn(async (callback) => callback(manager)),
+      getRepository: jest.fn(() => invitationRepository),
     };
     const mail = {
-      sendVerificationEmail: options.mailFails
+      sendAccountInvitation: options.mailFails
         ? jest.fn(async () => {
             throw new Error('provider unavailable');
           })
@@ -103,8 +116,8 @@ describe('AdminService client onboarding', () => {
         email: 'broker@example.com',
         role: 'owner',
         isEmailVerified: false,
-        mustChangePassword: true,
-        passwordHash: expect.not.stringContaining('Temp-'),
+        mustChangePassword: false,
+        passwordHash: null,
       }),
     );
     expect(usagePolicyRepository.create).toHaveBeenCalledWith(
@@ -115,14 +128,14 @@ describe('AdminService client onboarding', () => {
         enabled: true,
       }),
     );
-    expect(result.temporaryPassword).toMatch(/^Temp-[A-Za-z0-9_-]{20,}$/);
-    expect(result.verifyLink).toMatch(
-      /^https:\/\/www\.realtytechai\.app\/verify-email\?token=[a-f0-9]{64}$/,
-    );
-    expect(result.verificationEmailSent).toBe(true);
-    expect(mail.sendVerificationEmail).toHaveBeenCalledWith({
+    expect(result).not.toHaveProperty('temporaryPassword');
+    expect(result).not.toHaveProperty('invitationLink');
+    expect(result.invitationEmailSent).toBe(true);
+    expect(mail.sendAccountInvitation).toHaveBeenCalledWith({
       to: 'broker@example.com',
-      verifyLink: result.verifyLink,
+      invitationLink: expect.stringMatching(
+        /^https:\/\/www\.realtytechai\.app\/accept-invitation\?token=[A-Za-z0-9_-]{40,}$/,
+      ),
     });
   });
 
@@ -134,7 +147,7 @@ describe('AdminService client onboarding', () => {
         businessName: 'Manual Setup Realty',
         ownerEmail: 'owner@example.com',
       }),
-    ).resolves.toMatchObject({ verificationEmailSent: false });
+    ).resolves.toMatchObject({ invitationEmailSent: false });
   });
 
   it('rejects an owner email that already belongs to an account', async () => {

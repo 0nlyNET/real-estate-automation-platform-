@@ -1,15 +1,31 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { sendSendGridEmail } from '../common/providers';
+import { PlatformCredential } from '../modules/integrations/platform-credential.entity';
+import { decryptIntegrationPayload } from '../modules/integrations/integrations.service';
 
 @Injectable()
 export class MailService {
+  constructor(
+    @Optional()
+    @InjectRepository(PlatformCredential)
+    private readonly platformCredentials?: Repository<PlatformCredential>,
+  ) {}
+
   async sendEmail(params: {
     to: string;
     subject: string;
     text: string;
     html?: string;
   }) {
-    const apiKey = process.env.SENDGRID_API_KEY;
+    const managed = await this.platformCredentials?.findOne({
+      where: { provider: 'sendgrid' },
+    });
+    const managedPayload = managed
+      ? decryptIntegrationPayload(managed.encryptedValue)
+      : null;
+    const apiKey = String(managedPayload?.apiKey || process.env.SENDGRID_API_KEY || '').trim();
     if (!apiKey) throw new Error('SENDGRID_API_KEY missing');
     const fromEmail = process.env.SENDGRID_FROM_EMAIL;
     if (!fromEmail) throw new Error('SENDGRID_FROM_EMAIL missing');
@@ -46,6 +62,22 @@ export class MailService {
       </div>
     `;
 
+    return this.sendEmail({ to: params.to, subject, text, html });
+  }
+
+  async sendAccountInvitation(params: { to: string; invitationLink: string }) {
+    const subject = 'Set up your RealtyTechAI account';
+    const text =
+      `Your RealtyTechAI workspace is ready for setup.\n\n` +
+      `Choose your password using this single-use link:\n${params.invitationLink}\n\n` +
+      `The link expires in 24 hours. RealtyTechAI will never email you a password.`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+        <h2 style="margin:0 0 12px">Set up your RealtyTechAI account</h2>
+        <p>Choose your own password using this single-use invitation. The link expires in 24 hours.</p>
+        <p><a href="${params.invitationLink}" style="display:inline-block;padding:10px 14px;background:#111827;color:#fff;text-decoration:none;border-radius:6px">Choose password</a></p>
+        <p style="font-size:12px;color:#6b7280">RealtyTechAI will never email you a password. If the button does not work, paste this link into your browser: ${params.invitationLink}</p>
+      </div>`;
     return this.sendEmail({ to: params.to, subject, text, html });
   }
 

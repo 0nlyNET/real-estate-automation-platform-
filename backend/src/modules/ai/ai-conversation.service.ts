@@ -37,12 +37,14 @@ import { ConversationAiState } from './conversation-ai-state.entity';
 import { PlatformAiControl } from './platform-ai-control.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
 import { LimitsService } from '../limits/limits.service';
+import { ProviderConfigService } from '../integrations/provider-config.service';
 
-type InboundAiEvent = {
+type AiConversationEvent = {
   tenantId: string;
   leadId: string;
-  messageId: string;
+  messageId: string | null;
   channel: 'sms' | 'email';
+  triggerType: 'inbound' | 'first_response';
 };
 
 type PreflightContext = {
@@ -50,7 +52,7 @@ type PreflightContext = {
   knowledge: BrokerageKnowledge;
   state: ConversationAiState;
   lead: Lead;
-  triggeringMessage: Message;
+  triggeringMessage: Message | null;
 };
 
 type PreflightDecision =
@@ -62,10 +64,9 @@ type PreflightDecision =
       priority: 'normal' | 'high' | 'urgent';
     } & Partial<PreflightContext>);
 
-type EscalationContext = Pick<
-  PreflightContext,
-  'settings' | 'state' | 'lead' | 'triggeringMessage'
->;
+type EscalationContext = Pick<PreflightContext, 'settings' | 'state' | 'lead'> & {
+  triggeringMessage: Message;
+};
 
 const AI_RUN_LEASE_SECONDS = 120;
 const MAX_AI_RUN_ATTEMPTS = 3;
@@ -110,6 +111,7 @@ export class AiConversationService
     private readonly notifications: NotificationsService,
     private readonly operations: OperationsService,
     @Optional() private readonly limits?: LimitsService,
+    @Optional() private readonly providerConfig?: ProviderConfigService,
   ) {}
 
   onModuleInit() {
@@ -135,7 +137,8 @@ export class AiConversationService
    * handling is complete. This method never calls the model in the webhook
    * request; it only records a durable, idempotent job.
    */
-  async acceptInbound(event: InboundAiEvent) {
+  async acceptInbound(event: Omit<AiConversationEvent, 'triggerType'> & { messageId: string }) {
+    const inboundEvent: AiConversationEvent = { ...event, triggerType: 'inbound' };
     const [lead, message, settings] = await Promise.all([
       this.leads.findOne({
         where: { id: event.leadId, tenantId: event.tenantId },
@@ -177,7 +180,7 @@ export class AiConversationService
 
     const deterministicEscalation = this.policy.classifyInbound(message.body);
     if (deterministicEscalation) {
-      const run = await this.createRun(event, aiSettings.responseMode, 'blocked');
+      const run = await this.createRun(inboundEvent, aiSettings.responseMode, 'blocked');
       if (run) {
         run.errorCode = deterministicEscalation.code;
         run.sanitizedError = deterministicEscalation.reason;
@@ -197,9 +200,9 @@ export class AiConversationService
       return { status: 'escalated' as const };
     }
 
-    const preflight = await this.preflight(event);
+    const preflight = await this.preflight(inboundEvent);
     if (!preflight.allowed) {
-      const run = await this.createRun(event, aiSettings.responseMode, 'blocked');
+      const run = await this.createRun(inboundEvent, aiSettings.responseMode, 'blocked');
       if (run) {
         run.errorCode = preflight.code;
         run.sanitizedError = preflight.reason;
@@ -219,10 +222,59 @@ export class AiConversationService
       return { status: 'blocked' as const, code: preflight.code };
     }
 
-    const run = await this.createRun(event, aiSettings.responseMode, 'queued');
+    const run = await this.createRun(inboundEvent, aiSettings.responseMode, 'queued');
     return run
       ? { status: 'queued' as const, runId: run.id }
       : { status: 'duplicate' as const };
+  }
+
+  /** Queue the first AI response after lead intake without fabricating an
+   * inbound message. The normal worker, controls, consent, provider readiness,
+   * usage limits, quiet hours, and takeover locks still apply. */
+  async acceptLead(event: { tenantId: string; leadId: string }) {
+    const [lead, settings] = await Promise.all([
+      this.leads.findOne({ where: { id: event.leadId, tenantId: event.tenantId } }),
+      this.settings.findOne({ where: { tenantId: event.tenantId } }),
+    ]);
+    if (
+      !lead ||
+      !settings?.aiEnabled ||
+      settings.aiFirstResponderEnabled === false ||
+      settings.aiPaused ||
+      settings.responseMode === 'human_only'
+    ) {
+      return { status: 'ignored' as const, code: 'AI_NOT_ENABLED' };
+    }
+    const state = await this.control.getOrCreateState(
+      event.tenantId,
+      event.leadId,
+      'ai_handling',
+    );
+    if (state.ownershipStatus !== 'ai_handling') {
+      return { status: 'ignored' as const, code: 'HUMAN_CONTROLLED' };
+    }
+    const allowedChannels = new Set(
+      settings.allowedChannels?.length ? settings.allowedChannels : ['sms', 'email'],
+    );
+    const candidates: Array<'sms' | 'email'> = [];
+    if (allowedChannels.has('sms') && lead.smsEligible && lead.phone) candidates.push('sms');
+    if (allowedChannels.has('email') && lead.emailEligible && lead.email) candidates.push('email');
+    for (const channel of candidates) {
+      const aiEvent: AiConversationEvent = {
+        tenantId: event.tenantId,
+        leadId: event.leadId,
+        messageId: null,
+        channel,
+        triggerType: 'first_response',
+      };
+      const preflight = await this.preflight(aiEvent);
+      if (!preflight.allowed) continue;
+      const run = await this.createRun(aiEvent, settings.responseMode, 'queued');
+      return run
+        ? { status: 'queued' as const, runId: run.id, channel }
+        : { status: 'duplicate' as const, channel };
+    }
+    return { status: 'ignored' as const, code: 'NO_ELIGIBLE_AI_CHANNEL' };
   }
 
   async processPendingRuns(limit = 10) {
@@ -323,15 +375,19 @@ export class AiConversationService
       where: { id: runId, lockedBy: this.workerId },
     });
     if (!run) return;
-    const event: InboundAiEvent = {
+    const event: AiConversationEvent = {
       tenantId: run.tenantId,
       leadId: run.leadId,
       messageId: run.triggeringMessageId,
-      channel: 'sms',
+      channel:
+        run.promptMetadata?.channel === 'email' ? 'email' : 'sms',
+      triggerType: run.triggerType || 'inbound',
     };
-    const trigger = await this.messages.findOne({
-      where: { id: run.triggeringMessageId, leadId: run.leadId },
-    });
+    const trigger = run.triggeringMessageId
+      ? await this.messages.findOne({
+          where: { id: run.triggeringMessageId, leadId: run.leadId },
+        })
+      : null;
     if (trigger) event.channel = trigger.channel;
 
     const preflight = await this.preflight(event);
@@ -365,6 +421,7 @@ export class AiConversationService
         ),
         knowledgeVersion: preflight.knowledge.updatedAt?.toISOString() || null,
         firstAiResponse,
+        triggerType: run.triggerType,
       };
       await this.runs.save(run);
 
@@ -588,20 +645,22 @@ export class AiConversationService
     }
   }
 
-  private async preflight(event: InboundAiEvent): Promise<PreflightDecision> {
+  private async preflight(event: AiConversationEvent): Promise<PreflightDecision> {
     const [settings, knowledge, lead, trigger, control] = await Promise.all([
       this.settings.findOne({ where: { tenantId: event.tenantId } }),
       this.knowledge.findOne({ where: { tenantId: event.tenantId } }),
       this.leads.findOne({
         where: { id: event.leadId, tenantId: event.tenantId },
       }),
-      this.messages.findOne({
-        where: {
-          id: event.messageId,
-          leadId: event.leadId,
-          direction: 'inbound',
-        },
-      }),
+      event.messageId
+        ? this.messages.findOne({
+            where: {
+              id: event.messageId,
+              leadId: event.leadId,
+              direction: 'inbound',
+            },
+          })
+        : Promise.resolve(null),
       this.platformControls.findOne({ where: { id: 'global' } }),
     ]);
     const state = await this.control.getOrCreateState(
@@ -623,7 +682,7 @@ export class AiConversationService
       lead: lead || undefined,
       triggeringMessage: trigger || undefined,
     });
-    if (!settings || !lead || !trigger) {
+    if (!settings || !lead || (event.triggerType === 'inbound' && !trigger)) {
       return deny('AI_CONTEXT_MISSING', 'Required AI conversation context is unavailable.');
     }
     if (control?.paused) {
@@ -639,6 +698,16 @@ export class AiConversationService
         settings.aiPausedReason || 'Workspace AI is disabled or paused.',
       );
     }
+    const allowedChannels = settings.allowedChannels?.length
+      ? settings.allowedChannels
+      : ['sms', 'email'];
+    if (!allowedChannels.includes(event.channel)) {
+      return deny(
+        'AI_CHANNEL_NOT_ALLOWED',
+        `AI is not approved for ${event.channel} in this workspace.`,
+        'normal',
+      );
+    }
     if (state.ownershipStatus !== 'ai_handling') {
       return deny(
         'CONVERSATION_NOT_AI_CONTROLLED',
@@ -646,7 +715,7 @@ export class AiConversationService
         'normal',
       );
     }
-    if (state.lastInboundMessageIdProcessed === trigger.id) {
+    if (trigger && state.lastInboundMessageIdProcessed === trigger.id) {
       return deny('DUPLICATE_INBOUND', 'The inbound message was already processed.', 'normal');
     }
     if (
@@ -675,6 +744,8 @@ export class AiConversationService
       event.channel === 'sms'
         ? 'send_automated_sms'
         : 'send_automated_email',
+      new Date(),
+      { controlledTest: Boolean(lead.testRunId) },
     );
     if (!entitlement.allowed) {
       return deny('SERVICE_NOT_ENTITLED', entitlement.reasons.join('; '));
@@ -691,17 +762,16 @@ export class AiConversationService
       );
     }
     const provider = event.channel === 'sms' ? 'twilio' : 'sendgrid';
-    const credential = await this.credentials.findOne({
-      where: {
-        provider,
-        tenant: { id: event.tenantId } as any,
-      },
-      relations: ['tenant'],
-    });
-    const integration = credential
-      ? decryptIntegrationPayload(credential.encryptedValue)
-      : null;
-    if (!integration?.connected) {
+    const integration = this.providerConfig
+      ? event.channel === 'sms'
+        ? await this.providerConfig.resolveTwilio(event.tenantId, {
+            allowTesting: Boolean(lead.testRunId),
+          })
+        : await this.providerConfig.resolveSendGrid(event.tenantId, {
+            allowTesting: Boolean(lead.testRunId),
+          })
+      : await this.legacyProviderConfiguration(event.tenantId, provider);
+    if (!integration || ('connected' in integration && !integration.connected)) {
       return deny(
         'MESSAGE_PROVIDER_NOT_READY',
         `${provider} is not connected and tested for this workspace.`,
@@ -727,13 +797,26 @@ export class AiConversationService
     };
   }
 
+  private async legacyProviderConfiguration(
+    tenantId: string,
+    provider: 'twilio' | 'sendgrid',
+  ) {
+    const credential = await this.credentials.findOne({
+      where: { provider, tenant: { id: tenantId } as any },
+      relations: ['tenant'],
+    });
+    return credential ? decryptIntegrationPayload(credential.encryptedValue) : null;
+  }
+
   private async createRun(
-    event: InboundAiEvent,
+    event: AiConversationEvent,
     mode: WorkspaceAiSettings['responseMode'],
     status: AiRun['status'],
   ) {
     const existing = await this.runs.findOne({
-      where: { triggeringMessageId: event.messageId },
+      where: event.messageId
+        ? { triggeringMessageId: event.messageId }
+        : { leadId: event.leadId, triggerType: 'first_response' },
     });
     if (existing) return null;
     try {
@@ -742,11 +825,13 @@ export class AiConversationService
           tenantId: event.tenantId,
           leadId: event.leadId,
           triggeringMessageId: event.messageId,
+          triggerType: event.triggerType,
           provider: 'openai',
           mode,
           status,
           promptMetadata: {
             channel: event.channel,
+            triggerType: event.triggerType,
             contentsStored: false,
           },
           requestedTools: [],
@@ -930,7 +1015,9 @@ export class AiConversationService
           requiresBookingLink,
         }),
       );
-      state.lastInboundMessageIdProcessed = run.triggeringMessageId;
+      if (run.triggeringMessageId) {
+        state.lastInboundMessageIdProcessed = run.triggeringMessageId;
+      }
       state.lastAiResponseId = message.id;
       state.aiTurnCount += 1;
       state.usageUnits += run.inputUsage + run.outputUsage;
@@ -940,7 +1027,9 @@ export class AiConversationService
   }
 
   private async completeWithoutReply(run: AiRun, context: PreflightContext) {
-    context.state.lastInboundMessageIdProcessed = run.triggeringMessageId;
+    if (run.triggeringMessageId) {
+      context.state.lastInboundMessageIdProcessed = run.triggeringMessageId;
+    }
     context.state.usageUnits += run.inputUsage + run.outputUsage;
     await this.states.save(context.state);
     run.status = 'completed';
@@ -974,7 +1063,7 @@ export class AiConversationService
       context.triggeringMessage
     ) {
       await this.escalate(
-        context as PreflightContext,
+        context as EscalationContext,
         code,
         reason,
         priority,
