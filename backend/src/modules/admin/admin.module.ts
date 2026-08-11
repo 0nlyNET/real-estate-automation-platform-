@@ -23,6 +23,7 @@ import { BillingEvent } from '../billing/billing-event.entity';
 import { ServiceControlModule } from '../service-control/service-control.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { ClientSuspensionController } from './client-suspension.controller';
+import { LimitsModule } from '../limits/limits.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { ClientSuspensionController } from './client-suspension.controller';
     OnboardingModule,
     ServiceControlModule,
     IntegrationsModule,
+    LimitsModule,
   ],
   controllers: [AdminController, ClientSuspensionController],
   providers: [AdminService],

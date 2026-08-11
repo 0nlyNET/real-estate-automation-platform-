@@ -39,6 +39,9 @@ import { PlatformCredential } from '../modules/integrations/platform-credential.
 import { LeadIngestionEvent } from '../modules/lead-ingestion/lead-ingestion-event.entity';
 import { TwilioInboundMessage } from '../modules/webhooks/twilio-inbound-message.entity';
 import { SendGridWebhookEvent } from '../modules/webhooks/sendgrid-webhook-event.entity';
+import { UsageBucket } from '../modules/limits/usage-bucket.entity';
+import { UsagePolicy } from '../modules/limits/usage-policy.entity';
+import { UsageReservation } from '../modules/limits/usage-reservation.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -82,4 +85,7 @@ export const databaseEntities = [
   ConversationAiState,
   AiRun,
   PlatformAiControl,
+  UsagePolicy,
+  UsageBucket,
+  UsageReservation,
 ] as const;

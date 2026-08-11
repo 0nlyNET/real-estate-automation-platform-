@@ -9,6 +9,8 @@ import { Credential } from '../settings/credential.entity';
 import { SequenceStep } from '../sequences/sequence-step.entity';
 import { OperationsModule } from '../operations/operations.module';
 import { CommonModule } from '../../common/common.module';
+import { LimitsModule } from '../limits/limits.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -21,6 +23,8 @@ import { CommonModule } from '../../common/common.module';
     ]),
     OperationsModule,
     CommonModule,
+    LimitsModule,
+    AuditModule,
   ],
   controllers: [OnboardingController],
   providers: [OnboardingService],

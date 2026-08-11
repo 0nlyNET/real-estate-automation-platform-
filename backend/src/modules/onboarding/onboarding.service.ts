@@ -23,6 +23,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PlatformOperatorsService } from '../../common/platform-operators.service';
 import { isSafeBookingUrl } from '../../common/booking-link';
 import { normalizePhoneE164 } from '../../common/phone';
+import { LimitsService } from '../limits/limits.service';
+import { AuditService } from '../audit/audit.service';
 
 type ReadinessCategory =
   | 'client_information'
@@ -130,6 +132,8 @@ export class OnboardingService {
     private readonly operations: OperationsService,
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly platformOperators?: PlatformOperatorsService,
+    @Optional() private readonly limits?: LimitsService,
+    @Optional() private readonly audit?: AuditService,
   ) {}
 
   async getOrCreate(tenantId: string) {
@@ -459,6 +463,13 @@ export class OnboardingService {
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException('Workspace not found');
     const settings = await this.settings.findOne({ where: { tenantId } });
+    const [tenantUsagePolicy, platformUsagePolicy, safetyIncidentOpen] =
+      await Promise.all([
+        this.limits?.getTenantPolicy(tenantId) || Promise.resolve(null),
+        this.limits?.getPlatformPolicy() || Promise.resolve(null),
+        this.operations.hasOpenSafetyIncident?.(tenantId) ||
+          Promise.resolve(false),
+      ]);
     const credentials = await this.credentials.find({
       where: { tenant: { id: tenantId } as any },
       relations: ['tenant'],
@@ -721,11 +732,111 @@ export class OnboardingService {
         hasText(record.consentConfiguration, 'optOutProcess') &&
         hasText(record.consentConfiguration, 'consentPolicyVersion') &&
         record.consentConfiguration.purchasedOrColdListsExcluded === true &&
-        record.consentConfiguration.clientResponsibilityAcknowledged === true,
+        record.consentConfiguration.clientResponsibilityAcknowledged === true &&
+        record.consentConfiguration.lawfulLeadCollectionCertified === true &&
+        hasText(record.consentConfiguration, 'termsAcceptedVersion') &&
+        hasText(record.consentConfiguration, 'privacyAcceptedVersion') &&
+        hasText(record.consentConfiguration, 'acceptableUseAcceptedVersion') &&
+        hasText(record.consentConfiguration, 'dataRetentionAcceptedVersion'),
       true,
       {
         nextAction:
           'Provide and acknowledge the exact consent language, collection method, source ownership, opt-out process, and evidence responsibilities.',
+      },
+    );
+    add(
+      'usage_limits',
+      'Tenant and platform usage/cost limits are configured',
+      Boolean(
+        tenantUsagePolicy?.enabled &&
+          platformUsagePolicy?.enabled &&
+          tenantUsagePolicy.maxSmsPerHour > 0 &&
+          tenantUsagePolicy.maxSmsPerDay > 0 &&
+          tenantUsagePolicy.maxEmailsPerHour > 0 &&
+          tenantUsagePolicy.maxEmailsPerDay > 0 &&
+          tenantUsagePolicy.maxAiCallsPerDay > 0 &&
+          Number(tenantUsagePolicy.hardCostThresholdUsd) > 0,
+      ),
+      true,
+      {
+        category: 'platform_control',
+        responsibleParty: 'jayden',
+        nextAction:
+          'Configure tenant and platform hourly, daily, AI, warning-cost, and hard-cost safety limits.',
+      },
+    );
+    const production = process.env.NODE_ENV === 'production';
+    const restoreTestedAt = new Date(
+      String(process.env.BACKUP_RESTORE_TESTED_AT || ''),
+    );
+    const restoreAge = Date.now() - restoreTestedAt.getTime();
+    const disasterRecoveryReady =
+      !production ||
+      (Number.isFinite(restoreTestedAt.getTime()) &&
+        restoreAge >= 0 &&
+        restoreAge <= 90 * 24 * 60 * 60_000 &&
+        Number(process.env.BACKUP_RPO_MINUTES) <= 60 &&
+        Number(process.env.BACKUP_RTO_MINUTES) <= 240 &&
+        Number(process.env.BACKUP_RETENTION_DAYS) >= 7 &&
+        process.env.BACKUP_RESTORE_ISOLATED_VERIFIED === 'true' &&
+        process.env.BACKUP_RESTORE_CREDENTIALS_PROTECTED === 'true');
+    add(
+      'disaster_recovery',
+      'Production backup restore is proven within RPO/RTO targets',
+      disasterRecoveryReady,
+      true,
+      {
+        category: 'platform_control',
+        responsibleParty: 'jayden',
+        statusMessage: 'A recent isolated production restore test is not recorded',
+        nextAction:
+          'Complete the disaster-recovery runbook, verify restored leads/messages, and record the protected evidence variables.',
+      },
+    );
+    const legalReviewedAt = new Date(
+      String(process.env.LEGAL_DOCUMENTS_REVIEWED_AT || ''),
+    );
+    const legalReviewReady =
+      !production ||
+      (Number.isFinite(legalReviewedAt.getTime()) &&
+        Date.now() - legalReviewedAt.getTime() >= 0 &&
+        Date.now() - legalReviewedAt.getTime() <= 365 * 24 * 60 * 60_000);
+    add(
+      'legal_review',
+      'Customer-facing terms and messaging obligations received legal review',
+      legalReviewReady,
+      true,
+      {
+        category: 'platform_control',
+        responsibleParty: 'jayden',
+        nextAction:
+          'Have qualified counsel review the actual managed-service terms, privacy, acceptable-use, cancellation, messaging, and retention documents; then record the review date.',
+      },
+    );
+    add(
+      'tenant_safety',
+      'No unresolved usage, quality, or security safety incident exists',
+      !safetyIncidentOpen,
+      true,
+      {
+        category: 'platform_control',
+        responsibleParty: 'jayden',
+        nextAction:
+          'Resolve the open safety incident and document the corrective action before activation.',
+      },
+    );
+    add(
+      'testing_started',
+      'Workspace entered controlled TESTING mode',
+      ['TESTING', 'READY_FOR_ACTIVATION', 'ACTIVE', 'PAUSED'].includes(
+        tenant.lifecycleStatus,
+      ),
+      true,
+      {
+        category: 'controlled_live_test',
+        responsibleParty: 'jayden',
+        nextAction:
+          'Start controlled TESTING mode after profile, billing, providers, compliance, and safety limits are ready.',
       },
     );
     add(
@@ -997,13 +1108,24 @@ export class OnboardingService {
         ? record.activationStatus
         : blockers.length === 0
           ? 'ready'
+          : record.activationStatus === 'testing'
+            ? 'testing'
           : record.activationStatus === 'blocked'
             ? 'blocked'
             : 'incomplete';
+    const testingBlockers = blockers.filter(
+      (item) =>
+        item.category !== 'controlled_live_test' &&
+        item.category !== 'client_approval' &&
+        item.category !== 'platform_approval' &&
+        item.key !== 'global_pause',
+    );
     return {
       state: tenant.lifecycleStatus,
       activationStatus: computedActivationStatus,
       ready: blockers.length === 0,
+      testingReady: testingBlockers.length === 0,
+      testingBlockers,
       blockers,
       required: items.filter((item) => item.required),
       optional: items.filter((item) => !item.required),
@@ -1061,6 +1183,50 @@ export class OnboardingService {
       },
       lastUpdatedAt: record.updatedAt,
     };
+  }
+
+  async beginTesting(tenantId: string, operatorId: string) {
+    const readiness = await this.readiness(tenantId);
+    if (!readiness.testingReady) {
+      throw new BadRequestException({
+        code: 'TESTING_BLOCKED',
+        message: 'Workspace is not ready for controlled testing',
+        blockers: readiness.testingBlockers,
+      });
+    }
+    const tenant = await this.tenants.findOne({ where: { id: tenantId } });
+    if (!tenant) throw new NotFoundException('Workspace not found');
+    const record = await this.getOrCreate(tenantId);
+    let settings = await this.settings.findOne({ where: { tenantId } });
+    if (!settings) settings = this.settings.create({ tenantId });
+    const beforeState = {
+      lifecycleStatus: tenant.lifecycleStatus,
+      activationStatus: record.activationStatus,
+      automationsEnabled: settings.automationsEnabled,
+    };
+    tenant.lifecycleStatus = 'TESTING';
+    record.activationStatus = 'testing';
+    record.blockedReason = null;
+    settings.automationsEnabled = false;
+    await this.tenants.manager.transaction(async (manager) => {
+      await manager.save(tenant);
+      await manager.save(record);
+      await manager.save(settings!);
+    });
+    await this.audit?.recordSystemEvent({
+      tenantId,
+      eventType: 'tenant.testing_started',
+      resourceType: 'tenant',
+      resourceId: tenantId,
+      beforeState,
+      afterState: {
+        lifecycleStatus: 'TESTING',
+        activationStatus: 'testing',
+        automationsEnabled: false,
+        initiatedBy: operatorId,
+      },
+    });
+    return this.readiness(tenantId);
   }
 
   async activate(tenantId: string, operatorId: string) {

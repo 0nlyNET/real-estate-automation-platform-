@@ -1,4 +1,12 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import {
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -21,6 +29,8 @@ import { ComplianceService } from '../compliance/compliance.service';
 import { LeadStageEvent } from './lead-stage-event.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { normalizePhoneE164 } from '../../common/phone';
+import { createHash } from 'crypto';
+import { LimitsService } from '../limits/limits.service';
 
 @Injectable()
 export class LeadsService {
@@ -51,6 +61,7 @@ export class LeadsService {
     private readonly routingService: RoutingService,
     private readonly complianceService: ComplianceService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly limits?: LimitsService,
   ) {}
 
   private async applyRoutingRules(lead: Lead) {
@@ -213,6 +224,20 @@ export class LeadsService {
       await this.logLeadEvent(existing, 'deduped', payload as any);
       await this.complianceService.recordLeadConsent(tenant.id, existing.id, payload.consent);
       return existing;
+    }
+
+    const usage = await this.limits?.reserveUsage({
+      tenantId: tenant.id,
+      metric: 'lead',
+      idempotencyKey: `lead-intake:${createHash('sha256')
+        .update(`${tenant.id}:${email || ''}:${phone || ''}:${fullName}`)
+        .digest('hex')}`,
+    });
+    if (usage && !usage.ok) {
+      throw new HttpException(
+        { code: usage.code, message: usage.message },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
     // Apply the workspace routing configuration for the managed service.

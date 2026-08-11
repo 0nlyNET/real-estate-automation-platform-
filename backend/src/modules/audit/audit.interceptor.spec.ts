@@ -35,9 +35,14 @@ describe('AuditInterceptor', () => {
     expect(audit.record).toHaveBeenCalledTimes(1);
     expect(audit.record).toHaveBeenCalledWith({
       tenantId: 'tenant-1',
+      actorType: 'platform_operator',
       actorId: 'admin-1',
       actorEmail: 'admin@example.com',
       action: 'PATCH /leads/lead-1',
+      eventType: 'PATCH /leads/lead-1',
+      resourceType: 'leads',
+      resourceId: undefined,
+      ipAddress: null,
       method: 'PATCH',
       path: '/leads/lead-1',
       statusCode: 200,

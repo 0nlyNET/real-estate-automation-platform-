@@ -17,6 +17,7 @@ import { StripeSetupFeeTracking1785801600001 } from "./migrations/202608040001-s
 import { FirstClientSafetyPipeline1785974400001 } from "./migrations/202608060001-first-client-safety-pipeline";
 import { MessagingDeliveryReliability1786060800001 } from "./migrations/202608070001-messaging-delivery-reliability";
 import { ClientReadinessObservability1786060800002 } from "./migrations/202608070002-client-readiness-observability";
+import { LaunchSafeguards1786406400001 } from "./migrations/202608110001-launch-safeguards";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -121,7 +122,7 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 41,
+      expectedTables: 44,
       actualTables: 12,
       missingTables: [
         "admin_notification_preferences",
@@ -152,6 +153,9 @@ describe("deployed legacy schema reproduction", () => {
         "teams",
         "tenant_quiet_hours",
         "twilio_inbound_messages",
+        "usage_buckets",
+        "usage_policies",
+        "usage_reservations",
         "workspace_ai_settings",
       ],
     });
@@ -170,12 +174,13 @@ describe("deployed legacy schema reproduction", () => {
     await new FirstClientSafetyPipeline1785974400001().up(queryRunner);
     await new MessagingDeliveryReliability1786060800001().up(queryRunner);
     await new ClientReadinessObservability1786060800002().up(queryRunner);
+    await new LaunchSafeguards1786406400001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 41,
-      actualTables: 41,
+      expectedTables: 44,
+      actualTables: 44,
       missingTables: [],
       missingColumns: [],
     });
@@ -238,18 +243,20 @@ describe("deployed legacy schema reproduction", () => {
     await new FirstClientSafetyPipeline1785974400001().up(queryRunner);
     await new MessagingDeliveryReliability1786060800001().up(queryRunner);
     await new ClientReadinessObservability1786060800002().up(queryRunner);
+    await new LaunchSafeguards1786406400001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 41,
-      actualTables: 41,
+      expectedTables: 44,
+      actualTables: 44,
       missingTables: [],
       missingColumns: [],
     });
 
     const rollbackRunner = dataSource.createQueryRunner();
     await rollbackRunner.connect();
+    await new LaunchSafeguards1786406400001().down(rollbackRunner);
     await new ClientReadinessObservability1786060800002().down(rollbackRunner);
     await new MessagingDeliveryReliability1786060800001().down(rollbackRunner);
     await new FirstClientSafetyPipeline1785974400001().down(rollbackRunner);

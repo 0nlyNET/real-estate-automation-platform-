@@ -166,6 +166,18 @@ describe('SendGrid delivery event webhook', () => {
       item.lead.tenantId,
       { providerRejection: true },
     );
+    expect(item.compliance.addOptOut).toHaveBeenCalledWith(
+      item.lead.tenantId,
+      'email',
+      item.lead.email,
+      'provider_delivery_failure',
+      'sendgrid_event_webhook',
+    );
+    expect(item.sequences.stopForLead).toHaveBeenCalledWith(
+      item.lead.tenantId,
+      item.lead.id,
+      'opt_out',
+    );
   });
 
   it.each(['spamreport', 'unsubscribe', 'group_unsubscribe'])(

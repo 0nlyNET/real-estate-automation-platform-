@@ -23,6 +23,7 @@ describe('AdminController role-sensitive onboarding evidence', () => {
       onboarding as any,
       serviceControl as any,
       platformIntegrations as any,
+      {} as any,
     );
     return {
       controller,

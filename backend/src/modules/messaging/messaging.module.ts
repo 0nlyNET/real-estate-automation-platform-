@@ -19,6 +19,7 @@ import { AiModule } from '../ai/ai.module';
 import { Appointment } from '../client-operations/appointment.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { MessageSafetyService } from './message-safety.service';
+import { LimitsModule } from '../limits/limits.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { MessageSafetyService } from './message-safety.service';
     ClientOperationsModule,
     SettingsModule,
     AiModule,
+    LimitsModule,
   ],
   controllers: [MessagingController],
   providers: [MessagingService, InboxSendService, MessageSafetyService],

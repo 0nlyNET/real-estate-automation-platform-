@@ -17,7 +17,7 @@ import { OperationsTask } from '../operations/operations-task.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Tenant } from '../tenants/tenant.entity';
 
-export type ServiceSuspensionSource = 'manual' | 'billing';
+export type ServiceSuspensionSource = 'manual' | 'billing' | 'safety';
 
 export type ServiceControlActor = {
   id: string;

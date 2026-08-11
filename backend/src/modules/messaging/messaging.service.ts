@@ -25,6 +25,7 @@ import { ClientOperationsService } from '../client-operations/client-operations.
 import { NotificationsService } from '../notifications/notifications.service';
 import { AiConversationControlService } from '../ai/ai-conversation-control.service';
 import { MessageSafetyService } from './message-safety.service';
+import { LimitsService } from '../limits/limits.service';
 
 type ProviderConfig = {
   sendgrid?: {
@@ -70,6 +71,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     private readonly aiControl: AiConversationControlService,
     @Optional() private readonly clientOperations?: ClientOperationsService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly limits?: LimitsService,
   ) {}
 
   onModuleInit(): void {
@@ -386,6 +388,20 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
           });
           if (!safety.allowed) return false;
 
+          const usage = await this.limits?.reserveUsage({
+            tenantId: lead.tenantId,
+            metric: message.channel === 'email' ? 'email' : 'sms',
+            idempotencyKey: `message:${message.id}`,
+          });
+          if (usage && !usage.ok) {
+            await this.skipMessage(
+              message,
+              usage.code,
+              usage.message,
+            );
+            return false;
+          }
+
           if (message.authorship === 'ai') {
             const exclusive = await this.aiControl.runAiSendExclusive(
               lead.tenantId,
@@ -518,6 +534,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       replyTo,
       subject: message.subject || `Follow-up from ${fromName}`,
       text,
+      categories: ['lead_follow_up'],
       customArgs: { rta_message_id: message.id },
       ...(message.inReplyToProviderMessageId
         ? {

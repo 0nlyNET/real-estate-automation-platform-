@@ -170,4 +170,16 @@ export class OperationsService {
       })
       .getCount();
   }
+
+  async hasOpenSafetyIncident(tenantId: string) {
+    const count = await this.repo
+      .createQueryBuilder('task')
+      .where('task.tenantId = :tenantId', { tenantId })
+      .andWhere('task.status != :resolved', { resolved: 'resolved' })
+      .andWhere('task.category IN (:...categories)', {
+        categories: ['usage_limit', 'client_quality', 'security_incident'],
+      })
+      .getCount();
+    return count > 0;
+  }
 }

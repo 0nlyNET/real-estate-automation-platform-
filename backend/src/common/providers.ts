@@ -9,6 +9,7 @@ type SendGridEmail = {
   html?: string;
   customArgs?: Record<string, string>;
   headers?: Record<string, string>;
+  categories?: string[];
 };
 
 export type ProviderRequestError = Error & {
@@ -37,6 +38,9 @@ export async function sendSendGridEmail(
       ],
       from: { email: message.fromEmail, name: message.fromName || 'RealtyTechAI' },
       ...(message.replyTo ? { reply_to: { email: message.replyTo } } : {}),
+      ...(message.categories?.length
+        ? { categories: message.categories.slice(0, 10) }
+        : {}),
       subject: message.subject,
       content: [
         { type: 'text/plain', value: message.text },

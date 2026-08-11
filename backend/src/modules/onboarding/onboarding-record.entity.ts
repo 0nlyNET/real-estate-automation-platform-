@@ -86,7 +86,13 @@ export class OnboardingRecord {
   operatorApprovedAt?: Date | null;
 
   @Column({ name: 'activation_status', type: 'varchar', length: 40, default: 'incomplete' })
-  activationStatus!: 'incomplete' | 'blocked' | 'ready' | 'active' | 'paused';
+  activationStatus!:
+    | 'incomplete'
+    | 'blocked'
+    | 'testing'
+    | 'ready'
+    | 'active'
+    | 'paused';
 
   @Column({ name: 'blocked_reason', type: 'text', nullable: true })
   blockedReason?: string | null;

@@ -30,10 +30,16 @@ describe('AdminService client onboarding', () => {
       create: jest.fn((value) => value),
       save: jest.fn(async (value) => ({ id: 'owner-1', ...value })),
     };
+    const usagePolicyRepository = {
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({ id: 'usage-policy-1', ...value })),
+    };
     const manager = {
-      getRepository: jest.fn((entity: { name: string }) =>
-        entity.name === 'Tenant' ? tenantRepository : userRepository,
-      ),
+      getRepository: jest.fn((entity: { name: string }) => {
+        if (entity.name === 'Tenant') return tenantRepository;
+        if (entity.name === 'UsagePolicy') return usagePolicyRepository;
+        return userRepository;
+      }),
     };
     const dataSource = {
       transaction: jest.fn(async (callback) => callback(manager)),
@@ -62,13 +68,20 @@ describe('AdminService client onboarding', () => {
       mail,
       tenantRepository,
       userRepository,
+      usagePolicyRepository,
     };
   }
 
   it('creates an inactive onboarding workspace and owner in one transaction', async () => {
     process.env.FRONTEND_URL = 'https://www.realtytechai.app/';
-    const { service, dataSource, mail, tenantRepository, userRepository } =
-      setup();
+    const {
+      service,
+      dataSource,
+      mail,
+      tenantRepository,
+      userRepository,
+      usagePolicyRepository,
+    } = setup();
 
     const result = await service.createClient({
       businessName: ' Lakeview Realty ',
@@ -92,6 +105,14 @@ describe('AdminService client onboarding', () => {
         isEmailVerified: false,
         mustChangePassword: true,
         passwordHash: expect.not.stringContaining('Temp-'),
+      }),
+    );
+    expect(usagePolicyRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeType: 'tenant',
+        scopeId: 'tenant-1',
+        warningPercentage: 80,
+        enabled: true,
       }),
     );
     expect(result.temporaryPassword).toMatch(/^Temp-[A-Za-z0-9_-]{20,}$/);

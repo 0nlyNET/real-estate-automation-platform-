@@ -692,12 +692,17 @@ export class WebhooksService {
           dedupeOpen: true,
         });
       }
-      if (result.optOut && result.message?.lead?.email) {
+      if (
+        (result.optOut || result.deliveryFailed) &&
+        result.message?.lead?.email
+      ) {
         await this.compliance.addOptOut(
           result.message.lead.tenantId,
           'email',
           result.message.lead.email,
-          'provider_unsubscribe_event',
+          result.optOut
+            ? 'provider_unsubscribe_event'
+            : 'provider_delivery_failure',
           'sendgrid_event_webhook',
         );
         await this.sequences.stopForLead(

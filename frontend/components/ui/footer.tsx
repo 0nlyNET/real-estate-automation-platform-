@@ -83,6 +83,16 @@ export function Footer() {
                   Refund Policy
                 </Link>
               </li>
+              <li>
+                <Link href="/acceptable-use" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Acceptable Use
+                </Link>
+              </li>
+              <li>
+                <Link href="/data-retention" className="text-sm text-muted-foreground transition-colors hover:text-primary">
+                  Data Retention
+                </Link>
+              </li>
             </ul>
           </div>
         </div>

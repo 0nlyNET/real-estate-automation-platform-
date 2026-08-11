@@ -136,6 +136,11 @@ describe('operator-controlled workspace activation', () => {
         consentPolicyVersion: 'v1',
         purchasedOrColdListsExcluded: true,
         clientResponsibilityAcknowledged: true,
+        lawfulLeadCollectionCertified: true,
+        termsAcceptedVersion: '2026-08-11',
+        privacyAcceptedVersion: '2026-08-11',
+        acceptableUseAcceptedVersion: '2026-08-11',
+        dataRetentionAcceptedVersion: '2026-08-11',
       },
       integrationConfiguration: {
         providerAccountOwner: 'Lakeview Realty',
@@ -213,7 +218,7 @@ describe('operator-controlled workspace activation', () => {
       findOne: jest.fn().mockResolvedValue({
         id: 'tenant-1',
         status: 'active',
-        lifecycleStatus: 'ONBOARDING',
+        lifecycleStatus: 'TESTING',
       }),
     };
     const stepsBuilder: any = {};
@@ -240,6 +245,20 @@ describe('operator-controlled workspace activation', () => {
       { find: jest.fn().mockImplementation(async () => credentialRows) } as any,
       { createQueryBuilder: jest.fn(() => stepsBuilder) } as any,
       { createTask: jest.fn() } as any,
+      undefined,
+      undefined,
+      {
+        getTenantPolicy: jest.fn().mockResolvedValue({
+          enabled: true,
+          maxSmsPerHour: 60,
+          maxSmsPerDay: 500,
+          maxEmailsPerHour: 120,
+          maxEmailsPerDay: 1000,
+          maxAiCallsPerDay: 200,
+          hardCostThresholdUsd: '30.0000',
+        }),
+        getPlatformPolicy: jest.fn().mockResolvedValue({ enabled: true }),
+      } as any,
     );
 
     await expect(service.readiness('tenant-1')).resolves.toMatchObject({

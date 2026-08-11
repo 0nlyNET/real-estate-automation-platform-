@@ -2,7 +2,6 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, LessThan, Repository } from 'typeorm';
 import { operationalEvent } from '../../common/operational-log';
-import { AuditLog } from '../audit/audit-log.entity';
 import { StripeWebhookEvent } from '../billing/stripe-webhook-event.entity';
 import { AdminNotification } from './notification.entity';
 import { AiRun } from '../ai/ai-run.entity';
@@ -13,7 +12,6 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
 
   constructor(
-    @InjectRepository(AuditLog) private readonly auditLogs: Repository<AuditLog>,
     @InjectRepository(StripeWebhookEvent)
     private readonly webhookLogs: Repository<StripeWebhookEvent>,
     @InjectRepository(AdminNotification)
@@ -57,7 +55,6 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
           return 0;
         }
       };
-      const audit = await safely('audit events', this.auditLogs);
       const webhook = await safely('webhook logs', this.webhookLogs);
       const notification = await safely('notifications', this.notifications);
       const aiRun = await safely('AI operational records', this.aiRuns);
@@ -65,7 +62,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
         ok: errors.length === 0,
         cutoff: cutoff.toISOString(),
         deleted: {
-          auditEvents: audit,
+          auditEvents: 0,
           webhookProcessingLogs: webhook,
           notifications: notification,
           aiRuns: aiRun,

@@ -27,6 +27,7 @@ import {
   ImpersonateDto,
   SetPlatformStaffDto,
   SuspendClientServicesDto,
+  UsagePolicyDto,
 } from './admin.dto';
 import { AuditService } from '../audit/audit.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
@@ -50,6 +51,7 @@ import {
   TestTwilioDto,
 } from '../integrations/integrations.dto';
 import type { ManagedMessagingProvider } from '../integrations/platform-integrations.service';
+import { LimitsService } from '../limits/limits.service';
 
 @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
 @Controller('admin')
@@ -61,6 +63,7 @@ export class AdminController {
     private readonly onboarding: OnboardingService,
     private readonly serviceControl: ServiceControlService,
     private readonly platformIntegrations: PlatformIntegrationsService,
+    private readonly limits: LimitsService,
   ) {}
 
   @Get('overview')
@@ -76,6 +79,37 @@ export class AdminController {
   @Get('tenants/:tenantId/readiness')
   readiness(@Param('tenantId') tenantId: string) {
     return this.onboarding.readiness(tenantId);
+  }
+
+  @Get('tenants/:tenantId/usage-policy')
+  @UseGuards(PlatformAdminGuard)
+  async tenantUsagePolicy(@Param('tenantId') tenantId: string) {
+    return this.limits.publicPolicy(
+      await this.limits.ensureTenantPolicy(tenantId),
+    );
+  }
+
+  @Put('tenants/:tenantId/usage-policy')
+  @UseGuards(PlatformAdminGuard)
+  updateTenantUsagePolicy(
+    @Param('tenantId') tenantId: string,
+    @Body() body: UsagePolicyDto,
+  ) {
+    return this.limits.updateTenantPolicy(tenantId, body);
+  }
+
+  @Get('platform-usage-policy')
+  @UseGuards(PlatformAdminGuard)
+  async platformUsagePolicy() {
+    const policy = await this.limits.getPlatformPolicy();
+    if (!policy) throw new NotFoundException('Platform usage policy is missing');
+    return this.limits.publicPolicy(policy);
+  }
+
+  @Put('platform-usage-policy')
+  @UseGuards(PlatformAdminGuard)
+  updatePlatformUsagePolicy(@Body() body: UsagePolicyDto) {
+    return this.limits.updatePlatformPolicy(body);
   }
 
   @Post('tenants/:tenantId/onboarding-evidence')
@@ -98,6 +132,12 @@ export class AdminController {
   @UseGuards(PlatformAdminGuard)
   activate(@Param('tenantId') tenantId: string, @Req() req: any) {
     return this.onboarding.activate(tenantId, req.user.sub);
+  }
+
+  @Post('tenants/:tenantId/testing')
+  @UseGuards(PlatformAdminGuard)
+  beginTesting(@Param('tenantId') tenantId: string, @Req() req: any) {
+    return this.onboarding.beginTesting(tenantId, req.user.sub);
   }
 
   @Post('tenants/:tenantId/pause')

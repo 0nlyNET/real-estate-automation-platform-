@@ -37,6 +37,7 @@ import { RealtorComModule } from './modules/realtor-com/realtor-com.module';
 import { ServiceControlModule } from './modules/service-control/service-control.module';
 import { AiModule } from './modules/ai/ai.module';
 import { LeadIngestionModule } from './modules/lead-ingestion/lead-ingestion.module';
+import { LimitsModule } from './modules/limits/limits.module';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { LeadIngestionModule } from './modules/lead-ingestion/lead-ingestion.mod
     ClientOperationsModule,
     AiModule,
     LeadIngestionModule,
+    LimitsModule,
   ],
   controllers: [AppController],
   providers: [

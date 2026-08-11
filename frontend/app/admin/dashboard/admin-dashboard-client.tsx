@@ -277,6 +277,8 @@ type TenantReadiness = {
   state: string
   activationStatus: string
   ready: boolean
+  testingReady: boolean
+  testingBlockers: ReadinessItem[]
   blockers: ReadinessItem[]
   required: ReadinessItem[]
   enabledServices: { sms: boolean; email: boolean; booking: boolean }
@@ -285,6 +287,20 @@ type TenantReadiness = {
     sendgrid: { required: boolean; status: string; recorded: boolean }
   }
   lastUpdatedAt?: string
+}
+
+type UsagePolicy = {
+  id: string
+  maxSmsPerHour: number
+  maxSmsPerDay: number
+  maxEmailsPerHour: number
+  maxEmailsPerDay: number
+  maxAiCallsPerDay: number
+  maxLeadsPerHour: number
+  warningPercentage: number
+  warningCostThresholdUsd: number
+  hardCostThresholdUsd: number
+  enabled: boolean
 }
 
 type ClientSetup = {
@@ -440,6 +456,7 @@ const onboardingGroups: Array<{ label: string; keys: string[] }> = [
     keys: ["consent_policy", "twilio", "sendgrid", "twilio_provider_approval", "sendgrid_provider_approval", "sms_template", "email_template"],
   },
   { label: "Test lead completed", keys: ["test_lead", "inbound_sms", "inbound_email", "stop", "provider_rejection"] },
+  { label: "Safety configured", keys: ["usage_limits", "disaster_recovery", "legal_review", "tenant_safety"] },
   { label: "Launch approved", keys: ["client_approval", "operator_approval", "billing_evidence", "global_pause"] },
 ]
 
@@ -551,6 +568,7 @@ export function AdminDashboardClient({
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null)
   const [tenantUsers, setTenantUsers] = useState<TenantUser[]>([])
   const [readiness, setReadiness] = useState<TenantReadiness | null>(null)
+  const [usagePolicy, setUsagePolicy] = useState<UsagePolicy | null>(null)
   const [clientDetailsLoading, setClientDetailsLoading] = useState(false)
   const [clientDetailsError, setClientDetailsError] = useState("")
   const [clientCommunications, setClientCommunications] = useState<Communication[]>([])
@@ -639,14 +657,19 @@ export function AdminDashboardClient({
     setClientDetailsError("")
     setTenantUsers([])
     setReadiness(null)
+    setUsagePolicy(null)
     try {
-      const [users, status] = await Promise.all([
+      const [users, status, limits] = await Promise.all([
         apiFetch<TenantUser[]>(`/admin/tenants/${tenant.id}/users`),
         apiFetch<TenantReadiness>(`/admin/tenants/${tenant.id}/readiness`),
+        isOwner
+          ? apiFetch<UsagePolicy>(`/admin/tenants/${tenant.id}/usage-policy`)
+          : Promise.resolve(null),
       ])
       if (requestId !== clientRequest.current) return
       setTenantUsers(users)
       setReadiness(status)
+      setUsagePolicy(limits)
     } catch (cause) {
       if (requestId === clientRequest.current) {
         setClientDetailsError(messageFor(cause, "Client details could not be loaded"))
@@ -654,7 +677,7 @@ export function AdminDashboardClient({
     } finally {
       if (requestId === clientRequest.current) setClientDetailsLoading(false)
     }
-  }, [])
+  }, [isOwner])
 
   useEffect(() => {
     if (!initialTenantId) {
@@ -662,6 +685,7 @@ export function AdminDashboardClient({
       setSelectedTenant(null)
       setTenantUsers([])
       setReadiness(null)
+      setUsagePolicy(null)
       return
     }
     const tenant = tenants.find((item) => item.id === initialTenantId)
@@ -866,6 +890,45 @@ export function AdminDashboardClient({
       setNotice("Onboarding evidence saved.")
     } catch (cause) {
       setError(messageFor(cause, "Evidence could not be saved"))
+    }
+  }
+
+  async function startTesting() {
+    if (!selectedTenant) return
+    try {
+      const status = await apiFetch<TenantReadiness>(
+        `/admin/tenants/${selectedTenant.id}/testing`,
+        { method: "POST" },
+      )
+      setReadiness(status)
+      setTenants((current) =>
+        current.map((tenant) =>
+          tenant.id === selectedTenant.id
+            ? { ...tenant, lifecycleStatus: "TESTING" }
+            : tenant,
+        ),
+      )
+      setSelectedTenant((current) =>
+        current ? { ...current, lifecycleStatus: "TESTING" } : current,
+      )
+      setNotice("Controlled testing mode started. Live automation remains off.")
+    } catch (cause) {
+      setError(messageFor(cause, "Testing mode could not be started"))
+    }
+  }
+
+  async function saveUsagePolicy() {
+    if (!selectedTenant || !usagePolicy) return
+    try {
+      const saved = await apiFetch<UsagePolicy>(
+        `/admin/tenants/${selectedTenant.id}/usage-policy`,
+        { method: "PUT", body: usagePolicy },
+      )
+      setUsagePolicy(saved)
+      await refreshReadiness()
+      setNotice("Usage and cost safety limits saved.")
+    } catch (cause) {
+      setError(messageFor(cause, "Usage limits could not be saved"))
     }
   }
 
@@ -1867,6 +1930,61 @@ export function AdminDashboardClient({
                     />
                   )}
                 </Section>
+                {isOwner && usagePolicy ? (
+                  <Section
+                    title="Usage and cost safety limits"
+                    subtitle="The platform warns at the configured percentage and pauses automation at a hard limit."
+                  >
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {[
+                        ["SMS per hour", "maxSmsPerHour"],
+                        ["SMS per day", "maxSmsPerDay"],
+                        ["Emails per hour", "maxEmailsPerHour"],
+                        ["Emails per day", "maxEmailsPerDay"],
+                        ["AI calls per day", "maxAiCallsPerDay"],
+                        ["New leads per hour", "maxLeadsPerHour"],
+                        ["Warning percentage", "warningPercentage"],
+                        ["Daily cost warning (USD)", "warningCostThresholdUsd"],
+                        ["Daily hard cost stop (USD)", "hardCostThresholdUsd"],
+                      ].map(([labelText, key]) => (
+                        <label key={key} className="space-y-2 text-sm">
+                          <span className="font-medium">{labelText}</span>
+                          <Input
+                            type="number"
+                            min={key === "warningPercentage" ? 50 : 0}
+                            max={key === "warningPercentage" ? 99 : undefined}
+                            step={key.includes("Cost") || key.includes("cost") ? "0.01" : "1"}
+                            value={String(usagePolicy[key as keyof UsagePolicy])}
+                            onChange={(event) =>
+                              setUsagePolicy((current) =>
+                                current
+                                  ? { ...current, [key]: Number(event.target.value) }
+                                  : current,
+                              )
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" onClick={() => void saveUsagePolicy()}>
+                        Save safety limits
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={!readiness?.testingReady || selectedTenant.lifecycleStatus === "TESTING"}
+                        onClick={() => void startTesting()}
+                      >
+                        {selectedTenant.lifecycleStatus === "TESTING" ? "Testing mode active" : "Start controlled testing"}
+                      </Button>
+                    </div>
+                    {!readiness?.testingReady && readiness?.testingBlockers?.length ? (
+                      <p className="text-xs text-muted-foreground">
+                        Testing is blocked by: {readiness.testingBlockers.map((item) => item.label).join("; ")}.
+                      </p>
+                    ) : null}
+                  </Section>
+                ) : null}
                 <Section
                   title="Launch review"
                   subtitle="Record controlled-test evidence and approvals without changing client-entered data."

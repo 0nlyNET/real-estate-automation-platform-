@@ -35,6 +35,7 @@ export type TenantStatus =
 export type WorkspaceLifecycleStatus =
   | 'DRAFT'
   | 'ONBOARDING'
+  | 'TESTING'
   | 'READY_FOR_UAT'
   | 'UAT_FAILED'
   | 'READY_FOR_ACTIVATION'
@@ -73,7 +74,7 @@ export class Tenant {
   serviceSuspensionReason?: string | null;
 
   @Column({ name: 'service_suspension_source', type: 'varchar', length: 30, nullable: true })
-  serviceSuspensionSource?: 'manual' | 'billing' | null;
+  serviceSuspensionSource?: 'manual' | 'billing' | 'safety' | null;
 
   @Column({ name: 'service_suspended_by_id', type: 'uuid', nullable: true })
   serviceSuspendedById?: string | null;

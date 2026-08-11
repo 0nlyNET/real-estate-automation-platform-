@@ -4,6 +4,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -35,6 +36,7 @@ import { BrokerageKnowledge } from './brokerage-knowledge.entity';
 import { ConversationAiState } from './conversation-ai-state.entity';
 import { PlatformAiControl } from './platform-ai-control.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
+import { LimitsService } from '../limits/limits.service';
 
 type InboundAiEvent = {
   tenantId: string;
@@ -107,6 +109,7 @@ export class AiConversationService
     private readonly clientOperations: ClientOperationsService,
     private readonly notifications: NotificationsService,
     private readonly operations: OperationsService,
+    @Optional() private readonly limits?: LimitsService,
   ) {}
 
   onModuleInit() {
@@ -364,6 +367,22 @@ export class AiConversationService
         firstAiResponse,
       };
       await this.runs.save(run);
+
+      const usageReservation = await this.limits?.reserveUsage({
+        tenantId: run.tenantId,
+        metric: 'ai',
+        idempotencyKey: `ai-run:${run.id}`,
+      });
+      if (usageReservation && !usageReservation.ok) {
+        await this.blockRun(
+          run,
+          usageReservation.code,
+          usageReservation.message,
+          'urgent',
+          preflight,
+        );
+        return;
+      }
 
       const result = await this.provider.generate({
         mode: run.mode,

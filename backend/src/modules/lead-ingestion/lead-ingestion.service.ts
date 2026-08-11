@@ -1,6 +1,9 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
+  Optional,
   UnauthorizedException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -34,6 +37,7 @@ import {
 } from "./provider-payload";
 import { RealtorLeadAdapter } from "./realtor-lead.adapter";
 import { ZillowLeadAdapter } from "./zillow-lead.adapter";
+import { LimitsService } from "../limits/limits.service";
 
 type HeaderMap = Record<string, string | string[] | undefined>;
 
@@ -56,6 +60,7 @@ export class LeadIngestionService {
     private readonly tenantRepository: Repository<Tenant>,
     zillowAdapter: ZillowLeadAdapter,
     realtorAdapter: RealtorLeadAdapter,
+    @Optional() private readonly limits?: LimitsService,
   ) {
     this.adapters = new Map<LeadProvider, ProviderLeadAdapter>([
       [zillowAdapter.provider, zillowAdapter],
@@ -86,6 +91,18 @@ export class LeadIngestionService {
       : `fingerprint:${fingerprint}`;
     const correlationId = normalizeCorrelationId(input.correlationId);
     const payloadMetadata = sanitizedPayloadMetadata(payload);
+
+    const usage = await this.limits?.reserveUsage({
+      tenantId,
+      metric: "lead",
+      idempotencyKey: `lead-ingestion:${tenantId}:${provider}:${idempotencyKey}`,
+    });
+    if (usage && !usage.ok) {
+      throw new HttpException(
+        { code: usage.code, message: usage.message },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
 
     return this.dataSource.transaction((manager) =>
       this.persistIngestion(manager, {

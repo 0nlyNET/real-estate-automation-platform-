@@ -22,6 +22,10 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { environmentReadiness } from '../../common/environment-readiness';
 import { decryptIntegrationPayload } from '../integrations/integrations.service';
 import {
+  defaultTenantUsagePolicy,
+} from '../limits/limits.service';
+import { UsagePolicy } from '../limits/usage-policy.entity';
+import {
   isPlatformAdminEmail,
   platformAdminEmails,
   platformStaffEmails,
@@ -148,6 +152,11 @@ export class AdminService {
           bookingEnabled: false,
           activationStatus: 'incomplete',
         }),
+      );
+
+      const usagePolicies = manager.getRepository(UsagePolicy);
+      await usagePolicies.save(
+        usagePolicies.create(defaultTenantUsagePolicy(tenant.id)),
       );
 
       return { tenant, owner };

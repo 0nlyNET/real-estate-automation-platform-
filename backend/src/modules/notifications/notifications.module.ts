@@ -1,7 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CommonModule } from '../../common/common.module';
-import { AuditLog } from '../audit/audit-log.entity';
 import { StripeWebhookEvent } from '../billing/stripe-webhook-event.entity';
 import { User } from '../users/user.entity';
 import { HealthMonitorService } from './health-monitor.service';
@@ -25,7 +24,6 @@ import { AiRun } from '../ai/ai-run.entity';
       AdminNotificationPreference,
       AdminPushSubscription,
       User,
-      AuditLog,
       StripeWebhookEvent,
       OperationsTask,
       ProspectApplication,

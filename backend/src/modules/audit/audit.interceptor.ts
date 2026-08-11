@@ -70,8 +70,16 @@ export class AuditInterceptor implements NestInterceptor {
           this.audit.record({
             tenantId,
             actorId,
+            actorType: acting ? 'platform_operator' : 'user',
             actorEmail,
             action: `${method} ${path}`,
+            eventType: `${method} ${path}`,
+            resourceType: path.split('/').filter(Boolean)[0] || 'request',
+            resourceId:
+              Object.values(request?.params || {}).find((value) =>
+                /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(value)),
+              ) as string | undefined,
+            ipAddress: String(request?.ip || request?.socket?.remoteAddress || '').slice(0, 64) || null,
             method,
             path,
             statusCode,
