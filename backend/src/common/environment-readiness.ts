@@ -18,6 +18,20 @@ const REQUIRED_PRODUCTION_VALUES = [
   'EXTERNAL_UPTIME_MONITOR_URL',
 ] as const;
 
+// These values are required for the process to start safely. Provider
+// approvals, authenticated domains, and external monitoring remain launch
+// readiness requirements below, but must not create a deployment deadlock
+// before the owner can finish configuring them.
+const STARTUP_REQUIRED_PRODUCTION_VALUES = [
+  'DATABASE_URL',
+  'FRONTEND_URL',
+  'PUBLIC_APP_URL',
+  'PUBLIC_API_URL',
+  'PLATFORM_ADMIN_EMAILS',
+  'GLOBAL_AUTOMATIONS_DISABLED',
+  'BILLING_GRACE_DAYS',
+] as const;
+
 const SYSTEM_EMAIL_VALUES = [
   'SENDGRID_API_KEY',
   'SENDGRID_FROM_EMAIL',
@@ -59,6 +73,49 @@ function validEncryptionKey() {
   }
 }
 
+function productionPlatformIssues(
+  requiredValues: readonly string[],
+  includeLaunchRequirements: boolean,
+) {
+  const issues: string[] = [];
+  for (const name of requiredValues) {
+    if (!present(name)) issues.push(`${name} is missing`);
+  }
+  if (!validHttpsUrl('FRONTEND_URL')) {
+    issues.push('FRONTEND_URL must be an absolute HTTPS URL');
+  }
+  if (!validHttpsUrl('PUBLIC_APP_URL')) {
+    issues.push('PUBLIC_APP_URL must be an absolute HTTPS URL');
+  }
+  if (!validHttpsUrl('PUBLIC_API_URL')) {
+    issues.push('PUBLIC_API_URL must be an absolute HTTPS URL');
+  }
+  if (includeLaunchRequirements) {
+    if (!validHttpsUrl('TWILIO_WEBHOOK_URL')) {
+      issues.push('TWILIO_WEBHOOK_URL must be an absolute HTTPS URL');
+    }
+    if (!validHttpsUrl('TWILIO_STATUS_CALLBACK_URL')) {
+      issues.push('TWILIO_STATUS_CALLBACK_URL must be an absolute HTTPS URL');
+    }
+    for (const name of ['SENDGRID_SENDING_DOMAIN', 'SENDGRID_REPLY_DOMAIN']) {
+      if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(String(process.env[name] || '').trim())) {
+        issues.push(`${name} must be a valid authenticated domain`);
+      }
+    }
+  }
+  if (process.env.TYPEORM_SYNC !== 'false') {
+    issues.push('TYPEORM_SYNC must be explicitly false');
+  }
+  if (!['true', 'false'].includes(String(process.env.GLOBAL_AUTOMATIONS_DISABLED))) {
+    issues.push('GLOBAL_AUTOMATIONS_DISABLED must be true or false');
+  }
+  const graceDays = Number(process.env.BILLING_GRACE_DAYS);
+  if (!Number.isInteger(graceDays) || graceDays < 0 || graceDays > 14) {
+    issues.push('BILLING_GRACE_DAYS must be an integer from 0 through 14');
+  }
+  return issues;
+}
+
 function base64UrlBytes(value: string) {
   const raw = String(value || '').trim();
   if (!raw || !/^[A-Za-z0-9_-]+$/.test(raw)) return -1;
@@ -91,43 +148,9 @@ function vapidIssues() {
 
 export function environmentReadiness() {
   const production = process.env.NODE_ENV === 'production';
-  const platformIssues: string[] = [];
-
-  if (production) {
-    for (const name of REQUIRED_PRODUCTION_VALUES) {
-      if (!present(name)) platformIssues.push(`${name} is missing`);
-    }
-    if (!validHttpsUrl('FRONTEND_URL')) {
-      platformIssues.push('FRONTEND_URL must be an absolute HTTPS URL');
-    }
-    if (!validHttpsUrl('PUBLIC_APP_URL')) {
-      platformIssues.push('PUBLIC_APP_URL must be an absolute HTTPS URL');
-    }
-    if (!validHttpsUrl('PUBLIC_API_URL')) {
-      platformIssues.push('PUBLIC_API_URL must be an absolute HTTPS URL');
-    }
-    if (!validHttpsUrl('TWILIO_WEBHOOK_URL')) {
-      platformIssues.push('TWILIO_WEBHOOK_URL must be an absolute HTTPS URL');
-    }
-    if (!validHttpsUrl('TWILIO_STATUS_CALLBACK_URL')) {
-      platformIssues.push('TWILIO_STATUS_CALLBACK_URL must be an absolute HTTPS URL');
-    }
-    for (const name of ['SENDGRID_SENDING_DOMAIN', 'SENDGRID_REPLY_DOMAIN']) {
-      if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(String(process.env[name] || '').trim())) {
-        platformIssues.push(`${name} must be a valid authenticated domain`);
-      }
-    }
-    if (process.env.TYPEORM_SYNC !== 'false') {
-      platformIssues.push('TYPEORM_SYNC must be explicitly false');
-    }
-    if (!['true', 'false'].includes(String(process.env.GLOBAL_AUTOMATIONS_DISABLED))) {
-      platformIssues.push('GLOBAL_AUTOMATIONS_DISABLED must be true or false');
-    }
-    const graceDays = Number(process.env.BILLING_GRACE_DAYS);
-    if (!Number.isInteger(graceDays) || graceDays < 0 || graceDays > 14) {
-      platformIssues.push('BILLING_GRACE_DAYS must be an integer from 0 through 14');
-    }
-  }
+  const platformIssues = production
+    ? productionPlatformIssues(REQUIRED_PRODUCTION_VALUES, true)
+    : [];
 
   const jwtSecret = String(process.env.JWT_SECRET || '').trim();
   const secretIssues = [
@@ -229,7 +252,7 @@ export function assertProductionEnvironment() {
   if (process.env.NODE_ENV !== 'production') return;
   const report = environmentReadiness();
   const issues = [
-    ...report.platform.issues,
+    ...productionPlatformIssues(STARTUP_REQUIRED_PRODUCTION_VALUES, false),
     ...report.encryption.issues,
   ];
   if (issues.length) {
