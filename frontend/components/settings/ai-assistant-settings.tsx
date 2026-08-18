@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import Link from "next/link"
 import { Bot, CheckCircle2, PauseCircle, ShieldCheck } from "lucide-react"
 import { apiFetch } from "@/lib/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -16,7 +17,7 @@ type AiSettings = {
   aiFirstResponderEnabled: boolean
   allowedChannels: Array<"sms" | "email">
   tone: "professional_warm" | "concise" | "friendly"
-  bookingBehavior: "verified_link_only" | "handoff" | "disabled"
+  bookingBehavior: "calendar_booking" | "verified_link_only" | "handoff" | "disabled"
   responseMode: "human_only" | "draft" | "controlled_autopilot"
   identityLabel?: string | null
   maximumAutomaticTurns: number
@@ -56,6 +57,7 @@ type AiConfiguration = {
     providerConfigured: boolean
     communications: { sms: boolean; email: boolean }
     verifiedBookingLink: boolean
+    googleCalendarConnected: boolean
   }
 }
 
@@ -389,7 +391,7 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2"><Label htmlFor="aiTone">Tone</Label><select id="aiTone" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={tone} onChange={(event) => setTone(event.target.value as AiSettings["tone"])} disabled={!canManage}><option value="professional_warm">Professional and warm</option><option value="concise">Concise</option><option value="friendly">Friendly</option></select></div>
-            <div className="space-y-2"><Label htmlFor="aiBooking">Booking behavior</Label><select id="aiBooking" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={bookingBehavior} onChange={(event) => setBookingBehavior(event.target.value as AiSettings["bookingBehavior"])} disabled={!canManage}><option value="verified_link_only">Verified booking link only</option><option value="handoff">Hand off booking requests</option><option value="disabled">Do not handle booking</option></select></div>
+            <div className="space-y-2"><Label htmlFor="aiBooking">Booking behavior</Label><select id="aiBooking" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={bookingBehavior} onChange={(event) => setBookingBehavior(event.target.value as AiSettings["bookingBehavior"])} disabled={!canManage}><option value="calendar_booking" disabled={!configuration?.readiness.googleCalendarConnected}>Book verified Google Calendar times</option><option value="verified_link_only">Send verified booking link only</option><option value="handoff">Hand off booking requests</option><option value="disabled">Do not handle booking</option></select><p className="text-xs text-muted-foreground">Calendar booking never offers an unverified time and requires a connected, tested Google Calendar. {!configuration?.readiness.googleCalendarConnected ? <Link className="underline" href="/app/integrations">Finish calendar setup</Link> : null}</p></div>
           </div>
           {canManage ? (
             <div className="flex flex-wrap gap-2">

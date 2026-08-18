@@ -38,8 +38,8 @@ export class UpdateAiSettingsDto {
   tone?: 'professional_warm' | 'concise' | 'friendly';
 
   @IsOptional()
-  @IsIn(['verified_link_only', 'handoff', 'disabled'])
-  bookingBehavior?: 'verified_link_only' | 'handoff' | 'disabled';
+  @IsIn(['calendar_booking', 'verified_link_only', 'handoff', 'disabled'])
+  bookingBehavior?: 'calendar_booking' | 'verified_link_only' | 'handoff' | 'disabled';
 
   @IsOptional()
   @IsIn(['human_only', 'draft', 'controlled_autopilot'])

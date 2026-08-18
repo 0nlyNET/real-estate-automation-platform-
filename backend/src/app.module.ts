@@ -43,6 +43,7 @@ import { TestingModule } from './modules/testing/testing.module';
 import { OffboardingModule } from './modules/offboarding/offboarding.module';
 import { CrmEventsModule } from './modules/crm-events/crm-events.module';
 import { CrmIntegrationsModule } from './modules/crm-integrations/crm-integrations.module';
+import { CalendarModule } from './modules/calendar/calendar.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { CrmIntegrationsModule } from './modules/crm-integrations/crm-integratio
     TypeOrmModule.forRoot(buildDatabaseOptions()),
     DurableJobsModule,
     CrmEventsModule,
+    CalendarModule,
     TenantsModule,
     UsersModule,
     AuthModule,

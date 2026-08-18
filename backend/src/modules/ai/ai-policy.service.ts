@@ -12,6 +12,7 @@ type ResponseValidationInput = {
   firstAiResponse: boolean;
   channel: 'sms' | 'email';
   verifiedBookingLink?: string | null;
+  calendarBookingConfirmed?: boolean;
 };
 
 const ESCALATION_PATTERNS: Array<{
@@ -83,6 +84,14 @@ const PROHIBITED_RESPONSE_PATTERNS = [
   /\b(the property|this home|this listing)\s+is\s+(?:still\s+)?available\b/i,
   /\b(ignore|bypass)\s+(?:consent|quiet hours|policy|permissions)\b/i,
   /\b(protected class|racial preference|religious preference)\b/i,
+];
+
+const UNVERIFIED_CALENDAR_CLAIM_PATTERNS = [
+  /\b(?:you(?:'re| are)|we(?:'ve| have)|i(?:'ve| have))\s+(?:now\s+)?(?:booked|scheduled|confirmed)\b/i,
+  /\b(?:appointment|meeting|tour|showing)\s+(?:is\s+)?(?:booked|scheduled|confirmed|set)\b/i,
+  /\b(?:that|this|the requested|your requested)\s+(?:time|slot)\s+(?:is\s+)?(?:available|open|free|confirmed)\b/i,
+  /\b(?:availability|calendar)\s+(?:shows|confirms)\b/i,
+  /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b[^.!?]{0,50}\b(?:is available|is open|is free|works(?: for (?:me|us|the team))?)\b/i,
 ];
 
 @Injectable()
@@ -183,6 +192,17 @@ export class AiPolicyService {
           reason: 'The proposed response contains restricted or unverifiable content.',
         };
       }
+    }
+    if (
+      !input.calendarBookingConfirmed &&
+      UNVERIFIED_CALENDAR_CLAIM_PATTERNS.some((pattern) => pattern.test(reply))
+    ) {
+      return {
+        allowed: false,
+        code: 'UNVERIFIED_CALENDAR_CLAIM',
+        reason:
+          'The proposed response claims calendar availability or a booking without a confirmed calendar tool result.',
+      };
     }
     const urls: string[] = Array.from(
       reply.match(/https?:\/\/[^\s)]+/gi) || [],

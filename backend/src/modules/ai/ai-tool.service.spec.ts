@@ -6,6 +6,7 @@ import { BrokerageKnowledge } from './brokerage-knowledge.entity';
 import { ConversationAiState } from './conversation-ai-state.entity';
 import { PlatformAiControl } from './platform-ai-control.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
+import { ServiceUnavailableException } from '@nestjs/common';
 
 function fixture() {
   const tenantId = '00000000-0000-4000-8000-000000000001';
@@ -171,6 +172,82 @@ describe('AI tool allowlist and validation', () => {
       status: 'blocked',
       code: 'BOOKING_LINK_NOT_VERIFIED',
     });
+  });
+
+  it('books only in calendar mode and passes a stable idempotency key to the real booking service', async () => {
+    const item = fixture();
+    item.context.settings.bookingBehavior = 'calendar_booking';
+    item.dependencies.clientOperations.createAppointment.mockResolvedValue({ id: 'appointment-1' });
+    const startsAt = new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString();
+    await expect(
+      item.service.execute(
+        item.context,
+        {
+          name: 'create_or_update_appointment',
+          arguments: JSON.stringify({ startsAt }),
+        },
+        3,
+      ),
+    ).resolves.toMatchObject({
+      status: 'executed',
+      output: { appointmentId: 'appointment-1', created: true },
+    });
+    expect(item.dependencies.clientOperations.createAppointment).toHaveBeenCalledWith(
+      item.context.run.tenantId,
+      expect.objectContaining({
+        leadId: item.context.lead.id,
+        idempotencyKey: `ai-tool:${item.context.run.id}:3`,
+      }),
+      undefined,
+      'conversation',
+    );
+    expect(item.dependencies.clientOperations.createAppointment.mock.calls[0][1]).not.toHaveProperty(
+      'externalEventId',
+    );
+  });
+
+  it('blocks the AI reply when Google cannot verify the booking', async () => {
+    const item = fixture();
+    item.context.settings.bookingBehavior = 'calendar_booking';
+    item.dependencies.clientOperations.createAppointment.mockRejectedValue(
+      new ServiceUnavailableException({
+        code: 'APPOINTMENT_RECONCILIATION_PENDING',
+        message: 'The booking result is uncertain. Do not claim it is booked.',
+      }),
+    );
+    const startsAt = new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString();
+    await expect(
+      item.service.execute(
+        item.context,
+        {
+          name: 'create_or_update_appointment',
+          arguments: JSON.stringify({ startsAt }),
+        },
+        0,
+      ),
+    ).resolves.toMatchObject({
+      status: 'blocked',
+      code: 'APPOINTMENT_RECONCILIATION_PENDING',
+    });
+  });
+
+  it('blocks AI booking times that do not include an explicit UTC offset', async () => {
+    const item = fixture();
+    item.context.settings.bookingBehavior = 'calendar_booking';
+    await expect(
+      item.service.execute(
+        item.context,
+        {
+          name: 'create_or_update_appointment',
+          arguments: JSON.stringify({ startsAt: '2026-11-01T01:30:00' }),
+        },
+        0,
+      ),
+    ).resolves.toMatchObject({
+      status: 'blocked',
+      reason: expect.stringMatching(/explicit UTC offset/i),
+    });
+    expect(item.dependencies.clientOperations.createAppointment).not.toHaveBeenCalled();
   });
 
   it('revalidates tenant ownership immediately before tool execution', async () => {

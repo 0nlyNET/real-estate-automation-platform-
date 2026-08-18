@@ -303,7 +303,9 @@ describe('operator-controlled workspace activation', () => {
     expect(blocked.blockers.map((item) => item.key)).toEqual(
       expect.arrayContaining([
         'timezone',
-        'booking_url',
+        'google_calendar',
+        'crm_appointment_event',
+        'appointment_uat',
         'sendgrid',
         'inbound_email',
       ]),
@@ -386,6 +388,67 @@ describe('operator-controlled workspace activation', () => {
       },
     });
     expect(records.save).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes a booking UAT run only after calendar, CRM, notification, and takeover evidence', async () => {
+    const record = Object.assign(new OnboardingRecord(), {
+      tenantId: 'tenant-1',
+      smsEnabled: false,
+      emailEnabled: true,
+      bookingEnabled: true,
+      verifiedItems: {},
+      providerTests: {},
+    });
+    const run: any = {
+      id: 'test-run-1',
+      tenantId: 'tenant-1',
+      status: 'running',
+      expiresAt: new Date(Date.now() + 60_000),
+      checks: { outbound: 'delivered', inboundEmail: 'passed' },
+      completedAt: null,
+    };
+    const records = {
+      findOne: jest.fn().mockResolvedValue(record),
+      save: jest.fn(async (value) => value),
+    };
+    const testRuns = {
+      findOne: jest.fn().mockImplementation(async ({ where }) =>
+        run.status === where.status ? run : null,
+      ),
+      save: jest.fn(async (value) => value),
+    };
+    const service = new OnboardingService(
+      records as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      testRuns as any,
+    );
+    await service.recordUatWorkflowEvidence('tenant-1', run.id, {
+      calendarAvailability: true,
+      externalCalendarEvent: true,
+      internalAppointment: true,
+      agentNotification: true,
+      crmAppointmentEvent: true,
+    });
+    expect(run.status).toBe('running');
+    expect(record.verifiedItems).not.toHaveProperty('appointment_uat');
+
+    await service.recordUatWorkflowEvidence('tenant-1', run.id, {
+      humanTakeover: true,
+    });
+    expect(run).toMatchObject({ status: 'passed', completedAt: expect.any(Date) });
+    expect(record.verifiedItems).toMatchObject({
+      appointment_uat: { verifiedBy: 'system:uat', testRunId: run.id },
+    });
   });
 
   it('invalidates stale launch and provider evidence when messaging identity changes', async () => {

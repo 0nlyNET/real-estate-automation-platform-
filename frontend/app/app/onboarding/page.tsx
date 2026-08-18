@@ -245,7 +245,7 @@ export default function OnboardingPage() {
                   </div>
                   {data.smsEnabled ? (
                     <div className="space-y-4 rounded-lg border p-4">
-                      <div><div className="font-medium">Twilio business verification</div><p className="text-sm text-muted-foreground">Required only for SMS registration. Enter the legal information exactly as registered with the IRS.</p></div>
+                      <div><div className="font-medium">Texting business verification</div><p className="text-sm text-muted-foreground">Required by mobile carriers only when text messages are enabled. Enter the legal information exactly as registered with the IRS; RealtyTechAI handles the provider setup.</p></div>
                       <div className="grid gap-4 md:grid-cols-2">
                         <Field label="Legal business type" value={data.businessIdentity.businessType} onChange={(value) => field("businessIdentity", "businessType", value)} placeholder="LLC, Corporation, Partnership" />
                         <Field label="EIN" value={data.businessIdentity.ein} onChange={(value) => field("businessIdentity", "ein", value)} placeholder="12-3456789" />
@@ -286,8 +286,8 @@ export default function OnboardingPage() {
                 <>
                   <div className="grid gap-3 md:grid-cols-3">
                     <Choice label="Text messages" checked={data.smsEnabled} onChange={(value) => setData((current) => ({ ...current, smsEnabled: value }))} description="RealtyTechAI manages delivery using your approved brokerage identity" />
-                    <Choice label="Email" checked={data.emailEnabled} onChange={(value) => setData((current) => ({ ...current, emailEnabled: value }))} description="Uses the sending account you connect" />
-                    <Choice label="Appointment booking" checked={data.bookingEnabled} onChange={(value) => setData((current) => ({ ...current, bookingEnabled: value }))} description="Sends leads to your calendar link" />
+                    <Choice label="Email" checked={data.emailEnabled} onChange={(value) => setData((current) => ({ ...current, emailEnabled: value }))} description="RealtyTechAI manages the verified sending service for you" />
+                    <Choice label="Appointment booking" checked={data.bookingEnabled} onChange={(value) => setData((current) => ({ ...current, bookingEnabled: value }))} description="Checks and books verified times on the Google Calendar you choose" />
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <Field label="Brand or team name" value={data.brandCommunication.brandName} onChange={(value) => field("brandCommunication", "brandName", value)} />
@@ -295,14 +295,14 @@ export default function OnboardingPage() {
                     <Field label="Message signature" value={data.brandCommunication.requiredSignature} onChange={(value) => field("brandCommunication", "requiredSignature", value)} placeholder="— Alex at Lakeview Realty" />
                     {data.smsEnabled ? <Field label="Approved texting number or identity" value={data.brandCommunication.approvedPhoneIdentity} onChange={(value) => field("brandCommunication", "approvedPhoneIdentity", value)} /> : null}
                     {data.emailEnabled ? <Field label="Approved sender email" type="email" value={data.brandCommunication.approvedEmailIdentity} onChange={(value) => field("brandCommunication", "approvedEmailIdentity", value)} /> : null}
-                    {data.bookingEnabled ? <Field label="Booking link" type="url" value={settings.bookingLink} onChange={(value) => setSettings((current) => ({ ...current, bookingLink: value }))} /> : null}
+                    {data.bookingEnabled ? <Field label="Optional fallback booking link" type="url" value={settings.bookingLink} onChange={(value) => setSettings((current) => ({ ...current, bookingLink: value }))} placeholder="Used only if calendar access is unavailable" /> : null}
                     <Field label="How do people agree to be contacted?" value={data.consentConfiguration.consentCollectionMethod} onChange={(value) => field("consentConfiguration", "consentCollectionMethod", value)} placeholder="Checkbox on our website lead form" />
                     <Field label="How do you handle opt-outs?" value={data.consentConfiguration.optOutProcess} onChange={(value) => field("consentConfiguration", "optOutProcess", value)} placeholder="Honor STOP and unsubscribe immediately" />
                   </div>
                   <div className="space-y-2"><Label htmlFor="consent-copy">Exact consent language shown on your lead form</Label><Textarea id="consent-copy" value={String(data.consentConfiguration.exactConsentLanguage || "")} onChange={(event) => field("consentConfiguration", "exactConsentLanguage", event.target.value)} /></div>
                   {data.smsEnabled ? (
                     <div className="space-y-4 rounded-lg border p-4">
-                      <div><div className="font-medium">A2P campaign registration</div><p className="text-sm text-muted-foreground">These exact examples and public URLs are submitted to Twilio for carrier review.</p></div>
+                      <div><div className="font-medium">Carrier texting registration</div><p className="text-sm text-muted-foreground">Mobile carriers require these exact examples and public URLs. RealtyTechAI submits and monitors the registration for you.</p></div>
                       <div className="space-y-2"><Label htmlFor="campaign-description">Campaign description (40–4096 characters)</Label><Textarea id="campaign-description" value={String(data.consentConfiguration.campaignDescription || "")} onChange={(event) => field("consentConfiguration", "campaignDescription", event.target.value)} /></div>
                       <div className="space-y-2"><Label htmlFor="message-flow">Detailed opt-in flow (40–2048 characters)</Label><Textarea id="message-flow" value={String(data.consentConfiguration.messageFlow || "")} onChange={(event) => field("consentConfiguration", "messageFlow", event.target.value)} /></div>
                       <div className="grid gap-4 md:grid-cols-2">
@@ -345,7 +345,7 @@ export default function OnboardingPage() {
                   </div>
                   <Card className="border-primary/30 bg-primary/5">
                     <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources</div><p className="mt-1 text-sm text-muted-foreground">Connect your website form and supported lead sources. RealtyTechAI manages SMS and email delivery for you.</p></div></div>
+                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources and calendar</div><p className="mt-1 text-sm text-muted-foreground">Connect your website or supported lead source, then connect, choose, and test Google Calendar. RealtyTechAI manages SMS and email delivery for you.</p></div></div>
                       <Button asChild type="button"><Link href="/app/integrations">Open connections</Link></Button>
                     </CardContent>
                   </Card>
@@ -358,7 +358,7 @@ export default function OnboardingPage() {
                     </ol>
                   </div>
                   {readiness?.blockers?.length ? (
-                    <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">See remaining review checks ({readiness.blockers.length})</summary><div className="mt-3 grid gap-2 md:grid-cols-2">{readiness.blockers.map((item) => <div key={item.key} className="flex gap-2 rounded-md border p-3 text-sm text-muted-foreground"><Circle className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block font-medium text-foreground">{item.label}</span><span className="mt-1 block text-xs">Owner: {item.responsibleParty === "client" ? "you" : item.responsibleParty === "provider" ? "external provider" : "RealtyTechAI"}</span>{item.nextAction ? <span className="mt-1 block text-xs">{item.nextAction}</span> : null}</span></div>)}</div></details>
+                    <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">See remaining review checks ({readiness.blockers.length})</summary><div className="mt-3 grid gap-2 md:grid-cols-2">{readiness.blockers.map((item) => <div key={item.key} className="flex gap-2 rounded-md border p-3 text-sm text-muted-foreground"><Circle className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block font-medium text-foreground">What: {item.label}</span><span className="mt-1 block text-xs">Why: {item.statusMessage}</span>{item.nextAction ? <span className="mt-1 block text-xs">How to fix: {item.nextAction}</span> : null}<span className="mt-1 block text-xs">Owner: {item.responsibleParty === "client" ? "you" : item.responsibleParty === "provider" ? "external provider" : "RealtyTechAI"}</span></span></div>)}</div></details>
                   ) : null}
                 </>
               ) : null}

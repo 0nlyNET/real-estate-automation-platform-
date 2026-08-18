@@ -158,6 +158,26 @@ describe('AI policy guardrails', () => {
     ).toMatchObject({ allowed: true });
   });
 
+  it('blocks calendar availability and booking claims unless the calendar tool succeeded', () => {
+    const input = {
+      output: output({
+        reply: 'Tuesday at 2:00 PM is available. Your appointment is confirmed.',
+      }),
+      settings: settings(),
+      knowledge: knowledge(),
+      identityLabel: 'the virtual assistant for Lakeview Realty',
+      firstAiResponse: false,
+      channel: 'email' as const,
+    };
+    expect(policy.validateResponse(input)).toMatchObject({
+      allowed: false,
+      code: 'UNVERIFIED_CALENDAR_CLAIM',
+    });
+    expect(
+      policy.validateResponse({ ...input, calendarBookingConfirmed: true }),
+    ).toMatchObject({ allowed: true });
+  });
+
   it('does not send a reply when the structured classification is no_reply', () => {
     expect(
       policy.validateResponse({

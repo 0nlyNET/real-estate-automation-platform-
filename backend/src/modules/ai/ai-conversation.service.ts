@@ -517,6 +517,7 @@ export class AiConversationService
       const requested = this.withRequiredOperationalUpdates(output);
       const toolResults: AiToolResult[] = [];
       let verifiedBookingLink: string | null = null;
+      let calendarBookingConfirmed = false;
       for (let index = 0; index < requested.length; index += 1) {
         const toolResult = await this.tools.execute(
           {
@@ -552,6 +553,13 @@ export class AiConversationService
         if (typeof toolResult.output?.bookingLink === 'string') {
           verifiedBookingLink = toolResult.output.bookingLink;
         }
+        if (
+          toolResult.name === 'create_or_update_appointment' &&
+          toolResult.status === 'executed' &&
+          typeof toolResult.output?.appointmentId === 'string'
+        ) {
+          calendarBookingConfirmed = true;
+        }
       }
       if (verifiedBookingLink && output.reply) {
         if (!output.reply.includes(verifiedBookingLink)) {
@@ -574,6 +582,7 @@ export class AiConversationService
         firstAiResponse,
         channel: event.channel,
         verifiedBookingLink,
+        calendarBookingConfirmed,
       });
       if (!validation.allowed) {
         await this.blockRun(

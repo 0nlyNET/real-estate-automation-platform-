@@ -18,6 +18,7 @@ import { AiUsageService } from './ai-usage.service';
 import { BrokerageKnowledge } from './brokerage-knowledge.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
 import { ProviderConfigService } from '../integrations/provider-config.service';
+import { CalendarService } from '../calendar/calendar.service';
 
 type ConfigurationActor = {
   userId: string;
@@ -53,16 +54,18 @@ export class AiConfigurationService {
     private readonly usage: AiUsageService,
     private readonly audit: AiAuditService,
     @Optional() private readonly providerConfig?: ProviderConfigService,
+    @Optional() private readonly calendar?: CalendarService,
   ) {}
 
   async getConfiguration(tenantId: string) {
-    const [settings, knowledge, usage, communications, tenantSettings] =
+    const [settings, knowledge, usage, communications, tenantSettings, calendarStatus] =
       await Promise.all([
         this.getOrCreateSettings(tenantId),
         this.getOrCreateKnowledge(tenantId),
         this.usage.usageForWorkspace(tenantId),
         this.communicationReadiness(tenantId),
         this.tenantSettings.findOne({ where: { tenantId } }),
+        this.calendar?.status(tenantId) || Promise.resolve(null),
       ]);
     return {
       assistantStatus:
@@ -82,6 +85,7 @@ export class AiConfigurationService {
           tenantSettings?.bookingLink &&
             tenantSettings.bookingLinkVerifiedAt,
         ),
+        googleCalendarConnected: calendarStatus?.connected === true,
       },
     };
   }
@@ -105,6 +109,9 @@ export class AiConfigurationService {
       throw new BadRequestException(
         'Controlled autopilot requires explicit confirmation.',
       );
+    }
+    if (dto.bookingBehavior === 'calendar_booking') {
+      await this.assertCalendarReady(tenantId);
     }
     if (changedApprovalField && dto.aiEnabled === true) {
       throw new ConflictException(
@@ -191,6 +198,9 @@ export class AiConfigurationService {
     }
     if (!String(process.env.OPENAI_API_KEY || '').trim()) {
       throw new ConflictException('The AI provider is not configured.');
+    }
+    if (settings.bookingBehavior === 'calendar_booking') {
+      await this.assertCalendarReady(tenantId);
     }
     settings.configurationApprovalStatus = 'approved';
     settings.configurationApprovedAt = new Date();
@@ -348,6 +358,20 @@ export class AiConfigurationService {
       throw new ConflictException(
         'A successfully tested AI-allowed messaging integration is required.',
       );
+    }
+    if (settings.bookingBehavior === 'calendar_booking') {
+      await this.assertCalendarReady(tenantId);
+    }
+  }
+
+  private async assertCalendarReady(tenantId: string) {
+    const status = await this.calendar?.status(tenantId);
+    if (!status?.connected) {
+      throw new ConflictException({
+        code: 'CALENDAR_NEEDS_ATTENTION',
+        message:
+          'Google Calendar must be connected, selected, and tested before enabling direct AI booking.',
+      });
     }
   }
 

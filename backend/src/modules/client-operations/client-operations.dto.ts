@@ -49,6 +49,11 @@ export class CreateAppointmentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(120)
+  idempotencyKey?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(80)
   calendarSource?: string;
 

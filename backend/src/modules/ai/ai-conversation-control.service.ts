@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
@@ -27,6 +28,7 @@ import {
 } from './conversation-ai-state.entity';
 import { PlatformAiControl } from './platform-ai-control.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
+import { OnboardingService } from '../onboarding/onboarding.service';
 
 export type ConversationActor = {
   userId?: string;
@@ -72,6 +74,7 @@ export class AiConversationControlService {
     private readonly notifications: NotificationsService,
     private readonly aiAudit: AiAuditService,
     private readonly audit: AuditService,
+    @Optional() private readonly onboarding?: OnboardingService,
   ) {}
 
   async getOrCreateState(
@@ -193,6 +196,13 @@ export class AiConversationControlService {
         entityType: 'lead',
         entityId: lead.id,
       });
+      if (lead.testRunId && this.onboarding) {
+        await this.onboarding
+          .recordUatWorkflowEvidence(tenantId, lead.testRunId, {
+            humanTakeover: true,
+          })
+          .catch(() => undefined);
+      }
       if (actor.userId) {
         await this.aiAudit.recordHuman({
           tenantId,

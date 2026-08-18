@@ -1,5 +1,9 @@
 # RealtyTechAI client-readiness implementation
 
+> This July 19 baseline’s calendar conclusions are superseded by
+> `docs/google-calendar-production-setup.md` and the controlled UAT requirements
+> in `docs/first-client-uat.md`.
+
 ## Repository baseline
 
 - Repository: `0nlyNET/real-estate-automation-platform-`

@@ -30,6 +30,7 @@ describe('CrmEventsService durable signed delivery', () => {
     };
     const subscriptions: any = { find: jest.fn().mockResolvedValue([subscription]) };
     const deliveries: any = {
+      findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((value) => value), save: jest.fn(async (value) => Array.isArray(value)
         ? value.map((item, index) => ({ id: `00000000-0000-4000-8000-00000000001${index}`, ...item }))
         : value),
@@ -43,6 +44,54 @@ describe('CrmEventsService durable signed delivery', () => {
       taskType: 'integration.webhook_delivery', tenantId: subscription.tenantId, maxAttempts: 10,
     }));
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('uses one deterministic CRM event and delivery across appointment workflow retries', async () => {
+    const subscription: any = {
+      id: '00000000-0000-4000-8000-000000000001',
+      tenantId: '00000000-0000-4000-8000-000000000002',
+      eventType: 'appointment.created',
+      status: 'active',
+      targetUrl: 'https://hooks.zapier.com/hooks/catch/1/2',
+    };
+    const stored: any[] = [];
+    const deliveries: any = {
+      create: jest.fn((value) => value),
+      findOne: jest.fn(async ({ where }) =>
+        stored.find(
+          (row) =>
+            row.subscriptionId === where.subscriptionId &&
+            row.eventId === where.eventId,
+        ) || null,
+      ),
+      save: jest.fn(async (value) => {
+        const row = { id: value.id || `delivery-${stored.length + 1}`, ...value };
+        if (!stored.some((item) => item.id === row.id)) stored.push(row);
+        return row;
+      }),
+    };
+    const service = new CrmEventsService(
+      { find: jest.fn().mockResolvedValue([subscription]) } as any,
+      deliveries,
+      { register: jest.fn(), schedule: jest.fn() } as any,
+      {} as any,
+    );
+    const options = { idempotencyKey: 'appointment.created:appointment-1' };
+    const first = await service.publish(
+      subscription.tenantId,
+      'appointment.created',
+      { appointmentId: 'appointment-1' },
+      options,
+    );
+    const second = await service.publish(
+      subscription.tenantId,
+      'appointment.created',
+      { appointmentId: 'appointment-1' },
+      options,
+    );
+    expect(stored).toHaveLength(1);
+    expect(first.eventIds).toEqual(second.eventIds);
+    expect(first.eventIds?.[0]).toMatch(/^[a-f0-9-]{36}$/);
   });
 
   it('signs the exact timestamp and body during worker delivery', async () => {
@@ -83,6 +132,70 @@ describe('CrmEventsService durable signed delivery', () => {
       'X-RealtyTechAI-Signature': `v1=${expected}`,
     });
     expect(delivery).toMatchObject({ status: 'delivered', attemptCount: 1, lastHttpStatus: 204, lastError: null });
+  });
+
+  it('records appointment UAT evidence only after the CRM accepts the webhook', async () => {
+    const subscription: any = {
+      id: '00000000-0000-4000-8000-000000000001',
+      tenantId: '00000000-0000-4000-8000-000000000002',
+      eventType: 'appointment.created',
+      status: 'active',
+      targetUrl: 'https://hooks.zapier.com/hooks/catch/1/2',
+      encryptedSigningSecret: encryptString('rtwhsec_uat'),
+      failureCount: 0,
+    };
+    const delivery: any = {
+      id: '00000000-0000-4000-8000-000000000003',
+      tenantId: subscription.tenantId,
+      subscriptionId: subscription.id,
+      eventId: '00000000-0000-4000-8000-000000000004',
+      eventType: 'appointment.created',
+      payload: {
+        id: 'event-1',
+        type: 'appointment.created',
+        data: { appointmentId: 'appointment-1', testRunId: 'test-run-1' },
+      },
+      status: 'scheduled',
+      attemptCount: 0,
+    };
+    const subscriptions = {
+      findOne: jest.fn().mockResolvedValue(subscription),
+      save: jest.fn(async (value) => value),
+    };
+    const deliveries = {
+      findOne: jest.fn().mockResolvedValue(delivery),
+      save: jest.fn(async (value) => value),
+    };
+    let handler: any;
+    const onboarding = { recordUatWorkflowEvidence: jest.fn() };
+    const service = new CrmEventsService(
+      subscriptions as any,
+      deliveries as any,
+      {
+        register: jest.fn((_name, callback) => {
+          handler = callback;
+        }),
+        schedule: jest.fn(),
+      } as any,
+      { createTask: jest.fn() } as any,
+      onboarding as any,
+    );
+    service.onModuleInit();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+      text: async () => '',
+    }) as any;
+    await handler({
+      payload: { deliveryId: delivery.id },
+      attemptCount: 1,
+      maxAttempts: 10,
+    });
+    expect(onboarding.recordUatWorkflowEvidence).toHaveBeenCalledWith(
+      delivery.tenantId,
+      'test-run-1',
+      { crmAppointmentEvent: true },
+    );
   });
 
   it('keeps transient failures retryable and creates an incident only after exhaustion', async () => {

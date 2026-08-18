@@ -14,6 +14,8 @@ import { AuditModule } from '../audit/audit.module';
 import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
 import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 import { TestRun } from '../testing/test-run.entity';
+import { CalendarConnection } from '../calendar/calendar-connection.entity';
+import { TenantWebhookSubscription } from '../crm-events/tenant-webhook-subscription.entity';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { TestRun } from '../testing/test-run.entity';
       TenantMessagingResource,
       TenantEmailIdentity,
       TestRun,
+      CalendarConnection,
+      TenantWebhookSubscription,
     ]),
     OperationsModule,
     CommonModule,

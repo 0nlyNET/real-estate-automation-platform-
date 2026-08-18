@@ -28,6 +28,8 @@ import { AuditService } from '../audit/audit.service';
 import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
 import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 import { TestRun } from '../testing/test-run.entity';
+import { CalendarConnection } from '../calendar/calendar-connection.entity';
+import { TenantWebhookSubscription } from '../crm-events/tenant-webhook-subscription.entity';
 
 type ReadinessCategory =
   | 'client_information'
@@ -146,6 +148,12 @@ export class OnboardingService {
     @Optional()
     @InjectRepository(TestRun)
     private readonly testRuns?: Repository<TestRun>,
+    @Optional()
+    @InjectRepository(CalendarConnection)
+    private readonly calendarConnections?: Repository<CalendarConnection>,
+    @Optional()
+    @InjectRepository(TenantWebhookSubscription)
+    private readonly crmSubscriptions?: Repository<TenantWebhookSubscription>,
   ) {}
 
   async getOrCreate(tenantId: string) {
@@ -529,7 +537,14 @@ export class OnboardingService {
       checks.outbound === 'delivered' &&
       (!record.smsEnabled ||
         (checks.inboundSms === 'passed' && checks.stop === 'passed')) &&
-      (!record.emailEnabled || checks.inboundEmail === 'passed');
+      (!record.emailEnabled || checks.inboundEmail === 'passed') &&
+      (!record.bookingEnabled ||
+        (checks.calendarAvailability === 'passed' &&
+          checks.externalCalendarEvent === 'passed' &&
+          checks.internalAppointment === 'passed' &&
+          checks.agentNotification === 'passed' &&
+          checks.crmAppointmentEvent === 'passed' &&
+          checks.humanTakeover === 'passed'));
     if (passed) {
       run.status = 'passed';
       run.completedAt = now;
@@ -538,6 +553,75 @@ export class OnboardingService {
     if (!changed) return record;
     record.verifiedItems = verifiedItems;
     return this.records.save(record);
+  }
+
+  async recordUatWorkflowEvidence(
+    tenantId: string,
+    testRunId: string,
+    evidence: {
+      calendarAvailability?: boolean;
+      externalCalendarEvent?: boolean;
+      internalAppointment?: boolean;
+      agentNotification?: boolean;
+      crmAppointmentEvent?: boolean;
+      humanTakeover?: boolean;
+    },
+  ) {
+    const record = await this.getOrCreate(tenantId);
+    if (!this.testRuns) return record;
+    const run = await this.testRuns.findOne({
+      where: { id: testRunId, tenantId, status: 'running' },
+    });
+    if (!run || run.expiresAt <= new Date()) return record;
+    const names = [
+      'calendarAvailability',
+      'externalCalendarEvent',
+      'internalAppointment',
+      'agentNotification',
+      'crmAppointmentEvent',
+      'humanTakeover',
+    ] as const;
+    run.checks = {
+      ...run.checks,
+      ...Object.fromEntries(
+        names.filter((name) => evidence[name]).map((name) => [name, 'passed']),
+      ),
+    };
+    const checks = run.checks as Record<string, unknown>;
+    const passed =
+      checks.outbound === 'delivered' &&
+      (!record.smsEnabled ||
+        (checks.inboundSms === 'passed' && checks.stop === 'passed')) &&
+      (!record.emailEnabled || checks.inboundEmail === 'passed') &&
+      (!record.bookingEnabled ||
+        names.every((name) => checks[name] === 'passed'));
+    if (passed) {
+      const now = new Date();
+      run.status = 'passed';
+      run.completedAt = now;
+      record.testLeadCompletedAt = now;
+      record.verifiedItems = {
+        ...(record.verifiedItems || {}),
+        test_lead: {
+          verifiedAt: now.toISOString(),
+          verifiedBy: 'system:uat',
+          testRunId: run.id,
+        },
+        appointment_uat: {
+          verifiedAt: now.toISOString(),
+          verifiedBy: 'system:uat',
+          testRunId: run.id,
+        },
+      };
+      record.providerTests = {
+        ...(record.providerTests || {}),
+        endToEndTestReference: `test-run:${run.id}`,
+        endToEndTestRecordedAt: now.toISOString(),
+      };
+      await this.records.save(record);
+    }
+    await this.testRuns.save(run);
+    return record;
   }
 
   private async approvedTemplateCounts(tenantId: string) {
@@ -566,6 +650,8 @@ export class OnboardingService {
       safetyIncidentOpen,
       managedTwilio,
       managedEmail,
+      googleCalendar,
+      appointmentCrmSubscription,
     ] =
       await Promise.all([
         this.limits?.getTenantPolicy(tenantId) || Promise.resolve(null),
@@ -576,6 +662,16 @@ export class OnboardingService {
           Promise.resolve(null),
         this.emailIdentities?.findOne({ where: { tenantId } }) ||
           Promise.resolve(null),
+        this.calendarConnections?.findOne({
+          where: { tenantId, provider: 'google' },
+        }) || Promise.resolve(null),
+        this.crmSubscriptions?.findOne({
+          where: {
+            tenantId,
+            eventType: 'appointment.created',
+            status: 'active',
+          },
+        }) || Promise.resolve(null),
       ]);
     const credentials = await this.credentials.find({
       where: { tenant: { id: tenantId } as any },
@@ -896,13 +992,44 @@ export class OnboardingService {
       },
     );
     add(
-      'booking_url',
-      'Booking URL is configured, tested, and currently verified',
-      !record.bookingEnabled || verifiedBookingLink(settings),
+      'google_calendar',
+      'Google Calendar is connected, selected, and tested',
+      !record.bookingEnabled ||
+        Boolean(
+          googleCalendar?.status === 'connected' &&
+            googleCalendar.selectedCalendarId &&
+            googleCalendar.lastTestedAt,
+        ),
       record.bookingEnabled,
       {
+        category: 'provider_configuration',
+        statusMessage:
+          'Google Calendar is not ready, so availability and real event creation cannot be guaranteed.',
         nextAction:
-          'Open the saved HTTPS booking link, confirm the correct calendar, and record verification in workspace settings.',
+          'Open Integrations, connect Google Calendar, choose a writable calendar, and run Test connection.',
+      },
+    );
+    add(
+      'booking_url',
+      'Verified external booking link is available as a fallback',
+      verifiedBookingLink(settings),
+      false,
+      {
+        nextAction:
+          'Save and verify an HTTPS booking link for use when Google Calendar is unavailable.',
+      },
+    );
+    add(
+      'crm_appointment_event',
+      'CRM appointment delivery is connected and active',
+      !record.bookingEnabled || Boolean(appointmentCrmSubscription),
+      record.bookingEnabled,
+      {
+        category: 'provider_configuration',
+        statusMessage:
+          'Without an active appointment connection, the client CRM will not receive booked appointments.',
+        nextAction:
+          'Open Connections and add or activate an appointment.created CRM webhook, then run its connection test.',
       },
     );
     add(
@@ -1176,6 +1303,21 @@ export class OnboardingService {
         responsibleParty: 'jayden',
         nextAction:
           'Run a controlled test lead through intake, routing, conversation storage, and the allowed outbound path.',
+      },
+    );
+    add(
+      'appointment_uat',
+      'Controlled appointment, notification, CRM, and takeover flow passed',
+      !record.bookingEnabled ||
+        Boolean((record.verifiedItems as any)?.appointment_uat?.verifiedAt),
+      record.bookingEnabled,
+      {
+        category: 'controlled_live_test',
+        responsibleParty: 'jayden',
+        statusMessage:
+          'The real appointment path has not completed inside a controlled test run, so launch evidence is incomplete.',
+        nextAction:
+          'Use the controlled test lead to request an appointment, verify both records, then use Take over in the inbox.',
       },
     );
     add(

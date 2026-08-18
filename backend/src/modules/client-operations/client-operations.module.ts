@@ -10,13 +10,32 @@ import {
 } from './client-operations.controller';
 import { ClientOperationsService } from './client-operations.service';
 import { LeadHandoff } from './lead-handoff.entity';
+import { AppointmentBookingService } from './appointment-booking.service';
+import { CalendarModule } from '../calendar/calendar.module';
+import { AuditModule } from '../audit/audit.module';
+import { OnboardingModule } from '../onboarding/onboarding.module';
+import { LeadStageEvent } from '../leads/lead-stage-event.entity';
+import { TenantSettings } from '../settings/tenant-settings.entity';
+import { DurableJob } from '../durable-jobs/durable-job.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([LeadHandoff, Appointment, Lead, Message, LeadEvent]),
+    TypeOrmModule.forFeature([
+      LeadHandoff,
+      Appointment,
+      Lead,
+      Message,
+      LeadEvent,
+      LeadStageEvent,
+      TenantSettings,
+      DurableJob,
+    ]),
+    CalendarModule,
+    AuditModule,
+    OnboardingModule,
   ],
   controllers: [ClientOperationsController, AdminClientOperationsController],
-  providers: [ClientOperationsService],
+  providers: [ClientOperationsService, AppointmentBookingService],
   exports: [ClientOperationsService],
 })
 export class ClientOperationsModule {}

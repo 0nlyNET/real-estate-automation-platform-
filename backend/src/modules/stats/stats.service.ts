@@ -198,7 +198,7 @@ export class StatsService {
           appointmentSetEvents: 'Lead moved to Appointment Set during the selected period.',
         },
         limitations: [
-          'No calendar synchronization; verified bookings are unavailable.',
+          'Google Calendar sync status is shown on each appointment; this report does not yet aggregate verified bookings.',
           'Revenue, ROI, closed-deal attribution, social performance, and time saved are not tracked.',
         ],
       },
