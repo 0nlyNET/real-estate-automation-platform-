@@ -35,6 +35,18 @@ function legacySql(filename: string) {
 
 function memoryDatabase() {
   const db = newDb({ autoCreateForeignKeyIndices: true });
+  db.public.interceptQueries((sql) => {
+    // pg-mem cannot resolve an UPDATE target inside a correlated EXISTS.
+    // Real PostgreSQL execution and rollback are covered by the migration's
+    // dedicated .postgres.spec.ts test.
+    if (
+      sql.includes('UPDATE "tenant_settings" AS "settings"') &&
+      sql.includes('"connection"."tenant_id"::text = "settings"."tenant_id"')
+    ) {
+      return [];
+    }
+    return null;
+  });
   db.public.registerFunction({
     name: "current_database",
     returns: DataType.text,

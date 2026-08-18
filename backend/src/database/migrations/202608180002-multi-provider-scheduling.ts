@@ -48,16 +48,17 @@ export class MultiProviderScheduling1787011200002
       WHERE "provider" = 'google' AND "selected_calendar_id" IS NOT NULL
     `);
     await queryRunner.query(`
-      UPDATE "tenant_settings"
+      UPDATE "tenant_settings" AS "settings"
       SET "active_booking_provider" = 'google_calendar'
       WHERE "active_booking_provider" IS NULL
-        AND "tenant_id" IN (
-          SELECT "tenant_id"
-          FROM "calendar_connections"
-          WHERE "provider" = 'google'
-            AND "status" = 'connected'
-            AND "selected_calendar_id" IS NOT NULL
-            AND "last_tested_at" IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM "calendar_connections" AS "connection"
+          WHERE "connection"."tenant_id"::text = "settings"."tenant_id"
+            AND "connection"."provider" = 'google'
+            AND "connection"."status" = 'connected'
+            AND "connection"."selected_calendar_id" IS NOT NULL
+            AND "connection"."last_tested_at" IS NOT NULL
         )
     `);
 
