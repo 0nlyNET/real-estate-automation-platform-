@@ -1,6 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHmac, randomBytes, randomUUID } from 'crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'crypto';
 import { Repository } from 'typeorm';
 import { decryptString, encryptString } from '../../common/crypto-secrets';
 import { sanitizeOperationalText } from '../../common/operational-log';
@@ -8,6 +14,7 @@ import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 import { OperationsService } from '../operations/operations.service';
 import { IntegrationDeliveryEvent } from './integration-delivery-event.entity';
 import { TenantWebhookSubscription } from './tenant-webhook-subscription.entity';
+import { OnboardingService } from '../onboarding/onboarding.service';
 
 export const CRM_EVENT_TYPES = [
   'lead.created',
@@ -31,6 +38,7 @@ export class CrmEventsService implements OnModuleInit {
     private readonly deliveries: Repository<IntegrationDeliveryEvent>,
     private readonly jobs: DurableJobsService,
     private readonly operations: OperationsService,
+    @Optional() private readonly onboarding?: OnboardingService,
   ) {}
 
   onModuleInit() {
@@ -104,13 +112,23 @@ export class CrmEventsService implements OnModuleInit {
     tenantId: string,
     eventType: Exclude<(typeof CRM_EVENT_TYPES)[number], 'test.ping'>,
     data: Record<string, unknown>,
+    options: { idempotencyKey?: string } = {},
   ) {
     assertEventType(eventType);
     const subscriptions = await this.subscriptions.find({
       where: { tenantId, eventType, status: 'active' },
     });
     if (!subscriptions.length) return { queued: 0 };
-    const deliveries = await this.persistDeliveries(tenantId, eventType, data, subscriptions);
+    const eventId = options.idempotencyKey
+      ? deterministicEventId(tenantId, eventType, options.idempotencyKey)
+      : undefined;
+    const deliveries = await this.persistDeliveries(
+      tenantId,
+      eventType,
+      data,
+      subscriptions,
+      eventId,
+    );
     return { queued: deliveries.length, eventIds: deliveries.map((row) => row.eventId) };
   }
 
@@ -129,8 +147,9 @@ export class CrmEventsService implements OnModuleInit {
     eventType: string,
     data: Record<string, unknown>,
     subscriptions: TenantWebhookSubscription[],
+    requestedEventId?: string,
   ) {
-    const eventId = randomUUID();
+    const eventId = requestedEventId || randomUUID();
     const occurredAt = new Date().toISOString();
     const payload = {
       id: eventId,
@@ -140,9 +159,15 @@ export class CrmEventsService implements OnModuleInit {
       apiVersion: '2026-08-11',
       data,
     };
-    const deliveries = await this.deliveries.save(
-      subscriptions.map((subscription) =>
-        this.deliveries.create({
+    const deliveries: IntegrationDeliveryEvent[] = [];
+    for (const subscription of subscriptions) {
+      let delivery = await this.deliveries.findOne({
+        where: { subscriptionId: subscription.id, eventId },
+      });
+      if (!delivery) {
+        try {
+          delivery = await this.deliveries.save(
+            this.deliveries.create({
           tenantId,
           subscriptionId: subscription.id,
           eventId,
@@ -153,9 +178,18 @@ export class CrmEventsService implements OnModuleInit {
           lastHttpStatus: null,
           lastError: null,
           deliveredAt: null,
-        }),
-      ),
-    );
+            }),
+          );
+        } catch (error: any) {
+          if (String(error?.code || '') !== '23505') throw error;
+          delivery = await this.deliveries.findOne({
+            where: { subscriptionId: subscription.id, eventId },
+          });
+          if (!delivery) throw error;
+        }
+      }
+      deliveries.push(delivery);
+    }
     await Promise.all(deliveries.map((delivery) => this.schedule(delivery)));
     return deliveries;
   }
@@ -218,6 +252,7 @@ export class CrmEventsService implements OnModuleInit {
         this.deliveries.save(delivery),
         this.subscriptions.save(subscription),
       ]);
+      await this.recordControlledUatDelivery(delivery);
     } catch (error: any) {
       const safe = sanitizeOperationalText(error?.message || error, 1_000);
       delivery.status = 'scheduled';
@@ -230,6 +265,44 @@ export class CrmEventsService implements OnModuleInit {
         this.subscriptions.save(subscription),
       ]);
       throw error;
+    }
+  }
+
+  private async recordControlledUatDelivery(
+    delivery: IntegrationDeliveryEvent,
+  ) {
+    const testRunId = String(
+      (delivery.payload as any)?.data?.testRunId || '',
+    );
+    if (
+      delivery.eventType !== 'appointment.created' ||
+      !testRunId ||
+      !this.onboarding
+    ) {
+      return;
+    }
+    try {
+      await this.onboarding.recordUatWorkflowEvidence(
+        delivery.tenantId,
+        testRunId,
+        { crmAppointmentEvent: true },
+      );
+    } catch {
+      // The CRM already accepted the event. Never redeliver it because local
+      // UAT evidence failed; surface a separate operator action instead.
+      await this.operations
+        .createTask({
+          tenantId: delivery.tenantId,
+          category: 'appointment_workflow',
+          title: 'CRM delivery succeeded but UAT evidence needs attention',
+          description:
+            'The appointment webhook was delivered, but the controlled test record could not be updated. Review the test run before activation.',
+          priority: 'high',
+          relatedEntityType: 'integration_delivery_event',
+          relatedEntityId: delivery.id,
+          dedupeOpen: true,
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -268,6 +341,18 @@ export class CrmEventsService implements OnModuleInit {
       createdAt: row.createdAt,
     };
   }
+}
+
+function deterministicEventId(tenantId: string, eventType: string, key: string) {
+  const hex = createHash('sha256')
+    .update(`${tenantId}:${eventType}:${key}`)
+    .digest('hex')
+    .slice(0, 32)
+    .split('');
+  hex[12] = '5';
+  hex[16] = ['8', '9', 'a', 'b'][parseInt(hex[16], 16) % 4];
+  const value = hex.join('');
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
 }
 
 function assertEventType(eventType: string) {

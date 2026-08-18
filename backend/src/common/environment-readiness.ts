@@ -176,6 +176,10 @@ export function environmentReadiness() {
   const pushMissing = VAPID_VALUES.filter((name) => !present(name));
   const pushConfigured = VAPID_VALUES.length - pushMissing.length;
   const pushIssues = vapidIssues();
+  const googleCalendarMissing = [
+    'GOOGLE_CALENDAR_CLIENT_ID',
+    'GOOGLE_CALENDAR_CLIENT_SECRET',
+  ].filter((name) => !present(name));
 
   return {
     environment: production ? 'production' : process.env.NODE_ENV || 'development',
@@ -218,6 +222,13 @@ export function environmentReadiness() {
             : 'up',
       missing: pushMissing,
       issues: pushIssues,
+    },
+    googleCalendar: {
+      status: googleCalendarMissing.length ? 'not_configured' : 'configured',
+      missing: googleCalendarMissing,
+      redirectUri: present('PUBLIC_API_URL')
+        ? `${String(process.env.PUBLIC_API_URL).replace(/\/+$/, '')}/calendar/google/oauth/callback`
+        : null,
     },
     retention: {
       status: 'up',

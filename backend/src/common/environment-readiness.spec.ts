@@ -133,4 +133,22 @@ describe('production configuration contract', () => {
       issues: [],
     });
   });
+
+  it('reports Google Calendar OAuth configuration without exposing its secret', () => {
+    process.env.PUBLIC_API_URL = 'https://api.example.com';
+    process.env.GOOGLE_CALENDAR_CLIENT_ID = 'calendar-client-id';
+    process.env.GOOGLE_CALENDAR_CLIENT_SECRET = 'calendar-client-secret';
+    const report = environmentReadiness();
+    expect(report.googleCalendar).toEqual({
+      status: 'configured',
+      missing: [],
+      redirectUri: 'https://api.example.com/calendar/google/oauth/callback',
+    });
+    expect(JSON.stringify(report)).not.toContain('calendar-client-secret');
+    delete process.env.GOOGLE_CALENDAR_CLIENT_SECRET;
+    expect(environmentReadiness().googleCalendar).toMatchObject({
+      status: 'not_configured',
+      missing: ['GOOGLE_CALENDAR_CLIENT_SECRET'],
+    });
+  });
 });

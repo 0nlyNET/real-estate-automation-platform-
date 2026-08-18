@@ -205,7 +205,10 @@ export class NotificationsService {
           deduplicationKey: input.deduplicationKey,
         },
       });
-      if (notification) continue;
+      if (notification) {
+        created.push(notification);
+        continue;
+      }
       try {
         notification = await this.notifications.save(
           this.notifications.create({
@@ -225,7 +228,13 @@ export class NotificationsService {
           }),
         );
       } catch (error: any) {
-        if (String(error?.code || '') === '23505') continue;
+        if (String(error?.code || '') === '23505') {
+          const concurrent = await this.notifications.findOne({
+            where: { recipientUserId, deduplicationKey: input.deduplicationKey },
+          });
+          if (concurrent) created.push(concurrent);
+          continue;
+        }
         throw error;
       }
       created.push(notification);

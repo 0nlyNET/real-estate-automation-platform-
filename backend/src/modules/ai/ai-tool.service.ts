@@ -418,17 +418,44 @@ export class AiToolService {
       return { bookingLink: link };
     }
     if (name === 'create_or_update_appointment') {
-      if ((context.settings.bookingBehavior || 'verified_link_only') !== 'verified_link_only') {
-        throw new BadRequestException('AI appointment updates are configured for human handoff or disabled');
+      if ((context.settings.bookingBehavior || 'verified_link_only') !== 'calendar_booking') {
+        throw new BadRequestException(
+          'Direct AI booking requires a tested Google Calendar connection and calendar booking mode.',
+        );
       }
       const appointmentId = stringValue(args.appointmentId, 80);
+      const requestedStart = stringValue(args.startsAt, 80);
+      const requestedEnd = stringValue(args.endsAt, 80);
+      if (requestedStart && !/(?:Z|[+-]\d{2}:\d{2})$/.test(requestedStart)) {
+        throw new BadRequestException(
+          'AI appointment times must include an explicit UTC offset.',
+        );
+      }
+      if (requestedEnd && !/(?:Z|[+-]\d{2}:\d{2})$/.test(requestedEnd)) {
+        throw new BadRequestException(
+          'AI appointment times must include an explicit UTC offset.',
+        );
+      }
       if (appointmentId) {
+        const appointment = await this.appointments.findOne({
+          where: {
+            id: appointmentId,
+            tenantId: context.run.tenantId,
+            leadId: context.lead.id,
+          },
+        });
+        if (!appointment) {
+          throw new ForbiddenException({
+            code: 'APPOINTMENT_CONTEXT_INVALID',
+            message: 'The appointment does not belong to this lead conversation.',
+          });
+        }
         const updated = await this.clientOperations.updateAppointment(
           appointmentId,
           context.run.tenantId,
           {
-            startsAt: stringValue(args.startsAt, 80) || undefined,
-            endsAt: stringValue(args.endsAt, 80) || undefined,
+            startsAt: requestedStart || undefined,
+            endsAt: requestedEnd || undefined,
             notes:
               args.notes === undefined
                 ? undefined
@@ -437,7 +464,7 @@ export class AiToolService {
         );
         return { appointmentId: updated.id, updated: true };
       }
-      const startsAt = new Date(stringValue(args.startsAt, 80));
+      const startsAt = new Date(requestedStart);
       if (
         Number.isNaN(startsAt.getTime()) ||
         startsAt <= new Date() ||
@@ -447,24 +474,14 @@ export class AiToolService {
           'Appointment start must be within the next 90 days.',
         );
       }
-      const existing = await this.appointments.findOne({
-        where: {
-          tenantId: context.run.tenantId,
-          externalEventId: idempotencyKey,
-        },
-      });
-      if (existing) {
-        return { appointmentId: existing.id, created: false, idempotent: true };
-      }
       const created = await this.clientOperations.createAppointment(
         context.run.tenantId,
         {
           leadId: context.lead.id,
           startsAt: startsAt.toISOString(),
-          endsAt: stringValue(args.endsAt, 80) || undefined,
+          endsAt: requestedEnd || undefined,
           notes: stringValue(args.notes, 2_000) || undefined,
-          calendarSource: 'RealtyTechAI AI',
-          externalEventId: idempotencyKey,
+          idempotencyKey,
         },
         undefined,
         'conversation',

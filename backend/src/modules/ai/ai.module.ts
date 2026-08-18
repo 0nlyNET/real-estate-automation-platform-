@@ -42,6 +42,7 @@ import { RestrictedAssistantProvider } from './restricted-assistant.provider';
 import { RestrictedAssistantService } from './restricted-assistant.service';
 import { ClientAssistantController, OperationsAssistantController } from './restricted-assistant.controller';
 import { AiSetupService } from './ai-setup.service';
+import { CalendarModule } from '../calendar/calendar.module';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { AiSetupService } from './ai-setup.service';
     StatsModule,
     SettingsModule,
     OnboardingModule,
+    CalendarModule,
   ],
   controllers: [AiController, AdminAiController, ClientAssistantController, OperationsAssistantController],
   providers: [

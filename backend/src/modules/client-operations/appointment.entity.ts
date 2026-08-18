@@ -24,6 +24,10 @@ export type AppointmentStatus =
   unique: true,
   where: 'external_event_id IS NOT NULL',
 })
+@Index('IDX_appointment_idempotency', ['tenantId', 'idempotencyKey'], {
+  unique: true,
+  where: 'idempotency_key IS NOT NULL',
+})
 export class Appointment extends BaseEntity {
   @Column({ name: 'tenant_id', type: 'uuid' })
   tenantId!: string;
@@ -81,4 +85,28 @@ export class Appointment extends BaseEntity {
 
   @Column({ name: 'external_event_id', type: 'varchar', length: 255, nullable: true })
   externalEventId?: string | null;
+
+  @Column({ name: 'external_event_etag', type: 'text', nullable: true })
+  externalEventEtag?: string | null;
+
+  @Column({ name: 'external_provider', type: 'varchar', length: 30, nullable: true })
+  externalProvider?: 'google' | null;
+
+  @Column({ name: 'external_calendar_id', type: 'text', nullable: true })
+  externalCalendarId?: string | null;
+
+  @Column({ name: 'idempotency_key', type: 'varchar', length: 160, nullable: true })
+  idempotencyKey?: string | null;
+
+  @Column({ name: 'sync_status', type: 'varchar', length: 30, default: 'not_synced' })
+  syncStatus!: 'not_synced' | 'synced' | 'needs_attention';
+
+  @Column({ name: 'last_synced_at', type: 'timestamptz', nullable: true })
+  lastSyncedAt?: Date | null;
+
+  @Column({ name: 'sync_error_code', type: 'varchar', length: 100, nullable: true })
+  syncErrorCode?: string | null;
+
+  @Column({ name: 'post_commit_completed_at', type: 'timestamptz', nullable: true })
+  postCommitCompletedAt?: Date | null;
 }

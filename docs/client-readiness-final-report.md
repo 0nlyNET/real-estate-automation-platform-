@@ -6,6 +6,9 @@
 > `docs/managed-provider-architecture.md`: RealtyTechAI owns the Twilio parent
 > and SendGrid accounts, while tenant resources are provisioned and resolved
 > server-side without exposing provider secrets to clients.
+>
+> Calendar conclusions in this historical report are superseded by
+> `docs/google-calendar-production-setup.md` and the current controlled UAT.
 
 Evidence date: July 19, 2026 UTC  
 Audited baseline: `0f4efffc105caf8d305a6d943a1ce220d47ec218` on `main`

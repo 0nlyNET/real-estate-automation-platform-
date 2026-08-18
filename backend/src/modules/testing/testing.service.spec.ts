@@ -113,4 +113,43 @@ describe('TestingService production-pipeline UAT', () => {
     expect((leads.intake as jest.Mock).mock.calls[0][2]).toMatchObject({ testRunId: 'run-1' });
     expect((leads.intake as jest.Mock).mock.calls[1][2]).toMatchObject({ testRunId: 'run-2' });
   });
+
+  it('supports an email-only controlled UAT while SMS/A2P is unavailable', async () => {
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({ id: value.id || 'run-email', ...value })),
+    };
+    const leads = { intake: jest.fn().mockResolvedValue({ id: 'lead-email' }) };
+    const service = new TestingService(
+      runs as any,
+      {
+        find: jest.fn().mockResolvedValue([
+          {
+            leadType: 'buyer',
+            temperature: 'warm',
+            steps: [{ active: true, approvalStatus: 'approved', channel: 'email' }],
+          },
+        ]),
+      } as any,
+      {
+        getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: false, emailEnabled: true }),
+        beginTesting: jest.fn(),
+      } as any,
+      leads as any,
+      { createForTenant: jest.fn() } as any,
+    );
+    await expect(
+      service.start('tenant-1', 'operator-1', { emailRecipient: 'owner@example.com' }),
+    ).resolves.toMatchObject({ smsRecipient: null, emailRecipient: 'owner@example.com' });
+    expect(leads.intake).toHaveBeenCalledWith(
+      'tenant-1',
+      expect.objectContaining({
+        email: 'owner@example.com',
+        phone: undefined,
+        consent: { sms: false, email: true, source: 'controlled_uat' },
+      }),
+      expect.objectContaining({ controlledTest: true }),
+    );
+  });
 });

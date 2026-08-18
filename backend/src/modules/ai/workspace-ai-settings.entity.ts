@@ -36,7 +36,7 @@ export class WorkspaceAiSettings {
   tone!: 'professional_warm' | 'concise' | 'friendly';
 
   @Column({ name: 'booking_behavior', type: 'varchar', length: 40, default: 'verified_link_only' })
-  bookingBehavior!: 'verified_link_only' | 'handoff' | 'disabled';
+  bookingBehavior!: 'calendar_booking' | 'verified_link_only' | 'handoff' | 'disabled';
 
   @Column({ name: 'response_mode', type: 'varchar', length: 30, default: 'human_only' })
   responseMode!: AiResponseMode;

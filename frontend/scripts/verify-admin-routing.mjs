@@ -148,7 +148,7 @@ for (const column of ["Lead", "Source", "Stage", "Communication", "Next action",
 assert.equal(
   (
     dashboard.match(
-      /label: "(?:Account created|Business information completed|Branding completed|Lead source connected|Booking link verified|Message settings approved|Test lead completed|Launch approved)"/g,
+      /label: "(?:Account created|Business information completed|Branding completed|Lead source and CRM connected|Calendar connected and tested|Message settings approved|Controlled workflow completed|Launch approved)"/g,
     ) || []
   ).length,
   8,

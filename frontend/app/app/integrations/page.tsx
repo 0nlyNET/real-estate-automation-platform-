@@ -24,6 +24,7 @@ import { useToast } from "@/hooks/use-toast"
 import { API_URL, apiFetch } from "@/lib/api"
 import {
   CheckCircle2,
+  CalendarDays,
   Clipboard,
   ExternalLink,
   KeyRound,
@@ -118,6 +119,24 @@ type WebhookSubscription = {
   signingSecret?: string
 }
 
+type CalendarStatus = {
+  provider: "google"
+  status: "disconnected" | "choose_calendar" | "configured" | "connected" | "needs_attention"
+  connected: boolean
+  selectedCalendar: { id: string; name: string; timeZone: string | null } | null
+  lastTestedAt: string | null
+  lastSuccessfulSyncAt: string | null
+  issue: { what: string; why: string; how: string } | null
+}
+
+type GoogleCalendarChoice = {
+  id: string
+  name: string
+  primary: boolean
+  timeZone: string | null
+  accessRole: string
+}
+
 function statusBadge(item?: Integration | null) {
   if (item?.status === "connected") return <Badge>Connected</Badge>
   if (item?.status === "error") return <Badge variant="destructive">Needs attention</Badge>
@@ -129,6 +148,13 @@ function realtorStatusBadge(item?: RealtorSetup | null) {
   if (item?.status === "connected") return <Badge>Connected</Badge>
   if (item?.status === "error") return <Badge variant="destructive">Needs attention</Badge>
   if (item?.status === "configured") return <Badge variant="outline">Awaiting Realtor.com test</Badge>
+  return <Badge variant="secondary">Not connected</Badge>
+}
+
+function calendarStatusBadge(item?: CalendarStatus | null) {
+  if (item?.connected) return <Badge>Connected</Badge>
+  if (item?.status === "needs_attention") return <Badge variant="destructive">Needs attention</Badge>
+  if (item?.status === "configured" || item?.status === "choose_calendar") return <Badge variant="outline">Finish setup</Badge>
   return <Badge variant="secondary">Not connected</Badge>
 }
 
@@ -144,6 +170,7 @@ async function fetchIntegrationData() {
     apiFetch<RealtorSetup>("/integrations/realtor-com"),
     apiFetch<ZapierConnection[]>("/integrations/crm/connections/zapier"),
     apiFetch<WebhookSubscription[]>("/integrations/crm/webhooks"),
+    apiFetch<CalendarStatus>("/calendar/status"),
   ])
 }
 
@@ -165,6 +192,10 @@ export default function IntegrationsPage() {
   const [webhookSecret, setWebhookSecret] = useState("")
   const [webhookEventType, setWebhookEventType] = useState("lead.qualified")
   const [webhookTargetUrl, setWebhookTargetUrl] = useState("")
+  const [calendarStatus, setCalendarStatus] = useState<CalendarStatus | null>(null)
+  const [calendarChoices, setCalendarChoices] = useState<GoogleCalendarChoice[]>([])
+  const [selectedCalendarId, setSelectedCalendarId] = useState("")
+  const [changingCalendar, setChangingCalendar] = useState(false)
 
   const canManage = role === "owner" || role === "admin"
   const byProvider = useMemo(
@@ -177,19 +208,21 @@ export default function IntegrationsPage() {
   const facebookWebhookUrl = facebookStatus?.display?.webhookUrl || ""
 
   const load = useCallback(async () => {
-    const [items, tenantSettings, me, realtor, zapier, subscriptions] = await fetchIntegrationData()
+    const [items, tenantSettings, me, realtor, zapier, subscriptions, calendar] = await fetchIntegrationData()
     setIntegrations(items)
     setSettings(tenantSettings)
     setRole(me.role)
     setRealtorSetup(realtor)
     setZapierConnections(zapier)
     setWebhooks(subscriptions)
+    setCalendarStatus(calendar)
+    setSelectedCalendarId(calendar.selectedCalendar?.id || "")
   }, [])
 
   useEffect(() => {
     let alive = true
     fetchIntegrationData()
-      .then(([items, tenantSettings, me, realtor, zapier, subscriptions]) => {
+      .then(([items, tenantSettings, me, realtor, zapier, subscriptions, calendar]) => {
         if (!alive) return
         setIntegrations(items)
         setSettings(tenantSettings)
@@ -197,6 +230,8 @@ export default function IntegrationsPage() {
         setRealtorSetup(realtor)
         setZapierConnections(zapier)
         setWebhooks(subscriptions)
+        setCalendarStatus(calendar)
+        setSelectedCalendarId(calendar.selectedCalendar?.id || "")
       })
       .catch((error) => {
         if (!alive) return
@@ -212,6 +247,18 @@ export default function IntegrationsPage() {
     }
   }, [toast])
 
+  useEffect(() => {
+    if (!canManage || !calendarStatus || !["choose_calendar", "configured"].includes(calendarStatus.status)) return
+    void apiFetch<GoogleCalendarChoice[]>("/calendar/google/calendars")
+      .then((choices) => {
+        setCalendarChoices(choices)
+        if (!selectedCalendarId) {
+          setSelectedCalendarId(choices.find((item) => item.primary)?.id || choices[0]?.id || "")
+        }
+      })
+      .catch(() => undefined)
+  }, [calendarStatus, canManage, selectedCalendarId])
+
   const copy = async (value: string, label: string) => {
     try {
       await navigator.clipboard.writeText(value)
@@ -222,6 +269,79 @@ export default function IntegrationsPage() {
         description: "Select the value and copy it manually.",
         variant: "destructive",
       })
+    }
+  }
+
+  const connectGoogleCalendar = async () => {
+    setBusy("calendar-connect")
+    try {
+      const result = await apiFetch<{ url: string }>("/calendar/google/oauth/start", { method: "POST" })
+      window.location.assign(result.url)
+    } catch (error) {
+      toast({ title: "Google Calendar connection failed", description: errorMessage(error), variant: "destructive" })
+      setBusy(null)
+    }
+  }
+
+  const chooseGoogleCalendar = async () => {
+    if (!selectedCalendarId) return
+    setBusy("calendar-select")
+    try {
+      const status = await apiFetch<CalendarStatus>("/calendar/google/selection", {
+        method: "PUT",
+        body: { calendarId: selectedCalendarId },
+      })
+      setCalendarStatus(status)
+      setChangingCalendar(false)
+      toast({ title: "Calendar selected", description: "Run the connection test to finish." })
+    } catch (error) {
+      toast({ title: "Could not select calendar", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const loadGoogleCalendars = async () => {
+    setBusy("calendar-list")
+    try {
+      const choices = await apiFetch<GoogleCalendarChoice[]>("/calendar/google/calendars")
+      setCalendarChoices(choices)
+      setSelectedCalendarId(calendarStatus?.selectedCalendar?.id || choices.find((item) => item.primary)?.id || choices[0]?.id || "")
+      setChangingCalendar(true)
+    } catch (error) {
+      toast({ title: "Could not load calendars", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const testGoogleCalendar = async () => {
+    setBusy("calendar-test")
+    try {
+      const status = await apiFetch<CalendarStatus>("/calendar/google/test", { method: "POST" })
+      setCalendarStatus(status)
+      toast({ title: "Google Calendar connected", description: "Availability checks and real event creation are ready." })
+    } catch (error) {
+      await load().catch(() => undefined)
+      toast({ title: "Calendar needs attention", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const disconnectGoogleCalendar = async () => {
+    setBusy("calendar-disconnect")
+    try {
+      const status = await apiFetch<CalendarStatus>("/calendar/google", { method: "DELETE" })
+      setCalendarStatus(status)
+      setCalendarChoices([])
+      setSelectedCalendarId("")
+      setChangingCalendar(false)
+      toast({ title: "Google Calendar disconnected" })
+    } catch (error) {
+      toast({ title: "Disconnect failed", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -527,6 +647,44 @@ export default function IntegrationsPage() {
       ) : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
+        <Card className="xl:col-span-2">
+          <CardHeader className="flex flex-row items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2"><CalendarDays className="h-5 w-5" /> Google Calendar</CardTitle>
+              <p className="text-sm text-muted-foreground">Connect → choose calendar → test connection → done.</p>
+            </div>
+            {calendarStatusBadge(calendarStatus)}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {calendarStatus?.connected ? (
+              <Alert><CheckCircle2 /><AlertTitle>{calendarStatus.selectedCalendar?.name || "Google Calendar is ready"}</AlertTitle><AlertDescription>RealtyTechAI checks free/busy before booking and creates, reschedules, or cancels the real event. Last tested {calendarStatus.lastTestedAt ? new Date(calendarStatus.lastTestedAt).toLocaleString() : "just now"}.</AlertDescription></Alert>
+            ) : calendarStatus?.issue ? (
+              <Alert variant={calendarStatus.status === "needs_attention" ? "destructive" : "default"}>
+                <AlertTitle>{calendarStatus.issue.what}</AlertTitle>
+                <AlertDescription><span className="block">Why: {calendarStatus.issue.why}</span><span className="block">How to fix: {calendarStatus.issue.how}</span></AlertDescription>
+              </Alert>
+            ) : (
+              <Alert variant="destructive"><AlertTitle>Calendar status is unavailable.</AlertTitle><AlertDescription><span className="block">Why: Availability and event creation cannot be confirmed.</span><span className="block">How to fix: Reload Connections, then run the Google Calendar connection test.</span></AlertDescription></Alert>
+            )}
+
+            {calendarChoices.length && (calendarStatus?.status !== "connected" || changingCalendar) ? (
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                <div className="space-y-2"><Label htmlFor="google-calendar">Calendar</Label><select id="google-calendar" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={selectedCalendarId} onChange={(event) => setSelectedCalendarId(event.target.value)}><option value="">Choose a calendar</option>{calendarChoices.map((calendar) => <option key={calendar.id} value={calendar.id}>{calendar.name}{calendar.primary ? " (primary)" : ""}{calendar.timeZone ? ` · ${calendar.timeZone}` : ""}</option>)}</select></div>
+                <Button onClick={chooseGoogleCalendar} disabled={!canManage || !selectedCalendarId || Boolean(busy)}>Choose calendar</Button>
+              </div>
+            ) : null}
+
+            {canManage ? <div className="flex flex-wrap gap-2">
+              {calendarStatus?.status === "disconnected" ? <Button onClick={connectGoogleCalendar} disabled={Boolean(busy)}><CalendarDays /> Connect Google Calendar</Button> : null}
+              {calendarStatus?.status !== "disconnected" && calendarStatus?.selectedCalendar ? <Button onClick={testGoogleCalendar} disabled={Boolean(busy)}><CheckCircle2 /> Test connection</Button> : null}
+              {calendarStatus?.connected ? <Button variant="outline" onClick={loadGoogleCalendars} disabled={Boolean(busy)}><CalendarDays /> Choose different calendar</Button> : null}
+              {calendarStatus?.status === "needs_attention" ? <Button variant="outline" onClick={connectGoogleCalendar} disabled={Boolean(busy)}><RefreshCw /> Reconnect</Button> : null}
+              {calendarStatus?.status !== "disconnected" ? <Button variant="ghost" onClick={disconnectGoogleCalendar} disabled={Boolean(busy)}><Unplug /> Disconnect</Button> : null}
+            </div> : null}
+            <p className="text-xs text-muted-foreground">OAuth credentials and tokens are managed securely by RealtyTechAI and are never shown here.</p>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div className="space-y-1">

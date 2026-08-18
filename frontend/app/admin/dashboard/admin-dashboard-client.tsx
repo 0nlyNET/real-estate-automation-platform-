@@ -486,13 +486,13 @@ const onboardingGroups: Array<{ label: string; keys: string[] }> = [
     keys: ["business_identity", "contacts", "service_scope", "lead_handling", "target_launch_date", "provider_owner", "timezone", "quiet_hours"],
   },
   { label: "Branding completed", keys: ["brand"] },
-  { label: "Lead source connected", keys: ["meta", "intake_api", "intake_api_test"] },
-  { label: "Booking link verified", keys: ["booking_url"] },
+  { label: "Lead source and CRM connected", keys: ["meta", "intake_api", "intake_api_test", "crm_appointment_event"] },
+  { label: "Calendar connected and tested", keys: ["google_calendar"] },
   {
     label: "Message settings approved",
     keys: ["consent_policy", "twilio", "sendgrid", "twilio_provider_approval", "sendgrid_provider_approval", "sms_template", "email_template"],
   },
-  { label: "Test lead completed", keys: ["test_lead", "inbound_sms", "inbound_email", "stop", "provider_rejection"] },
+  { label: "Controlled workflow completed", keys: ["test_lead", "appointment_uat", "inbound_sms", "inbound_email", "stop", "provider_rejection"] },
   { label: "Safety configured", keys: ["usage_limits", "disaster_recovery", "legal_review", "tenant_safety"] },
   { label: "Launch approved", keys: ["client_approval", "operator_approval", "billing_evidence", "global_pause"] },
 ]

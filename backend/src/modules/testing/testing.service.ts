@@ -94,7 +94,21 @@ export class TestingService implements OnModuleInit {
         smsRecipient: phone,
         emailRecipient: email,
         testLeadId: null,
-        checks: { intake: 'pending', outbound: 'pending', inbound: 'pending' },
+        checks: {
+          intake: 'pending',
+          outbound: 'pending',
+          inbound: 'pending',
+          ...(onboarding.bookingEnabled
+            ? {
+                calendarAvailability: 'pending',
+                externalCalendarEvent: 'pending',
+                internalAppointment: 'pending',
+                agentNotification: 'pending',
+                crmAppointmentEvent: 'pending',
+                humanTakeover: 'pending',
+              }
+            : {}),
+        },
         expiresAt: new Date(Date.now() + 24 * 60 * 60_000),
         failureReason: null,
         completedAt: null,

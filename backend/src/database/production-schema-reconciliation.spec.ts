@@ -21,6 +21,7 @@ import { LaunchSafeguards1786406400001 } from "./migrations/202608110001-launch-
 import { ManagedProviderArchitecture1786492800001 } from "./migrations/202608120001-managed-provider-architecture";
 import { TurnkeyLaunchOperation1786579200001 } from "./migrations/202608130001-turnkey-launch-operation";
 import { ManagedCrmAiAutopilot1786665600001 } from "./migrations/202608140001-managed-crm-ai-autopilot";
+import { GoogleCalendarReliability1787011200001 } from "./migrations/202608180001-google-calendar-reliability";
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -125,7 +126,7 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 57,
+      expectedTables: 59,
       actualTables: 12,
       missingTables: [
         "account_invitations",
@@ -138,6 +139,8 @@ describe("deployed legacy schema reproduction", () => {
         "assistant_runs",
         "billing_events",
         "brokerage_ai_knowledge",
+        "calendar_connections",
+        "calendar_oauth_states",
         "communication_suppressions",
         "compliance_events",
         "compliance_optouts",
@@ -194,12 +197,13 @@ describe("deployed legacy schema reproduction", () => {
     await new ManagedProviderArchitecture1786492800001().up(queryRunner);
     await new TurnkeyLaunchOperation1786579200001().up(queryRunner);
     await new ManagedCrmAiAutopilot1786665600001().up(queryRunner);
+    await new GoogleCalendarReliability1787011200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 57,
-      actualTables: 57,
+      expectedTables: 59,
+      actualTables: 59,
       missingTables: [],
       missingColumns: [],
     });
@@ -266,18 +270,20 @@ describe("deployed legacy schema reproduction", () => {
     await new ManagedProviderArchitecture1786492800001().up(queryRunner);
     await new TurnkeyLaunchOperation1786579200001().up(queryRunner);
     await new ManagedCrmAiAutopilot1786665600001().up(queryRunner);
+    await new GoogleCalendarReliability1787011200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 57,
-      actualTables: 57,
+      expectedTables: 59,
+      actualTables: 59,
       missingTables: [],
       missingColumns: [],
     });
 
     const rollbackRunner = dataSource.createQueryRunner();
     await rollbackRunner.connect();
+    await new GoogleCalendarReliability1787011200001().down(rollbackRunner);
     await new ManagedCrmAiAutopilot1786665600001().down(rollbackRunner);
     await new TurnkeyLaunchOperation1786579200001().down(rollbackRunner);
     await new ManagedProviderArchitecture1786492800001().down(rollbackRunner);

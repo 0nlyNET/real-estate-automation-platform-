@@ -7,6 +7,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -20,6 +21,7 @@ import { Message } from '../messaging/message.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { CreateAppointmentDto, UpdateAppointmentDto, UpdateHandoffDto } from './client-operations.dto';
 import { CrmEventsService } from '../crm-events/crm-events.service';
+import { AppointmentBookingService } from './appointment-booking.service';
 
 type AccessContext = { userId?: string; role?: UserRole };
 
@@ -52,6 +54,9 @@ type ClientAppointment = {
   confirmationStatus: string;
   followUpStatus: string;
   notes: string | null;
+  externalProvider: string | null;
+  syncStatus: string;
+  lastSyncedAt: Date | null;
 };
 
 type TodayAction = {
@@ -91,6 +96,7 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     private readonly events: Repository<LeadEvent>,
     private readonly notifications: NotificationsService,
     @Optional() private readonly crmEvents?: CrmEventsService,
+    @Optional() private readonly appointmentBooking?: AppointmentBookingService,
   ) {}
 
   onModuleInit() {
@@ -156,6 +162,9 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
       confirmationStatus: appointment.confirmationStatus,
       followUpStatus: appointment.followUpStatus,
       notes: appointment.notes || null,
+      externalProvider: appointment.externalProvider || null,
+      syncStatus: appointment.syncStatus,
+      lastSyncedAt: appointment.lastSyncedAt || null,
     };
   }
 
@@ -499,6 +508,14 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     ctx?: AccessContext,
     source: Appointment['source'] = 'manual',
   ) {
+    if (this.appointmentBooking) {
+      return this.appointmentBooking.create(tenantId, dto, ctx, source);
+    }
+    if (process.env.NODE_ENV !== 'test') {
+      throw new ServiceUnavailableException(
+        'Calendar booking is unavailable. Use the verified booking link or hand off to a person.',
+      );
+    }
     const lead = await this.requireLeadAccess(tenantId, dto.leadId, ctx);
     const startsAt = new Date(dto.startsAt);
     const endsAt = dto.endsAt ? new Date(dto.endsAt) : new Date(startsAt.getTime() + 30 * 60 * 1000);
@@ -566,6 +583,14 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     dto: UpdateAppointmentDto,
     ctx?: AccessContext,
   ) {
+    if (this.appointmentBooking) {
+      return this.appointmentBooking.update(id, tenantId, dto, ctx);
+    }
+    if (process.env.NODE_ENV !== 'test') {
+      throw new ServiceUnavailableException(
+        'Calendar booking is unavailable. Use the verified booking link or hand off to a person.',
+      );
+    }
     const query = this.appointments
       .createQueryBuilder('appointment')
       .leftJoinAndSelect('appointment.lead', 'lead')

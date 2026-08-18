@@ -6,6 +6,7 @@ import { CalendarPlus, Check, Clock3, MessageSquareText } from "lucide-react"
 import { PageShell } from "@/app/app/_components/PageShell"
 import { apiFetch } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -29,10 +30,18 @@ type Appointment = {
   confirmationStatus: "pending" | "confirmed" | "declined"
   followUpStatus: string
   notes?: string | null
+  externalProvider?: string | null
+  syncStatus?: "not_synced" | "synced" | "needs_attention"
+  lastSyncedAt?: string | null
   lead: { id: string; fullName: string; phone?: string | null; email?: string | null }
 }
 
 type View = "upcoming" | "completed" | "cancelled" | "no_show"
+type CalendarStatus = {
+  connected: boolean
+  issue: { what: string; why: string; how: string } | null
+  selectedCalendar: { name: string; timeZone: string | null } | null
+}
 
 function label(value: string) {
   return value.replaceAll("_", " ")
@@ -50,16 +59,31 @@ export default function AppointmentsPage() {
   const [startsAt, setStartsAt] = useState("")
   const [notes, setNotes] = useState("")
   const [reschedule, setReschedule] = useState<Record<string, string>>({})
+  const [calendar, setCalendar] = useState<CalendarStatus | null>(null)
+  const [workspaceTimeZone, setWorkspaceTimeZone] = useState("")
+  const [appointmentRequestKey, setAppointmentRequestKey] = useState("")
 
   const load = useCallback(async () => {
     setError("")
     try {
-      const [appointments, leadRows] = await Promise.all([
+      const [appointments, leadRows, calendarStatus, tenantSettings] = await Promise.all([
         apiFetch<Appointment[]>("/client/appointments"),
         apiFetch<Lead[]>("/leads?take=200"),
+        apiFetch<CalendarStatus>("/calendar/status").catch(() => ({
+          connected: false,
+          selectedCalendar: null,
+          issue: {
+            what: "Calendar status could not be loaded.",
+            why: "Real availability and event creation cannot be confirmed.",
+            how: "Open Connections and run the Google Calendar connection test.",
+          },
+        })),
+        apiFetch<{ timeZone: string }>("/settings/tenant").catch(() => ({ timeZone: "" })),
       ])
       setItems(appointments)
       setLeads(Array.isArray(leadRows) ? leadRows : [])
+      setCalendar(calendarStatus)
+      setWorkspaceTimeZone(tenantSettings.timeZone || "")
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Appointments could not be loaded")
     } finally {
@@ -80,13 +104,20 @@ export default function AppointmentsPage() {
   async function create(event: FormEvent) {
     event.preventDefault()
     if (!leadId || !startsAt) return
+    const requestKey = appointmentRequestKey || window.crypto.randomUUID()
+    if (!appointmentRequestKey) setAppointmentRequestKey(requestKey)
     setBusy("create")
     try {
       await apiFetch("/client/appointments", {
         method: "POST",
-        body: { leadId, startsAt: new Date(startsAt).toISOString(), notes },
+        body: {
+          leadId,
+          startsAt,
+          notes,
+          idempotencyKey: requestKey,
+        },
       })
-      setOpen(false); setLeadId(""); setStartsAt(""); setNotes("")
+      setOpen(false); setLeadId(""); setStartsAt(""); setNotes(""); setAppointmentRequestKey("")
       await load()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The appointment could not be saved")
@@ -111,19 +142,26 @@ export default function AppointmentsPage() {
 
   return (
     <PageShell title="Appointments" subtitle="Upcoming meetings and the follow-up each one needs.">
+      {!calendar?.connected ? (
+        <Alert variant="destructive">
+          <CalendarPlus />
+          <AlertTitle>{calendar?.issue?.what || "Google Calendar is not ready."}</AlertTitle>
+          <AlertDescription><span className="block">Why: {calendar?.issue?.why || "Real availability and event creation cannot be guaranteed."}</span><span className="block">How to fix: {calendar?.issue?.how || "Connect, choose, and test Google Calendar."} <Link className="underline" href="/app/integrations">Open Connections</Link>.</span></AlertDescription>
+        </Alert>
+      ) : null}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex gap-2 overflow-x-auto">
           {(["upcoming", "completed", "cancelled", "no_show"] as View[]).map((item) => <Button key={item} size="sm" variant={view === item ? "default" : "outline"} onClick={() => setView(item)}>{label(item)}</Button>)}
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild><Button><CalendarPlus className="mr-2 h-4 w-4" />Schedule appointment</Button></DialogTrigger>
+        <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (next && !appointmentRequestKey) setAppointmentRequestKey(window.crypto.randomUUID()) }}>
+          <DialogTrigger asChild><Button disabled={!calendar?.connected}><CalendarPlus className="mr-2 h-4 w-4" />Schedule appointment</Button></DialogTrigger>
           <DialogContent>
-            <DialogHeader><DialogTitle>Schedule an appointment</DialogTitle><DialogDescription>Choose the lead and agreed time. It will appear here and on Today.</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle>Schedule an appointment</DialogTitle><DialogDescription>Choose the exact time the lead agreed to in {workspaceTimeZone || "the workspace time zone"}. RealtyTechAI checks {calendar?.selectedCalendar?.name || "Google Calendar"} first, invites the lead when an email is available, then creates the internal record.</DialogDescription></DialogHeader>
             <form className="space-y-4" onSubmit={create}>
               <label className="grid gap-1.5 text-sm">Lead<select required className="h-10 rounded-md border bg-background px-3" value={leadId} onChange={(event) => setLeadId(event.target.value)}><option value="">Choose a lead</option>{leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.fullName}</option>)}</select></label>
-              <label className="grid gap-1.5 text-sm">Date and time<Input required type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>
+              <label className="grid gap-1.5 text-sm">Date and time ({workspaceTimeZone || "workspace time zone"})<Input required type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>
               <label className="grid gap-1.5 text-sm">Notes<Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="What was agreed?" /></label>
-              <Button type="submit" disabled={busy === "create"}>{busy === "create" ? "Saving…" : "Save appointment"}</Button>
+              <Button type="submit" disabled={busy === "create"}>{busy === "create" ? "Checking and booking…" : "Check and book"}</Button>
             </form>
           </DialogContent>
         </Dialog>
@@ -139,12 +177,12 @@ export default function AppointmentsPage() {
             <CardContent className="p-4 sm:p-5">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{item.lead.fullName}</h2><Badge variant={item.confirmationStatus === "confirmed" ? "default" : "secondary"}>{label(item.confirmationStatus)}</Badge><Badge variant="outline">{label(item.status)}</Badge></div>
+                  <div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{item.lead.fullName}</h2><Badge variant={item.confirmationStatus === "confirmed" ? "default" : "secondary"}>{label(item.confirmationStatus)}</Badge><Badge variant="outline">{label(item.status)}</Badge><Badge variant={item.syncStatus === "synced" ? "default" : item.syncStatus === "needs_attention" ? "destructive" : "secondary"}>{item.syncStatus === "synced" ? "Google synced" : item.syncStatus === "needs_attention" ? "Calendar needs attention" : "Legacy internal record"}</Badge></div>
                   <div className="mt-2 flex items-center gap-2 text-sm"><Clock3 className="h-4 w-4 text-muted-foreground" />{new Date(item.startsAt).toLocaleString([], { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
                   {item.notes ? <p className="mt-2 text-sm text-muted-foreground">{item.notes}</p> : null}
                   <div className="mt-3 flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/inbox?leadId=${item.lead.id}`}><MessageSquareText className="mr-2 h-4 w-4" />Conversation</Link></Button>{item.confirmationStatus !== "confirmed" && view === "upcoming" ? <Button size="sm" onClick={() => void update(item, { status: "confirmed", confirmationStatus: "confirmed" })} disabled={busy === item.id}><Check className="mr-2 h-4 w-4" />Confirm</Button> : null}{view === "upcoming" ? <Button size="sm" variant="outline" onClick={() => void update(item, { status: "completed", followUpStatus: "due" })} disabled={busy === item.id}>Mark completed</Button> : null}{view === "upcoming" ? <Button size="sm" variant="ghost" onClick={() => void update(item, { status: "cancelled" })} disabled={busy === item.id}>Cancel</Button> : null}</div>
                 </div>
-                {view === "upcoming" ? <div className="w-full space-y-2 rounded-lg border p-3 lg:w-72"><label className="grid gap-1 text-xs font-medium">New date and time<Input type="datetime-local" value={reschedule[item.id] || ""} onChange={(event) => setReschedule((current) => ({ ...current, [item.id]: event.target.value }))} /></label><Button size="sm" variant="outline" disabled={!reschedule[item.id] || busy === item.id} onClick={() => void update(item, { startsAt: new Date(reschedule[item.id]).toISOString() })}>Reschedule</Button></div> : null}
+                {view === "upcoming" ? <div className="w-full space-y-2 rounded-lg border p-3 lg:w-72"><label className="grid gap-1 text-xs font-medium">New date and time ({workspaceTimeZone || "workspace time zone"})<Input type="datetime-local" value={reschedule[item.id] || ""} onChange={(event) => setReschedule((current) => ({ ...current, [item.id]: event.target.value }))} /></label><Button size="sm" variant="outline" disabled={!calendar?.connected || !reschedule[item.id] || busy === item.id} onClick={() => void update(item, { startsAt: reschedule[item.id] })}>Check and reschedule</Button></div> : null}
               </div>
             </CardContent>
           </Card>
