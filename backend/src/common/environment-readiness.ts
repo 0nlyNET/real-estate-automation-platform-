@@ -63,6 +63,35 @@ function validHttpsUrl(name: string) {
   }
 }
 
+function optionalProviderConfiguration(input: {
+  required: readonly string[];
+  redirectPath: string;
+  webhookVariable: string;
+  webhookPath: string;
+}) {
+  const missing = input.required.filter((name) => !present(name));
+  const configuredCount = input.required.length - missing.length;
+  const publicApi = String(process.env.PUBLIC_API_URL || '').replace(/\/+$/, '');
+  const explicitWebhook = String(process.env[input.webhookVariable] || '').trim();
+  const issues: string[] = [];
+  if (configuredCount > 0 && !publicApi) missing.push('PUBLIC_API_URL');
+  if (explicitWebhook && !validHttpsUrl(input.webhookVariable)) {
+    issues.push(`${input.webhookVariable} must be an absolute HTTPS URL`);
+  }
+  return {
+    status:
+      configuredCount === 0
+        ? 'not_configured'
+        : missing.length || issues.length
+          ? 'down'
+          : 'configured',
+    missing,
+    issues,
+    redirectUri: publicApi ? `${publicApi}${input.redirectPath}` : null,
+    webhookUrl: explicitWebhook || (publicApi ? `${publicApi}${input.webhookPath}` : null),
+  };
+}
+
 function validEncryptionKey() {
   const raw = String(process.env.INTEGRATIONS_ENCRYPTION_KEY || '').trim();
   if (!raw) return false;
@@ -176,10 +205,34 @@ export function environmentReadiness() {
   const pushMissing = VAPID_VALUES.filter((name) => !present(name));
   const pushConfigured = VAPID_VALUES.length - pushMissing.length;
   const pushIssues = vapidIssues();
-  const googleCalendarMissing = [
-    'GOOGLE_CALENDAR_CLIENT_ID',
-    'GOOGLE_CALENDAR_CLIENT_SECRET',
-  ].filter((name) => !present(name));
+  const googleCalendar = optionalProviderConfiguration({
+    required: [
+      'GOOGLE_CALENDAR_CLIENT_ID',
+      'GOOGLE_CALENDAR_CLIENT_SECRET',
+    ],
+    redirectPath: '/calendar/google/oauth/callback',
+    webhookVariable: 'GOOGLE_CALENDAR_WEBHOOK_URL',
+    webhookPath: '/calendar/google/notifications',
+  });
+  const microsoftCalendar = optionalProviderConfiguration({
+    required: [
+      'MICROSOFT_CALENDAR_CLIENT_ID',
+      'MICROSOFT_CALENDAR_CLIENT_SECRET',
+    ],
+    redirectPath: '/calendar/microsoft/oauth/callback',
+    webhookVariable: 'MICROSOFT_CALENDAR_WEBHOOK_URL',
+    webhookPath: '/calendar/microsoft/notifications',
+  });
+  const calendly = optionalProviderConfiguration({
+    required: [
+      'CALENDLY_CLIENT_ID',
+      'CALENDLY_CLIENT_SECRET',
+      'CALENDLY_WEBHOOK_SIGNING_KEY',
+    ],
+    redirectPath: '/calendar/calendly/oauth/callback',
+    webhookVariable: 'CALENDLY_WEBHOOK_URL',
+    webhookPath: '/calendar/calendly/notifications',
+  });
 
   return {
     environment: production ? 'production' : process.env.NODE_ENV || 'development',
@@ -223,18 +276,9 @@ export function environmentReadiness() {
       missing: pushMissing,
       issues: pushIssues,
     },
-    googleCalendar: {
-      status: googleCalendarMissing.length ? 'not_configured' : 'configured',
-      missing: googleCalendarMissing,
-      redirectUri: present('PUBLIC_API_URL')
-        ? `${String(process.env.PUBLIC_API_URL).replace(/\/+$/, '')}/calendar/google/oauth/callback`
-        : null,
-      webhookUrl: present('GOOGLE_CALENDAR_WEBHOOK_URL')
-        ? String(process.env.GOOGLE_CALENDAR_WEBHOOK_URL)
-        : present('PUBLIC_API_URL')
-          ? `${String(process.env.PUBLIC_API_URL).replace(/\/+$/, '')}/calendar/google/notifications`
-          : null,
-    },
+    googleCalendar,
+    microsoftCalendar,
+    calendly,
     retention: {
       status: 'up',
       days: Number(process.env.OPERATIONAL_RETENTION_DAYS || 90),

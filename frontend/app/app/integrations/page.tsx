@@ -119,23 +119,71 @@ type WebhookSubscription = {
   signingSecret?: string
 }
 
-type CalendarStatus = {
-  provider: "google"
-  status: "disconnected" | "choose_calendar" | "configured" | "connected" | "needs_attention"
+type BookingProvider = "google_calendar" | "microsoft_calendar" | "calendly"
+
+type BookingProviderStatus = {
+  provider: BookingProvider
+  status: "disconnected" | "choose_resource" | "configured" | "connected" | "needs_attention"
   connected: boolean
-  selectedCalendar: { id: string; name: string; timeZone: string | null } | null
+  selectedResource: { id: string; name: string; timeZone: string | null; type: string } | null
   lastTestedAt: string | null
   lastSuccessfulSyncAt: string | null
+  changeNotifications: { status: "active" | "reconciliation_only" | "not_supported"; expiresAt: string | null }
+  capabilities: {
+    directBooking: boolean
+    automatedReschedule: boolean
+    cancellation: boolean
+    onlineMeeting: boolean
+    changeNotifications: boolean
+  }
   issue: { what: string; why: string; how: string } | null
 }
 
-type GoogleCalendarChoice = {
+type CalendarStatus = {
+  activeProvider: BookingProvider | null
+  connected: boolean
+  providers: Record<BookingProvider, BookingProviderStatus>
+}
+
+type BookingResource = {
   id: string
   name: string
-  primary: boolean
+  primary?: boolean
   timeZone: string | null
-  accessRole: string
+  accessRole?: string
+  teamsSupported?: boolean
+  durationMinutes?: number | null
 }
+
+const schedulingProviders: Array<{
+  provider: BookingProvider
+  path: "google" | "microsoft" | "calendly"
+  label: string
+  resourceLabel: string
+  description: string
+}> = [
+  {
+    provider: "google_calendar",
+    path: "google",
+    label: "Google Calendar",
+    resourceLabel: "calendar",
+    description: "Use verified Google free/busy and real calendar events.",
+  },
+  {
+    provider: "microsoft_calendar",
+    path: "microsoft",
+    label: "Microsoft Outlook & Teams",
+    resourceLabel: "calendar",
+    description: "Use Outlook availability and add Teams links for virtual appointments.",
+  },
+  {
+    provider: "calendly",
+    path: "calendly",
+    label: "Calendly",
+    resourceLabel: "meeting type",
+    description: "Use Calendly rules, direct scheduling, and verified management links.",
+  },
+]
 
 function statusBadge(item?: Integration | null) {
   if (item?.status === "connected") return <Badge>Connected</Badge>
@@ -151,10 +199,10 @@ function realtorStatusBadge(item?: RealtorSetup | null) {
   return <Badge variant="secondary">Not connected</Badge>
 }
 
-function calendarStatusBadge(item?: CalendarStatus | null) {
+function calendarStatusBadge(item?: BookingProviderStatus | null) {
   if (item?.connected) return <Badge>Connected</Badge>
   if (item?.status === "needs_attention") return <Badge variant="destructive">Needs attention</Badge>
-  if (item?.status === "configured" || item?.status === "choose_calendar") return <Badge variant="outline">Finish setup</Badge>
+  if (item?.status === "configured" || item?.status === "choose_resource") return <Badge variant="outline">Finish setup</Badge>
   return <Badge variant="secondary">Not connected</Badge>
 }
 
@@ -193,9 +241,9 @@ export default function IntegrationsPage() {
   const [webhookEventType, setWebhookEventType] = useState("lead.qualified")
   const [webhookTargetUrl, setWebhookTargetUrl] = useState("")
   const [calendarStatus, setCalendarStatus] = useState<CalendarStatus | null>(null)
-  const [calendarChoices, setCalendarChoices] = useState<GoogleCalendarChoice[]>([])
-  const [selectedCalendarId, setSelectedCalendarId] = useState("")
-  const [changingCalendar, setChangingCalendar] = useState(false)
+  const [resourceChoices, setResourceChoices] = useState<Partial<Record<BookingProvider, BookingResource[]>>>({})
+  const [selectedResourceIds, setSelectedResourceIds] = useState<Partial<Record<BookingProvider, string>>>({})
+  const [changingResources, setChangingResources] = useState<Partial<Record<BookingProvider, boolean>>>({})
 
   const canManage = role === "owner" || role === "admin"
   const byProvider = useMemo(
@@ -216,7 +264,9 @@ export default function IntegrationsPage() {
     setZapierConnections(zapier)
     setWebhooks(subscriptions)
     setCalendarStatus(calendar)
-    setSelectedCalendarId(calendar.selectedCalendar?.id || "")
+    setSelectedResourceIds(Object.fromEntries(
+      schedulingProviders.map(({ provider }) => [provider, calendar.providers[provider].selectedResource?.id || ""]),
+    ))
   }, [])
 
   useEffect(() => {
@@ -231,7 +281,9 @@ export default function IntegrationsPage() {
         setZapierConnections(zapier)
         setWebhooks(subscriptions)
         setCalendarStatus(calendar)
-        setSelectedCalendarId(calendar.selectedCalendar?.id || "")
+        setSelectedResourceIds(Object.fromEntries(
+          schedulingProviders.map(({ provider }) => [provider, calendar.providers[provider].selectedResource?.id || ""]),
+        ))
       })
       .catch((error) => {
         if (!alive) return
@@ -248,16 +300,25 @@ export default function IntegrationsPage() {
   }, [toast])
 
   useEffect(() => {
-    if (!canManage || !calendarStatus || !["choose_calendar", "configured"].includes(calendarStatus.status)) return
-    void apiFetch<GoogleCalendarChoice[]>("/calendar/google/calendars")
-      .then((choices) => {
-        setCalendarChoices(choices)
-        if (!selectedCalendarId) {
-          setSelectedCalendarId(choices.find((item) => item.primary)?.id || choices[0]?.id || "")
-        }
-      })
-      .catch(() => undefined)
-  }, [calendarStatus, canManage, selectedCalendarId])
+    if (!canManage || !calendarStatus) return
+    for (const definition of schedulingProviders) {
+      const status = calendarStatus.providers[definition.provider]
+      if (
+        !["choose_resource", "configured"].includes(status.status) ||
+        resourceChoices[definition.provider]
+      ) continue
+      const resourcePath = definition.path === "google" ? "calendars" : "resources"
+      void apiFetch<BookingResource[]>(`/calendar/${definition.path}/${resourcePath}`)
+        .then((choices) => {
+          setResourceChoices((current) => ({ ...current, [definition.provider]: choices }))
+          setSelectedResourceIds((current) => ({
+            ...current,
+            [definition.provider]: current[definition.provider] || status.selectedResource?.id || choices.find((item) => item.primary)?.id || choices[0]?.id || "",
+          }))
+        })
+        .catch(() => undefined)
+    }
+  }, [calendarStatus, canManage, resourceChoices])
 
   const copy = async (value: string, label: string) => {
     try {
@@ -272,74 +333,104 @@ export default function IntegrationsPage() {
     }
   }
 
-  const connectGoogleCalendar = async () => {
-    setBusy("calendar-connect")
+  const connectSchedulingProvider = async (provider: BookingProvider) => {
+    const definition = schedulingProviders.find((item) => item.provider === provider)!
+    setBusy(`${definition.path}-connect`)
     try {
-      const result = await apiFetch<{ url: string }>("/calendar/google/oauth/start", { method: "POST" })
+      const result = await apiFetch<{ url: string }>(`/calendar/${definition.path}/oauth/start`, { method: "POST" })
       window.location.assign(result.url)
     } catch (error) {
-      toast({ title: "Google Calendar connection failed", description: errorMessage(error), variant: "destructive" })
+      toast({ title: `${definition.label} connection failed`, description: errorMessage(error), variant: "destructive" })
       setBusy(null)
     }
   }
 
-  const chooseGoogleCalendar = async () => {
-    if (!selectedCalendarId) return
-    setBusy("calendar-select")
+  const chooseSchedulingResource = async (provider: BookingProvider) => {
+    const definition = schedulingProviders.find((item) => item.provider === provider)!
+    const resourceId = selectedResourceIds[provider]
+    if (!resourceId) return
+    setBusy(`${definition.path}-select`)
     try {
-      const status = await apiFetch<CalendarStatus>("/calendar/google/selection", {
+      await apiFetch(`/calendar/${definition.path}/selection`, {
         method: "PUT",
-        body: { calendarId: selectedCalendarId },
+        body: { calendarId: resourceId },
       })
-      setCalendarStatus(status)
-      setChangingCalendar(false)
-      toast({ title: "Calendar selected", description: "Run the connection test to finish." })
+      setChangingResources((current) => ({ ...current, [provider]: false }))
+      await load()
+      toast({ title: `${definition.resourceLabel[0].toUpperCase()}${definition.resourceLabel.slice(1)} selected`, description: "Run the connection test to finish." })
     } catch (error) {
-      toast({ title: "Could not select calendar", description: errorMessage(error), variant: "destructive" })
+      toast({ title: `Could not select ${definition.resourceLabel}`, description: errorMessage(error), variant: "destructive" })
     } finally {
       setBusy(null)
     }
   }
 
-  const loadGoogleCalendars = async () => {
-    setBusy("calendar-list")
+  const loadSchedulingResources = async (provider: BookingProvider) => {
+    const definition = schedulingProviders.find((item) => item.provider === provider)!
+    setBusy(`${definition.path}-list`)
     try {
-      const choices = await apiFetch<GoogleCalendarChoice[]>("/calendar/google/calendars")
-      setCalendarChoices(choices)
-      setSelectedCalendarId(calendarStatus?.selectedCalendar?.id || choices.find((item) => item.primary)?.id || choices[0]?.id || "")
-      setChangingCalendar(true)
+      const resourcePath = definition.path === "google" ? "calendars" : "resources"
+      const choices = await apiFetch<BookingResource[]>(`/calendar/${definition.path}/${resourcePath}`)
+      setResourceChoices((current) => ({ ...current, [provider]: choices }))
+      setSelectedResourceIds((current) => ({
+        ...current,
+        [provider]: calendarStatus?.providers[provider].selectedResource?.id || choices.find((item) => item.primary)?.id || choices[0]?.id || "",
+      }))
+      setChangingResources((current) => ({ ...current, [provider]: true }))
     } catch (error) {
-      toast({ title: "Could not load calendars", description: errorMessage(error), variant: "destructive" })
+      toast({ title: `Could not load ${definition.resourceLabel}s`, description: errorMessage(error), variant: "destructive" })
     } finally {
       setBusy(null)
     }
   }
 
-  const testGoogleCalendar = async () => {
-    setBusy("calendar-test")
+  const testSchedulingProvider = async (provider: BookingProvider) => {
+    const definition = schedulingProviders.find((item) => item.provider === provider)!
+    setBusy(`${definition.path}-test`)
     try {
-      const status = await apiFetch<CalendarStatus>("/calendar/google/test", { method: "POST" })
-      setCalendarStatus(status)
-      toast({ title: "Google Calendar connected", description: "Availability checks and real event creation are ready." })
+      await apiFetch(`/calendar/${definition.path}/test`, { method: "POST" })
+      await load()
+      toast({ title: `${definition.label} connected`, description: "Availability checks and authoritative appointment creation are ready." })
     } catch (error) {
       await load().catch(() => undefined)
-      toast({ title: "Calendar needs attention", description: errorMessage(error), variant: "destructive" })
+      toast({ title: `${definition.label} needs attention`, description: errorMessage(error), variant: "destructive" })
     } finally {
       setBusy(null)
     }
   }
 
-  const disconnectGoogleCalendar = async () => {
-    setBusy("calendar-disconnect")
+  const disconnectSchedulingProvider = async (provider: BookingProvider) => {
+    const definition = schedulingProviders.find((item) => item.provider === provider)!
+    setBusy(`${definition.path}-disconnect`)
     try {
-      const status = await apiFetch<CalendarStatus>("/calendar/google", { method: "DELETE" })
-      setCalendarStatus(status)
-      setCalendarChoices([])
-      setSelectedCalendarId("")
-      setChangingCalendar(false)
-      toast({ title: "Google Calendar disconnected" })
+      await apiFetch(`/calendar/${definition.path}`, { method: "DELETE" })
+      setResourceChoices((current) => ({ ...current, [provider]: undefined }))
+      setSelectedResourceIds((current) => ({ ...current, [provider]: "" }))
+      setChangingResources((current) => ({ ...current, [provider]: false }))
+      await load()
+      toast({ title: `${definition.label} disconnected` })
     } catch (error) {
       toast({ title: "Disconnect failed", description: errorMessage(error), variant: "destructive" })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const activateSchedulingProvider = async (provider: BookingProvider) => {
+    const definition = schedulingProviders.find((item) => item.provider === provider)!
+    setBusy(`${definition.path}-active`)
+    try {
+      const status = await apiFetch<CalendarStatus>("/calendar/active", {
+        method: "PUT",
+        body: { provider },
+      })
+      setCalendarStatus(status)
+      toast({
+        title: `${definition.label} will handle new bookings`,
+        description: "Existing appointments remain with the provider that created them.",
+      })
+    } catch (error) {
+      toast({ title: "Could not change booking provider", description: errorMessage(error), variant: "destructive" })
     } finally {
       setBusy(null)
     }
@@ -648,40 +739,49 @@ export default function IntegrationsPage() {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card className="xl:col-span-2">
-          <CardHeader className="flex flex-row items-start justify-between gap-4">
-            <div className="space-y-1">
-              <CardTitle className="flex items-center gap-2"><CalendarDays className="h-5 w-5" /> Google Calendar</CardTitle>
-              <p className="text-sm text-muted-foreground">Connect → choose calendar → test connection → done.</p>
-            </div>
-            {calendarStatusBadge(calendarStatus)}
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><CalendarDays className="h-5 w-5" /> Appointment scheduling</CardTitle>
+            <p className="text-sm text-muted-foreground">Connect any provider you use, then choose exactly one for new direct bookings. Changing the default never moves existing appointments.</p>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {calendarStatus?.connected ? (
-              <Alert><CheckCircle2 /><AlertTitle>{calendarStatus.selectedCalendar?.name || "Google Calendar is ready"}</AlertTitle><AlertDescription>RealtyTechAI checks free/busy before booking and creates, reschedules, or cancels the real event. Last tested {calendarStatus.lastTestedAt ? new Date(calendarStatus.lastTestedAt).toLocaleString() : "just now"}.</AlertDescription></Alert>
-            ) : calendarStatus?.issue ? (
-              <Alert variant={calendarStatus.status === "needs_attention" ? "destructive" : "default"}>
-                <AlertTitle>{calendarStatus.issue.what}</AlertTitle>
-                <AlertDescription><span className="block">Why: {calendarStatus.issue.why}</span><span className="block">How to fix: {calendarStatus.issue.how}</span></AlertDescription>
-              </Alert>
-            ) : (
-              <Alert variant="destructive"><AlertTitle>Calendar status is unavailable.</AlertTitle><AlertDescription><span className="block">Why: Availability and event creation cannot be confirmed.</span><span className="block">How to fix: Reload Connections, then run the Google Calendar connection test.</span></AlertDescription></Alert>
-            )}
-
-            {calendarChoices.length && (calendarStatus?.status !== "connected" || changingCalendar) ? (
-              <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
-                <div className="space-y-2"><Label htmlFor="google-calendar">Calendar</Label><select id="google-calendar" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={selectedCalendarId} onChange={(event) => setSelectedCalendarId(event.target.value)}><option value="">Choose a calendar</option>{calendarChoices.map((calendar) => <option key={calendar.id} value={calendar.id}>{calendar.name}{calendar.primary ? " (primary)" : ""}{calendar.timeZone ? ` · ${calendar.timeZone}` : ""}</option>)}</select></div>
-                <Button onClick={chooseGoogleCalendar} disabled={!canManage || !selectedCalendarId || Boolean(busy)}>Choose calendar</Button>
-              </div>
-            ) : null}
-
-            {canManage ? <div className="flex flex-wrap gap-2">
-              {calendarStatus?.status === "disconnected" ? <Button onClick={connectGoogleCalendar} disabled={Boolean(busy)}><CalendarDays /> Connect Google Calendar</Button> : null}
-              {calendarStatus?.status !== "disconnected" && calendarStatus?.selectedCalendar ? <Button onClick={testGoogleCalendar} disabled={Boolean(busy)}><CheckCircle2 /> Test connection</Button> : null}
-              {calendarStatus?.connected ? <Button variant="outline" onClick={loadGoogleCalendars} disabled={Boolean(busy)}><CalendarDays /> Choose different calendar</Button> : null}
-              {calendarStatus?.status === "needs_attention" ? <Button variant="outline" onClick={connectGoogleCalendar} disabled={Boolean(busy)}><RefreshCw /> Reconnect</Button> : null}
-              {calendarStatus?.status !== "disconnected" ? <Button variant="ghost" onClick={disconnectGoogleCalendar} disabled={Boolean(busy)}><Unplug /> Disconnect</Button> : null}
-            </div> : null}
-            <p className="text-xs text-muted-foreground">OAuth credentials and tokens are managed securely by RealtyTechAI and are never shown here.</p>
+          <CardContent className="grid gap-4 lg:grid-cols-3">
+            {schedulingProviders.map((definition) => {
+              const status = calendarStatus?.providers[definition.provider]
+              const choices = resourceChoices[definition.provider] || []
+              const selectedId = selectedResourceIds[definition.provider] || ""
+              const active = calendarStatus?.activeProvider === definition.provider
+              const showChoices = choices.length > 0 && (status?.status !== "connected" || changingResources[definition.provider])
+              return (
+                <div key={definition.provider} className="space-y-4 rounded-lg border p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div><div className="font-medium">{definition.label}</div><p className="mt-1 text-xs text-muted-foreground">{definition.description}</p></div>
+                    <div className="flex flex-wrap justify-end gap-1">{active ? <Badge>Used for new bookings</Badge> : null}{calendarStatusBadge(status)}</div>
+                  </div>
+                  {status?.connected ? (
+                    <Alert><CheckCircle2 /><AlertTitle>{status.selectedResource?.name || `${definition.label} is ready`}</AlertTitle><AlertDescription>Last tested {status.lastTestedAt ? new Date(status.lastTestedAt).toLocaleString() : "just now"}. Change updates arrive by {status.changeNotifications.status === "active" ? "provider notification plus reconciliation" : "scheduled reconciliation"}.</AlertDescription></Alert>
+                  ) : status?.issue ? (
+                    <Alert variant={status.status === "needs_attention" ? "destructive" : "default"}><AlertTitle>{status.issue.what}</AlertTitle><AlertDescription><span className="block">Why: {status.issue.why}</span><span className="block">How to fix: {status.issue.how}</span></AlertDescription></Alert>
+                  ) : (
+                    <Alert variant="destructive"><AlertTitle>Status unavailable</AlertTitle><AlertDescription>Reload Connections before relying on this provider.</AlertDescription></Alert>
+                  )}
+                  {showChoices ? (
+                    <div className="space-y-3">
+                      <div className="space-y-2"><Label htmlFor={`${definition.path}-resource`}>{definition.resourceLabel[0].toUpperCase()}{definition.resourceLabel.slice(1)}</Label><select id={`${definition.path}-resource`} className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={selectedId} onChange={(event) => setSelectedResourceIds((current) => ({ ...current, [definition.provider]: event.target.value }))}><option value="">Choose a {definition.resourceLabel}</option>{choices.map((resource) => <option key={resource.id} value={resource.id}>{resource.name}{resource.primary ? " (primary)" : ""}{resource.durationMinutes ? ` · ${resource.durationMinutes} min` : ""}{resource.timeZone ? ` · ${resource.timeZone}` : ""}</option>)}</select></div>
+                      <Button onClick={() => chooseSchedulingResource(definition.provider)} disabled={!canManage || !selectedId || Boolean(busy)}>Choose {definition.resourceLabel}</Button>
+                    </div>
+                  ) : null}
+                  {definition.provider === "calendly" && status?.connected ? <p className="text-xs text-muted-foreground">Calendly reschedules use its verified reschedule link, then webhooks reconcile the same RealtyTechAI appointment.</p> : null}
+                  {canManage ? <div className="flex flex-wrap gap-2">
+                    {status?.status === "disconnected" ? <Button onClick={() => connectSchedulingProvider(definition.provider)} disabled={Boolean(busy)}><CalendarDays /> Connect</Button> : null}
+                    {status?.status !== "disconnected" && status?.selectedResource ? <Button onClick={() => testSchedulingProvider(definition.provider)} disabled={Boolean(busy)}><CheckCircle2 /> Test connection</Button> : null}
+                    {status?.connected && !active ? <Button onClick={() => activateSchedulingProvider(definition.provider)} disabled={Boolean(busy)}>Use for new bookings</Button> : null}
+                    {status?.connected ? <Button variant="outline" onClick={() => loadSchedulingResources(definition.provider)} disabled={Boolean(busy)}><CalendarDays /> Change {definition.resourceLabel}</Button> : null}
+                    {status?.status === "needs_attention" ? <Button variant="outline" onClick={() => connectSchedulingProvider(definition.provider)} disabled={Boolean(busy)}><RefreshCw /> Reconnect</Button> : null}
+                    {status?.status !== "disconnected" ? <Button variant="ghost" onClick={() => disconnectSchedulingProvider(definition.provider)} disabled={Boolean(busy)}><Unplug /> Disconnect</Button> : null}
+                  </div> : null}
+                </div>
+              )
+            })}
+            <p className="text-xs text-muted-foreground lg:col-span-3">OAuth credentials, refresh tokens, and webhook secrets are stored server-side and are never shown here.</p>
           </CardContent>
         </Card>
 
@@ -738,7 +838,7 @@ export default function IntegrationsPage() {
             <div className="space-y-4 border-t pt-5">
               <div><div className="font-medium">Send lead outcomes back to Zapier</div><p className="text-sm text-muted-foreground">Signed webhook events are persisted first and delivered by the durable worker with retries.</p></div>
               {webhookSecret ? <Alert><KeyRound /><AlertTitle>Copy the signing secret now</AlertTitle><AlertDescription><div className="mt-2 flex gap-2"><Input readOnly value={webhookSecret} className="font-mono text-xs" /><Button variant="outline" onClick={() => copy(webhookSecret, "Webhook signing secret")}><Clipboard /> Copy</Button></div></AlertDescription></Alert> : null}
-              {canManage ? <div className="grid gap-3 lg:grid-cols-[220px_1fr_auto] lg:items-end"><div className="space-y-2"><Label htmlFor="webhook-event">Event</Label><select id="webhook-event" className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={webhookEventType} onChange={(event) => setWebhookEventType(event.target.value)}><option value="lead.created">Lead created</option><option value="lead.engaged">Lead engaged</option><option value="lead.qualified">Lead qualified</option><option value="lead.status_changed">Lead status changed</option><option value="lead.human_handoff">Human handoff</option><option value="appointment.created">Appointment created</option><option value="conversation.summary_ready">Conversation summary ready</option><option value="lead.opted_out">Lead opted out</option></select></div><div className="space-y-2"><Label htmlFor="webhook-target">Zapier Catch Hook URL</Label><Input id="webhook-target" type="url" value={webhookTargetUrl} onChange={(event) => setWebhookTargetUrl(event.target.value)} placeholder="https://hooks.zapier.com/hooks/catch/…" /></div><Button onClick={createWebhook} disabled={Boolean(busy) || !webhookTargetUrl.trim()}>Create webhook</Button></div> : null}
+              {canManage ? <div className="grid gap-3 lg:grid-cols-[220px_1fr_auto] lg:items-end"><div className="space-y-2"><Label htmlFor="webhook-event">Event</Label><select id="webhook-event" className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={webhookEventType} onChange={(event) => setWebhookEventType(event.target.value)}><option value="lead.created">Lead created</option><option value="lead.engaged">Lead engaged</option><option value="lead.qualified">Lead qualified</option><option value="lead.status_changed">Lead status changed</option><option value="lead.human_handoff">Human handoff</option><option value="appointment.created">Appointment created</option><option value="appointment.rescheduled">Appointment rescheduled</option><option value="appointment.cancelled">Appointment cancelled</option><option value="appointment.reconciled">Appointment reconciled</option><option value="conversation.summary_ready">Conversation summary ready</option><option value="lead.opted_out">Lead opted out</option></select></div><div className="space-y-2"><Label htmlFor="webhook-target">Zapier Catch Hook URL</Label><Input id="webhook-target" type="url" value={webhookTargetUrl} onChange={(event) => setWebhookTargetUrl(event.target.value)} placeholder="https://hooks.zapier.com/hooks/catch/…" /></div><Button onClick={createWebhook} disabled={Boolean(busy) || !webhookTargetUrl.trim()}>Create webhook</Button></div> : null}
               {webhooks.length ? <div className="space-y-2">{webhooks.map((webhook) => <div key={webhook.id} className="flex flex-col gap-3 rounded-lg border p-3 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0"><div className="text-sm font-medium">{webhook.eventType}</div><div className="truncate text-xs text-muted-foreground">{webhook.targetUrl} · secret ending {webhook.secretLast4}{webhook.lastSuccessAt ? ` · delivered ${new Date(webhook.lastSuccessAt).toLocaleString()}` : ""}</div>{webhook.lastError ? <div className="text-xs text-destructive">{webhook.lastError}</div> : null}</div>{canManage && webhook.status === "active" ? <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => testWebhook(webhook.id)} disabled={Boolean(busy)}>Send test</Button><Button size="sm" variant="ghost" onClick={() => revokeWebhook(webhook.id)} disabled={Boolean(busy)}>Revoke</Button></div> : <Badge variant="secondary">{webhook.status}</Badge>}</div>)}</div> : null}
             </div>
           </CardContent>

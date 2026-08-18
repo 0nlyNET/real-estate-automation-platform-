@@ -13,6 +13,13 @@ import { randomUUID } from 'crypto';
 import { DataSource, In, Not, Repository } from 'typeorm';
 import { hasAtLeastRole, UserRole } from '../../common/rbac';
 import { CalendarService } from '../calendar/calendar.service';
+import { BookingProviderRegistry } from '../calendar/booking-provider.registry';
+import {
+  AppointmentMode,
+  BookingProviderAdapter,
+  BookingProviderName,
+  ProviderAppointment,
+} from '../calendar/booking-provider.types';
 import { parseTenantDateTime } from '../calendar/calendar-time';
 import { AuditService } from '../audit/audit.service';
 import { CrmEventsService } from '../crm-events/crm-events.service';
@@ -54,6 +61,7 @@ export class AppointmentBookingService implements OnModuleInit {
     private readonly operations: OperationsService,
     private readonly audit: AuditService,
     @Optional() private readonly onboarding?: OnboardingService,
+    @Optional() private readonly providers?: BookingProviderRegistry,
   ) {}
 
   onModuleInit() {
@@ -69,7 +77,7 @@ export class AppointmentBookingService implements OnModuleInit {
             category: 'appointment_workflow',
             title: 'Appointment post-booking actions need attention',
             description:
-              'The Google event and internal appointment exist, but agent notification, CRM publication, or UAT evidence could not be completed after retries.',
+              'The provider appointment and internal appointment exist, but agent notification, CRM publication, or UAT evidence could not be completed after retries.',
             priority: 'high',
             relatedEntityType: 'appointment',
             relatedEntityId: appointmentId,
@@ -89,19 +97,25 @@ export class AppointmentBookingService implements OnModuleInit {
             endsAt: String(job.payload.endsAt || '') || undefined,
             notes: String(job.payload.notes || '') || undefined,
             idempotencyKey: String(job.payload.idempotencyKey || ''),
+            meetingMode: (String(job.payload.meetingMode || '') || undefined) as
+              | AppointmentMode
+              | undefined,
           },
           undefined,
           String(job.payload.source || 'manual') as Appointment['source'],
-          String(job.payload.calendarId || '') || undefined,
+          String(job.payload.resourceId || job.payload.calendarId || '') || undefined,
+          (String(job.payload.provider || '') || undefined) as
+            | BookingProviderName
+            | undefined,
         );
       } catch (error) {
         if (job.attemptCount >= job.maxAttempts) {
           await this.operations.createTask({
             tenantId: String(job.tenantId || ''),
             category: 'appointment_workflow',
-            title: 'An uncertain Google Calendar booking could not be reconciled',
+            title: 'An uncertain provider booking could not be reconciled',
             description:
-              'No internal appointment was confirmed. Review the deterministic Google event and contact the lead before attempting another booking.',
+              'No internal appointment was confirmed. Review the deterministic provider record and contact the lead before attempting another booking.',
             priority: 'critical',
             relatedEntityType: 'lead',
             relatedEntityId: String(job.payload.leadId || ''),
@@ -127,9 +141,9 @@ export class AppointmentBookingService implements OnModuleInit {
         await this.operations.createTask({
           tenantId: String(job.tenantId || ''),
           category: 'appointment_workflow',
-          title: 'Google Calendar and an appointment need reconciliation',
+          title: 'A provider appointment needs reconciliation',
           description:
-            'RealtyTechAI could not verify that the external event and internal appointment still match. Restore calendar access and review the appointment before relying on it.',
+            'RealtyTechAI could not verify that the provider record and internal appointment still match. Restore provider access and review the appointment before relying on it.',
           priority: 'high',
           relatedEntityType: 'appointment',
           relatedEntityId: appointmentId,
@@ -146,6 +160,7 @@ export class AppointmentBookingService implements OnModuleInit {
     ctx?: AppointmentAccessContext,
     source: Appointment['source'] = 'manual',
     boundCalendarId?: string,
+    boundProvider?: BookingProviderName,
   ) {
     const lead = await this.requireLeadAccess(tenantId, dto.leadId, ctx);
     const timeZone = await this.tenantTimeZone(tenantId);
@@ -156,6 +171,23 @@ export class AppointmentBookingService implements OnModuleInit {
     this.validateWindow(startsAt, endsAt);
     const suppliedKey = String(dto.idempotencyKey || randomUUID()).trim().slice(0, 120);
     const idempotencyKey = `${source}:${suppliedKey}`;
+
+    if (this.providers) {
+      return this.createWithProvider({
+        tenantId,
+        dto,
+        ctx,
+        source,
+        lead,
+        timeZone,
+        startsAt,
+        endsAt,
+        suppliedKey,
+        idempotencyKey,
+        boundResourceId: boundCalendarId,
+        boundProvider,
+      });
+    }
 
     return this.calendar.withTenantBookingLock(tenantId, async () => {
       const existing = await this.appointments.findOne({
@@ -266,6 +298,164 @@ export class AppointmentBookingService implements OnModuleInit {
     });
   }
 
+  private async createWithProvider(input: {
+    tenantId: string;
+    dto: CreateAppointmentDto;
+    ctx?: AppointmentAccessContext;
+    source: Appointment['source'];
+    lead: Lead;
+    timeZone: string;
+    startsAt: Date;
+    endsAt: Date;
+    suppliedKey: string;
+    idempotencyKey: string;
+    boundResourceId?: string;
+    boundProvider?: BookingProviderName;
+  }) {
+    const adapter = input.boundProvider
+      ? this.providers!.adapter(input.boundProvider)
+      : await this.providers!.active(input.tenantId);
+    return this.providers!.withTenantBookingLock(
+      adapter.name,
+      input.tenantId,
+      async () => {
+        const existing = await this.appointments.findOne({
+          where: { tenantId: input.tenantId, idempotencyKey: input.idempotencyKey },
+          relations: ['lead'],
+        });
+        if (existing) {
+          if (existing.leadId !== input.lead.id) {
+            throw new ConflictException(
+              'That appointment request key is already in use.',
+            );
+          }
+          if (
+            existing.startsAt.getTime() !== input.startsAt.getTime() ||
+            existing.endsAt.getTime() !== input.endsAt.getTime()
+          ) {
+            throw new ConflictException({
+              code: 'APPOINTMENT_IDEMPOTENCY_CONFLICT',
+              message:
+                'That appointment request was already completed for a different time. Start a new request.',
+            });
+          }
+          await this.ensureJobs(existing);
+          return existing;
+        }
+
+        const binding = await adapter.readyBinding(input.tenantId);
+        if (
+          input.boundProvider &&
+          input.boundProvider !== binding.provider
+        ) {
+          throw new ConflictException({
+            code: 'BOOKING_PROVIDER_CHANGED_DURING_RECONCILIATION',
+            message:
+              'The original booking provider is no longer selected. Review the pending booking before retrying.',
+          });
+        }
+        const resourceId = input.boundResourceId || binding.resourceId;
+        const meetingMode = input.dto.meetingMode || 'in_person';
+        let external: ProviderAppointment;
+        try {
+          external = await adapter.createAppointment({
+            tenantId: input.tenantId,
+            resourceId,
+            leadId: input.lead.id,
+            start: input.startsAt,
+            end: input.endsAt,
+            timeZone: input.timeZone,
+            summary: `Appointment with ${input.lead.fullName}`.slice(0, 180),
+            description:
+              'Scheduled through RealtyTechAI. Open the lead in RealtyTechAI for approved conversation context.',
+            attendeeName: input.lead.fullName,
+            attendeeEmail: input.lead.email || null,
+            idempotencyKey: input.idempotencyKey,
+            mode: meetingMode,
+          });
+        } catch (error: any) {
+          if (this.isUncertainProviderCreate(error)) {
+            await this.scheduleCreateReconciliation({
+              tenantId: input.tenantId,
+              leadId: input.lead.id,
+              startsAt: input.dto.startsAt,
+              endsAt: input.dto.endsAt,
+              notes: input.dto.notes,
+              suppliedKey: input.suppliedKey,
+              idempotencyKey: input.idempotencyKey,
+              source: input.source,
+              calendarId: resourceId,
+              provider: adapter.name,
+              meetingMode,
+            });
+            throw new ServiceUnavailableException({
+              code: 'APPOINTMENT_RECONCILIATION_PENDING',
+              message: `${this.providerLabel(adapter)} did not confirm the result. RealtyTechAI is reconciling it; do not create a duplicate.`,
+            });
+          }
+          throw error;
+        }
+
+        try {
+          return await this.createInternal({
+            tenantId: input.tenantId,
+            leadId: input.lead.id,
+            assignedUserId:
+              input.lead.assignedToUserId || input.ctx?.userId || null,
+            startsAt: input.startsAt,
+            endsAt: input.endsAt,
+            source: input.source,
+            notes: input.dto.notes?.trim() || null,
+            idempotencyKey: input.idempotencyKey,
+            externalEventId: external.id,
+            externalEventEtag: external.version,
+            externalCalendarId: external.resourceId,
+            externalProvider: external.storedProvider,
+            externalConnectionId: external.connectionId,
+            externalInviteeId: external.inviteeId,
+            externalJoinUrl: external.joinUrl,
+            externalCancelUrl: external.cancelUrl,
+            externalRescheduleUrl: external.rescheduleUrl,
+            externalProviderUpdatedAt: external.providerUpdatedAt,
+            meetingMode,
+            actorUserId: input.ctx?.userId || null,
+          });
+        } catch (error: any) {
+          if (String(error?.code || '') === '23505') {
+            const duplicate = await this.appointments.findOne({
+              where: {
+                tenantId: input.tenantId,
+                idempotencyKey: input.idempotencyKey,
+              },
+              relations: ['lead'],
+            });
+            if (duplicate?.leadId === input.lead.id) {
+              await this.ensureJobs(duplicate);
+              return duplicate;
+            }
+          }
+          await this.scheduleCreateReconciliation({
+            tenantId: input.tenantId,
+            leadId: input.lead.id,
+            startsAt: input.dto.startsAt,
+            endsAt: input.dto.endsAt,
+            notes: input.dto.notes,
+            suppliedKey: input.suppliedKey,
+            idempotencyKey: input.idempotencyKey,
+            source: input.source,
+            calendarId: resourceId,
+            provider: adapter.name,
+            meetingMode,
+          });
+          throw new ServiceUnavailableException({
+            code: 'APPOINTMENT_RECONCILIATION_PENDING',
+            message: `${this.providerLabel(adapter)} confirmed the appointment, but RealtyTechAI is reconciling the internal record. Do not create a duplicate.`,
+          });
+        }
+      },
+    );
+  }
+
   async update(
     id: string,
     tenantId: string | null,
@@ -273,10 +463,269 @@ export class AppointmentBookingService implements OnModuleInit {
     ctx?: AppointmentAccessContext,
   ) {
     const appointment = await this.requireAppointmentAccess(id, tenantId, ctx);
+    if (this.providers) {
+      const adapter = appointment.externalProvider
+        ? this.providers.forStoredProvider(appointment.externalProvider)
+        : await this.providers.active(appointment.tenantId);
+      return this.providers.withTenantBookingLock(
+        adapter.name,
+        appointment.tenantId,
+        async () => {
+          const current = await this.requireAppointmentAccess(id, tenantId, ctx);
+          return this.updateWithProvider(current, dto, adapter, ctx);
+        },
+      );
+    }
     return this.calendar.withTenantBookingLock(appointment.tenantId, async () => {
       const current = await this.requireAppointmentAccess(id, tenantId, ctx);
       return this.updateInsideLock(current, dto, ctx);
     });
+  }
+
+  private async updateWithProvider(
+    appointment: Appointment,
+    dto: UpdateAppointmentDto,
+    adapter: BookingProviderAdapter,
+    ctx?: AppointmentAccessContext,
+  ) {
+    const timeZone = await this.tenantTimeZone(appointment.tenantId);
+    const previousStatus = appointment.status;
+    const previousDuration = Math.max(
+      appointment.endsAt.getTime() - appointment.startsAt.getTime(),
+      30 * 60_000,
+    );
+    const startsAt = dto.startsAt
+      ? parseTenantDateTime(dto.startsAt, timeZone)
+      : appointment.startsAt;
+    const endsAt = dto.endsAt
+      ? parseTenantDateTime(dto.endsAt, timeZone)
+      : dto.startsAt
+        ? new Date(startsAt.getTime() + previousDuration)
+        : appointment.endsAt;
+    this.validateWindow(startsAt, endsAt, true);
+    const timingChanged =
+      startsAt.getTime() !== appointment.startsAt.getTime() ||
+      endsAt.getTime() !== appointment.endsAt.getTime();
+    const cancelled =
+      dto.status === 'cancelled' && appointment.status !== 'cancelled';
+    const mode = dto.meetingMode || appointment.meetingMode || 'in_person';
+    const modeChanged =
+      dto.meetingMode !== undefined &&
+      dto.meetingMode !== (appointment.meetingMode || 'in_person');
+    if (modeChanged && appointment.externalEventId) {
+      throw new ConflictException({
+        code: 'APPOINTMENT_MODE_CHANGE_REQUIRES_REBOOK',
+        message:
+          'Changing an existing appointment between in-person, phone, and virtual can alter provider meeting details. Cancel and create a new verified booking instead.',
+      });
+    }
+
+    let external: ProviderAppointment | null = null;
+    try {
+      if (appointment.externalProvider && appointment.externalEventId) {
+        if (cancelled) {
+          await this.cancelProviderEventWithConflictResolution(
+            adapter,
+            appointment,
+          );
+        } else if (timingChanged) {
+          external = await this.updateProviderTimeWithConflictResolution(
+            adapter,
+            appointment,
+            startsAt,
+            endsAt,
+            timeZone,
+            mode,
+          );
+        }
+      } else if (timingChanged && !cancelled) {
+        const binding = await adapter.readyBinding(appointment.tenantId);
+        external = await adapter.createAppointment({
+          tenantId: appointment.tenantId,
+          resourceId: binding.resourceId,
+          leadId: appointment.leadId,
+          start: startsAt,
+          end: endsAt,
+          timeZone,
+          summary: `Appointment with ${appointment.lead.fullName}`.slice(0, 180),
+          description: 'Scheduled through RealtyTechAI.',
+          attendeeName: appointment.lead.fullName,
+          attendeeEmail: appointment.lead.email || null,
+          idempotencyKey: `legacy-reschedule:${appointment.id}`,
+          mode,
+        });
+      }
+    } catch (error: any) {
+      const errorCode = this.providerErrorCode(error);
+      if (
+        [
+          'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+          'CALENDAR_TIME_UNAVAILABLE',
+          'CALENDLY_RESCHEDULE_URL_REQUIRED',
+        ].includes(errorCode)
+      ) {
+        throw error;
+      }
+      await this.appointments.update(
+        { id: appointment.id, tenantId: appointment.tenantId },
+        {
+          syncStatus: 'needs_attention',
+          syncErrorCode: String(errorCode || 'CALENDAR_UPDATE_FAILED').slice(
+            0,
+            100,
+          ),
+        },
+      );
+      await this.scheduleReconciliation(appointment);
+      throw error;
+    }
+
+    try {
+      const saved = await this.dataSource.transaction(async (manager) => {
+        const repository = manager.getRepository(Appointment);
+        const locked = await repository
+          .createQueryBuilder('appointment')
+          .leftJoinAndSelect('appointment.lead', 'lead')
+          .setLock('pessimistic_write')
+          .where(
+            'appointment.id = :id AND appointment.tenantId = :tenantId',
+            { id: appointment.id, tenantId: appointment.tenantId },
+          )
+          .getOneOrFail();
+        locked.startsAt = startsAt;
+        locked.endsAt = endsAt;
+        locked.meetingMode = mode;
+        if (dto.status) locked.status = dto.status;
+        if (dto.confirmationStatus) {
+          locked.confirmationStatus = dto.confirmationStatus;
+        }
+        if (dto.followUpStatus) locked.followUpStatus = dto.followUpStatus;
+        if (dto.notes !== undefined) locked.notes = dto.notes.trim() || null;
+        if (timingChanged) {
+          locked.status = 'scheduled';
+          locked.confirmationStatus = 'pending';
+          locked.confirmationTaskCreatedAt = new Date();
+          locked.reminderStatus = 'scheduled';
+          locked.reminderSentAt = null;
+        }
+        if (['completed', 'cancelled', 'no_show'].includes(locked.status)) {
+          locked.followUpStatus =
+            dto.followUpStatus ||
+            (locked.followUpStatus === 'completed' ? 'completed' : 'due');
+          locked.reminderStatus = 'cancelled';
+        }
+        if (external) {
+          locked.externalProvider = external.storedProvider;
+          locked.externalConnectionId = external.connectionId;
+          locked.externalCalendarId = external.resourceId;
+          locked.externalEventId = external.id;
+          locked.externalInviteeId = external.inviteeId;
+          locked.externalEventEtag = external.version;
+          locked.externalJoinUrl =
+            external.joinUrl || locked.externalJoinUrl || null;
+          locked.externalCancelUrl =
+            external.cancelUrl || locked.externalCancelUrl || null;
+          locked.externalRescheduleUrl =
+            external.rescheduleUrl || locked.externalRescheduleUrl || null;
+          locked.externalProviderUpdatedAt = external.providerUpdatedAt;
+          locked.syncStatus = 'synced';
+          locked.syncErrorCode = null;
+          locked.lastSyncedAt = new Date();
+          locked.calendarSource = this.providerLabel(adapter);
+        } else if (cancelled && locked.externalEventId) {
+          locked.externalEventEtag = null;
+          locked.syncStatus = 'synced';
+          locked.syncErrorCode = null;
+          locked.lastSyncedAt = new Date();
+        } else if (!locked.externalEventId && locked.status === 'cancelled') {
+          locked.syncStatus = 'not_synced';
+          locked.syncErrorCode = null;
+        }
+        const result = await repository.save(locked);
+        await manager.getRepository(LeadEvent).save(
+          manager.getRepository(LeadEvent).create({
+            lead: locked.lead,
+            eventType: 'appointment_updated',
+            metadata: {
+              appointmentId: locked.id,
+              status: locked.status,
+              externalProvider: locked.externalProvider,
+            },
+          }),
+        );
+        if (['completed', 'cancelled', 'no_show'].includes(result.status)) {
+          result.lead.nextFollowUpAt = new Date();
+          result.lead.recommendedNextAction =
+            result.status === 'completed'
+              ? 'Record the appointment outcome and next milestone.'
+              : 'Contact the lead and agree on the next step.';
+          if (
+            result.status === 'cancelled' &&
+            result.lead.stage === 'appointment_set'
+          ) {
+            const otherUpcoming = await repository.count({
+              where: {
+                id: Not(result.id),
+                leadId: result.leadId,
+                status: In(['scheduled', 'confirmed']),
+              },
+            });
+            if (!otherUpcoming) {
+              const previousStage = result.lead.stage;
+              result.lead.stage = 'qualified';
+              await manager.getRepository(LeadStageEvent).save(
+                manager.getRepository(LeadStageEvent).create({
+                  tenantId: result.tenantId,
+                  leadId: result.leadId,
+                  previousStage,
+                  newStage: result.lead.stage,
+                  changedByUserId: ctx?.userId || null,
+                  changeSource: 'appointment_cancelled',
+                }),
+              );
+            }
+          }
+          await manager.getRepository(Lead).save(result.lead);
+        }
+        return result;
+      });
+      await this.scheduleReconciliation(saved);
+      if (saved.status !== previousStatus || timingChanged) {
+        const eventType = cancelled
+          ? 'appointment.cancelled'
+          : timingChanged
+            ? 'appointment.rescheduled'
+            : 'appointment.updated';
+        await this.notifications.createForTenant({
+          tenantId: saved.tenantId,
+          assignedUserId: saved.assignedUserId,
+          eventType,
+          category: 'leads',
+          severity: cancelled ? 'warning' : 'success',
+          title: cancelled
+            ? `Appointment with ${saved.lead.fullName} was cancelled`
+            : timingChanged
+              ? `Appointment with ${saved.lead.fullName} was rescheduled`
+              : `Appointment with ${saved.lead.fullName} is ${saved.status}`,
+          message: `${this.providerLabel(adapter)} and RealtyTechAI were updated.`,
+          deduplicationKey: timingChanged
+            ? `appointment-rescheduled:${saved.id}:${saved.startsAt.toISOString()}:${saved.endsAt.toISOString()}`
+            : `appointment-status:${saved.id}:${saved.status}`,
+          actionUrl: `/app/appointments?appointmentId=${saved.id}`,
+          entityType: 'appointment',
+          entityId: saved.id,
+        });
+        await this.publishAppointmentChange(saved, eventType);
+      }
+      return saved;
+    } catch (error) {
+      if (error instanceof ConflictException) throw error;
+      await this.scheduleReconciliation(appointment);
+      throw new ServiceUnavailableException({
+        code: 'APPOINTMENT_RECONCILIATION_PENDING',
+        message: `${this.providerLabel(adapter)} was updated, but RealtyTechAI is reconciling the appointment record. Do not repeat the change.`,
+      });
+    }
   }
 
   private async updateInsideLock(
@@ -611,6 +1060,232 @@ export class AppointmentBookingService implements OnModuleInit {
     }
   }
 
+  private async updateProviderTimeWithConflictResolution(
+    adapter: BookingProviderAdapter,
+    appointment: Appointment,
+    startsAt: Date,
+    endsAt: Date,
+    timeZone: string,
+    mode: AppointmentMode,
+  ) {
+    const update = (version: string | null | undefined) =>
+      adapter.updateAppointment({
+        tenantId: appointment.tenantId,
+        eventId: appointment.externalEventId!,
+        inviteeId: appointment.externalInviteeId,
+        resourceId: appointment.externalCalendarId,
+        version,
+        start: startsAt,
+        end: endsAt,
+        timeZone,
+        mode,
+      });
+    try {
+      return await update(appointment.externalEventEtag);
+    } catch (error: any) {
+      if (!this.isProviderVersionConflict(adapter, error)) throw error;
+    }
+    const latest = await adapter.getAppointment(
+      appointment.tenantId,
+      appointment.externalEventId!,
+      appointment.externalCalendarId,
+      appointment.externalInviteeId,
+    );
+    if (!latest || latest.status === 'cancelled') {
+      await this.reconcileExternalProviderState(adapter, appointment, latest);
+      throw new ConflictException({
+        code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+        message: `The ${this.providerLabel(adapter)} appointment was cancelled outside RealtyTechAI. The internal appointment now matches it; review before retrying.`,
+      });
+    }
+    if (!latest.startsAt || !latest.endsAt) {
+      await this.markProviderAppointmentConflict(
+        appointment,
+        `${adapter.storedProvider.toUpperCase()}_EVENT_TIME_MISSING`,
+        adapter,
+      );
+      throw new ConflictException({
+        code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+        message:
+          'The provider appointment no longer has a safe timed interval. Review it before retrying.',
+      });
+    }
+    if (
+      latest.startsAt.getTime() === startsAt.getTime() &&
+      latest.endsAt.getTime() === endsAt.getTime()
+    ) {
+      return latest;
+    }
+    const onlyNonTimingDataChanged =
+      latest.startsAt.getTime() === appointment.startsAt.getTime() &&
+      latest.endsAt.getTime() === appointment.endsAt.getTime();
+    if (onlyNonTimingDataChanged) {
+      try {
+        return await update(latest.version);
+      } catch (error: any) {
+        if (!this.isProviderVersionConflict(adapter, error)) throw error;
+        const newest = await adapter.getAppointment(
+          appointment.tenantId,
+          appointment.externalEventId!,
+          appointment.externalCalendarId,
+          appointment.externalInviteeId,
+        );
+        await this.reconcileExternalProviderState(adapter, appointment, newest);
+        throw new ConflictException({
+          code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+          message:
+            'The provider appointment changed again during rescheduling. The latest provider state was reconciled; review before retrying.',
+        });
+      }
+    }
+    await this.reconcileExternalProviderState(adapter, appointment, latest);
+    throw new ConflictException({
+      code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+      message:
+        'The appointment was rescheduled outside RealtyTechAI. The internal appointment now matches the provider; review the time before retrying.',
+    });
+  }
+
+  private async cancelProviderEventWithConflictResolution(
+    adapter: BookingProviderAdapter,
+    appointment: Appointment,
+  ) {
+    const cancel = (version: string | null | undefined) =>
+      adapter.cancelAppointment({
+        tenantId: appointment.tenantId,
+        eventId: appointment.externalEventId!,
+        inviteeId: appointment.externalInviteeId,
+        resourceId: appointment.externalCalendarId,
+        version,
+      });
+    try {
+      return await cancel(appointment.externalEventEtag);
+    } catch (error: any) {
+      if (!this.isProviderVersionConflict(adapter, error)) throw error;
+    }
+    const latest = await adapter.getAppointment(
+      appointment.tenantId,
+      appointment.externalEventId!,
+      appointment.externalCalendarId,
+      appointment.externalInviteeId,
+    );
+    if (!latest || latest.status === 'cancelled') return { cancelled: true };
+    try {
+      return await cancel(latest.version);
+    } catch (error: any) {
+      if (!this.isProviderVersionConflict(adapter, error)) throw error;
+      const newest = await adapter.getAppointment(
+        appointment.tenantId,
+        appointment.externalEventId!,
+        appointment.externalCalendarId,
+        appointment.externalInviteeId,
+      );
+      await this.reconcileExternalProviderState(adapter, appointment, newest);
+      throw new ConflictException({
+        code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+        message:
+          'The provider appointment changed again during cancellation. The latest state was reconciled; review before retrying.',
+      });
+    }
+  }
+
+  private isProviderVersionConflict(
+    adapter: BookingProviderAdapter,
+    error: any,
+  ) {
+    const code = this.providerErrorCode(error);
+    return (
+      (adapter.storedProvider === 'google' &&
+        code === 'GOOGLE_CALENDAR_CHANGED') ||
+      (adapter.storedProvider === 'microsoft' &&
+        code === 'MICROSOFT_EVENT_CHANGED')
+    );
+  }
+
+  private isUncertainProviderCreate(error: any) {
+    const code = this.providerErrorCode(error);
+    return (
+      /(?:TIMEOUT|TEMPORARY_FAILURE|RESULT_UNCERTAIN)$/.test(code) ||
+      code === 'GOOGLE_EVENT_RESULT_UNCERTAIN' ||
+      code === 'MICROSOFT_EVENT_RESULT_UNCERTAIN' ||
+      code === 'CALENDLY_BOOKING_RESULT_UNCERTAIN'
+    );
+  }
+
+  private providerLabel(adapter: BookingProviderAdapter) {
+    return adapter.storedProvider === 'google'
+      ? 'Google Calendar'
+      : adapter.storedProvider === 'microsoft'
+        ? 'Microsoft Outlook'
+        : 'Calendly';
+  }
+
+  private async markProviderAppointmentConflict(
+    appointment: Appointment,
+    syncErrorCode: string,
+    adapter: BookingProviderAdapter,
+  ) {
+    await this.appointments.update(
+      { id: appointment.id, tenantId: appointment.tenantId },
+      { syncStatus: 'needs_attention', syncErrorCode },
+    );
+    await this.operations.createTask({
+      tenantId: appointment.tenantId,
+      category: 'appointment_workflow',
+      title: 'One provider appointment needs review',
+      description: `The ${this.providerLabel(adapter)} connection remains available, but this appointment could not be reconciled safely. Review both records before retrying.`,
+      priority: 'high',
+      relatedEntityType: 'appointment',
+      relatedEntityId: appointment.id,
+      dedupeOpen: true,
+    });
+  }
+
+  private async publishAppointmentChange(
+    appointment: Appointment,
+    eventType:
+      | 'appointment.rescheduled'
+      | 'appointment.cancelled'
+      | 'appointment.updated',
+  ) {
+    if (eventType === 'appointment.updated') return;
+    try {
+      await this.crmEvents.publish(
+        appointment.tenantId,
+        eventType,
+        {
+          appointmentId: appointment.id,
+          leadId: appointment.leadId,
+          assignedToUserId: appointment.assignedUserId || null,
+          startsAt: appointment.startsAt.toISOString(),
+          endsAt: appointment.endsAt.toISOString(),
+          timeZone: await this.tenantTimeZone(appointment.tenantId),
+          status: appointment.status,
+          provider: appointment.externalProvider,
+          meetingMode: appointment.meetingMode || 'in_person',
+          joinUrl: appointment.externalJoinUrl || null,
+          source: appointment.source,
+          testRunId: appointment.lead.testRunId || null,
+        },
+        {
+          idempotencyKey: `${eventType}:${appointment.id}:${appointment.updatedAt?.toISOString() || appointment.startsAt.toISOString()}`,
+        },
+      );
+    } catch {
+      await this.operations.createTask({
+        tenantId: appointment.tenantId,
+        category: 'appointment_workflow',
+        title: 'Appointment CRM publication needs attention',
+        description:
+          'The authoritative provider and RealtyTechAI appointment were updated, but the CRM event could not be queued. Retry the CRM delivery without changing the appointment.',
+        priority: 'high',
+        relatedEntityType: 'appointment',
+        relatedEntityId: appointment.id,
+        dedupeOpen: true,
+      });
+    }
+  }
+
   private providerErrorCode(error: any) {
     return String(error?.response?.code || error?.code || '');
   }
@@ -648,6 +1323,14 @@ export class AppointmentBookingService implements OnModuleInit {
     externalEventId: string;
     externalEventEtag: string | null;
     externalCalendarId: string;
+    externalProvider?: NonNullable<Appointment['externalProvider']>;
+    externalConnectionId?: string | null;
+    externalInviteeId?: string | null;
+    externalJoinUrl?: string | null;
+    externalCancelUrl?: string | null;
+    externalRescheduleUrl?: string | null;
+    externalProviderUpdatedAt?: Date | null;
+    meetingMode?: AppointmentMode;
     actorUserId: string | null;
   }) {
     return this.dataSource.transaction(async (manager) => {
@@ -671,17 +1354,30 @@ export class AppointmentBookingService implements OnModuleInit {
           endsAt: input.endsAt,
           status: 'scheduled',
           source: input.source,
-          calendarSource: 'Google Calendar',
+          calendarSource:
+            input.externalProvider === 'microsoft'
+              ? 'Microsoft Outlook'
+              : input.externalProvider === 'calendly'
+                ? 'Calendly'
+                : 'Google Calendar',
           confirmationStatus: 'pending',
           confirmationTaskCreatedAt: new Date(),
           reminderStatus: 'scheduled',
           reminderSentAt: null,
           followUpStatus: 'not_due',
           notes: input.notes,
+          meetingMode: input.meetingMode || 'in_person',
           externalEventId: input.externalEventId,
           externalEventEtag: input.externalEventEtag,
-          externalProvider: 'google',
+          externalProvider: input.externalProvider || 'google',
           externalCalendarId: input.externalCalendarId,
+          externalConnectionId: input.externalConnectionId || null,
+          externalInviteeId: input.externalInviteeId || null,
+          externalJoinUrl: input.externalJoinUrl || null,
+          externalCancelUrl: input.externalCancelUrl || null,
+          externalRescheduleUrl: input.externalRescheduleUrl || null,
+          externalProviderUpdatedAt:
+            input.externalProviderUpdatedAt || null,
           idempotencyKey: input.idempotencyKey,
           syncStatus: 'synced',
           lastSyncedAt: new Date(),
@@ -713,7 +1409,7 @@ export class AppointmentBookingService implements OnModuleInit {
           metadata: {
             appointmentId: appointment.id,
             source: input.source,
-            externalProvider: 'google',
+            externalProvider: input.externalProvider || 'google',
           },
         }),
       );
@@ -758,6 +1454,12 @@ export class AppointmentBookingService implements OnModuleInit {
       relations: ['lead'],
     });
     if (!appointment || appointment.postCommitCompletedAt) return;
+    const providerName =
+      appointment.externalProvider === 'microsoft'
+        ? 'Microsoft Outlook'
+        : appointment.externalProvider === 'calendly'
+          ? 'Calendly'
+          : 'Google Calendar';
     const createdNotifications = await this.notifications.createForTenant({
       tenantId: appointment.tenantId,
       assignedUserId: appointment.assignedUserId,
@@ -765,7 +1467,7 @@ export class AppointmentBookingService implements OnModuleInit {
       category: 'leads',
       severity: 'success',
       title: `Appointment scheduled with ${appointment.lead.fullName}`,
-      message: 'The time is verified and the event is on the selected Google Calendar.',
+      message: `The time is verified and the appointment is confirmed by ${providerName}.`,
       deduplicationKey: `appointment-created:${appointment.id}`,
       actionUrl: `/app/appointments?appointmentId=${appointment.id}`,
       entityType: 'appointment',
@@ -782,9 +1484,14 @@ export class AppointmentBookingService implements OnModuleInit {
         leadId: appointment.leadId,
         assignedToUserId: appointment.assignedUserId || null,
         startsAt: appointment.startsAt.toISOString(),
+        endsAt: appointment.endsAt.toISOString(),
+        timeZone: await this.tenantTimeZone(appointment.tenantId),
         status: appointment.status,
         source: appointment.source,
-        externalProvider: 'google',
+        provider: appointment.externalProvider,
+        externalProvider: appointment.externalProvider,
+        meetingMode: appointment.meetingMode || 'in_person',
+        joinUrl: appointment.externalJoinUrl || null,
         testRunId: appointment.lead.testRunId || null,
       },
       { idempotencyKey: `appointment.created:${appointment.id}` },
@@ -800,7 +1507,7 @@ export class AppointmentBookingService implements OnModuleInit {
       resourceType: 'appointment',
       resourceId: appointment.id,
       metadata: {
-        provider: 'google',
+        provider: appointment.externalProvider,
         notificationRecipients: createdNotifications.length,
         crmEventPublished: crmPublication.queued > 0,
       },
@@ -814,11 +1521,204 @@ export class AppointmentBookingService implements OnModuleInit {
           externalCalendarEvent: true,
           internalAppointment: true,
           agentNotification: true,
+          bookingProvider:
+            appointment.externalProvider === 'microsoft'
+              ? 'microsoft_calendar'
+              : appointment.externalProvider === 'calendly'
+                ? 'calendly'
+                : 'google_calendar',
         },
       );
     }
     appointment.postCommitCompletedAt = new Date();
     await this.appointments.save(appointment);
+  }
+
+  private async reconcileExternalProviderState(
+    adapter: BookingProviderAdapter,
+    appointment: Appointment,
+    external: ProviderAppointment | null,
+  ) {
+    const cancelled = !external || external.status === 'cancelled';
+    if (!cancelled && (!external.startsAt || !external.endsAt)) {
+      await this.markProviderAppointmentConflict(
+        appointment,
+        `${adapter.storedProvider.toUpperCase()}_EVENT_TIME_MISSING`,
+        adapter,
+      );
+      throw new Error('Provider appointment has no timed start/end');
+    }
+    const result = await this.dataSource.transaction(async (manager) => {
+      const repository = manager.getRepository(Appointment);
+      const locked = await repository
+        .createQueryBuilder('appointment')
+        .leftJoinAndSelect('appointment.lead', 'lead')
+        .setLock('pessimistic_write')
+        .where(
+          'appointment.id = :id AND appointment.tenantId = :tenantId',
+          { id: appointment.id, tenantId: appointment.tenantId },
+        )
+        .getOneOrFail();
+      const timingChanged = Boolean(
+        !cancelled &&
+          external?.startsAt &&
+          external?.endsAt &&
+          (external.startsAt.getTime() !== locked.startsAt.getTime() ||
+            external.endsAt.getTime() !== locked.endsAt.getTime()),
+      );
+      const cancellationChanged = cancelled && locked.status !== 'cancelled';
+      const meetingMetadataChanged = Boolean(
+        external &&
+          (external.joinUrl || null) !== (locked.externalJoinUrl || null),
+      );
+      locked.externalEventEtag = external?.version || null;
+      locked.externalConnectionId =
+        external?.connectionId || locked.externalConnectionId || null;
+      locked.externalInviteeId =
+        external?.inviteeId || locked.externalInviteeId || null;
+      locked.externalJoinUrl = external?.joinUrl || null;
+      locked.externalCancelUrl =
+        external?.cancelUrl || locked.externalCancelUrl || null;
+      locked.externalRescheduleUrl =
+        external?.rescheduleUrl || locked.externalRescheduleUrl || null;
+      locked.externalProviderUpdatedAt =
+        external?.providerUpdatedAt || null;
+      locked.lastSyncedAt = new Date();
+      locked.syncStatus = 'synced';
+      locked.syncErrorCode = null;
+      if (timingChanged && external?.startsAt && external.endsAt) {
+        locked.startsAt = external.startsAt;
+        locked.endsAt = external.endsAt;
+        locked.confirmationStatus = 'pending';
+        locked.reminderStatus = 'scheduled';
+        locked.reminderSentAt = null;
+        locked.lead.nextFollowUpAt = external.startsAt;
+        locked.lead.recommendedNextAction =
+          'Review the externally changed appointment time and confirm it with the lead.';
+        await manager.getRepository(Lead).save(locked.lead);
+      }
+      if (cancellationChanged) {
+        locked.status = 'cancelled';
+        locked.reminderStatus = 'cancelled';
+        locked.followUpStatus =
+          locked.followUpStatus === 'completed' ? 'completed' : 'due';
+        locked.lead.nextFollowUpAt = new Date();
+        locked.lead.recommendedNextAction =
+          'The provider appointment was cancelled. Contact the lead and agree on the next step.';
+        if (locked.lead.stage === 'appointment_set') {
+          const otherUpcoming = await repository.count({
+            where: {
+              id: Not(locked.id),
+              leadId: locked.leadId,
+              status: In(['scheduled', 'confirmed']),
+            },
+          });
+          if (!otherUpcoming) {
+            const previousStage = locked.lead.stage;
+            locked.lead.stage = 'qualified';
+            await manager.getRepository(LeadStageEvent).save(
+              manager.getRepository(LeadStageEvent).create({
+                tenantId: locked.tenantId,
+                leadId: locked.leadId,
+                previousStage,
+                newStage: locked.lead.stage,
+                changedByUserId: null,
+                changeSource: 'external_calendar_reconciliation',
+              }),
+            );
+          }
+        }
+        await manager.getRepository(Lead).save(locked.lead);
+      }
+      const saved = await repository.save(locked);
+      if (timingChanged || cancellationChanged || meetingMetadataChanged) {
+        await manager.getRepository(LeadEvent).save(
+          manager.getRepository(LeadEvent).create({
+            lead: locked.lead,
+            eventType: 'appointment_reconciled',
+            metadata: {
+              appointmentId: locked.id,
+              externalProvider: adapter.storedProvider,
+              change: cancellationChanged
+                ? 'cancelled'
+                : timingChanged
+                  ? 'rescheduled'
+                  : 'meeting_metadata',
+            },
+          }),
+        );
+      }
+      return {
+        saved,
+        timingChanged,
+        cancellationChanged,
+        meetingMetadataChanged,
+      };
+    });
+    if (
+      result.timingChanged ||
+      result.cancellationChanged ||
+      result.meetingMetadataChanged
+    ) {
+      const change = result.cancellationChanged
+        ? 'cancelled'
+        : result.timingChanged
+          ? 'rescheduled'
+          : 'meeting details changed';
+      await this.notifications.createForTenant({
+        tenantId: result.saved.tenantId,
+        assignedUserId: result.saved.assignedUserId,
+        eventType: 'appointment.reconciled',
+        category: 'leads',
+        severity: 'warning',
+        title: `Provider change reconciled for ${result.saved.lead.fullName}`,
+        message: `${this.providerLabel(adapter)} ${change} outside RealtyTechAI. The internal appointment now matches it.`,
+        deduplicationKey: `appointment-reconciled:${result.saved.id}:${result.saved.updatedAt?.toISOString() || result.saved.startsAt.toISOString()}`,
+        actionUrl: `/app/appointments?appointmentId=${result.saved.id}`,
+        entityType: 'appointment',
+        entityId: result.saved.id,
+      });
+      await this.audit.recordSystemEvent({
+        tenantId: result.saved.tenantId,
+        eventType: 'appointment.external_change_reconciled',
+        resourceType: 'appointment',
+        resourceId: result.saved.id,
+        metadata: { provider: adapter.storedProvider, change },
+      });
+      try {
+        await this.crmEvents.publish(
+          result.saved.tenantId,
+          'appointment.reconciled',
+          {
+            appointmentId: result.saved.id,
+            leadId: result.saved.leadId,
+            startsAt: result.saved.startsAt.toISOString(),
+            endsAt: result.saved.endsAt.toISOString(),
+            status: result.saved.status,
+            provider: result.saved.externalProvider,
+            meetingMode: result.saved.meetingMode || 'in_person',
+            joinUrl: result.saved.externalJoinUrl || null,
+            change,
+          },
+          {
+            idempotencyKey: `appointment.reconciled:${result.saved.id}:${result.saved.updatedAt?.toISOString() || change}`,
+          },
+        );
+      } catch {
+        await this.operations.createTask({
+          tenantId: result.saved.tenantId,
+          category: 'appointment_workflow',
+          title: 'Reconciled appointment CRM event needs attention',
+          description:
+            'Provider and internal records match, but the reconciliation event could not be queued for CRM delivery.',
+          priority: 'high',
+          relatedEntityType: 'appointment',
+          relatedEntityId: result.saved.id,
+          dedupeOpen: true,
+        });
+      }
+    }
+    return result.saved;
   }
 
   private async reconcileExternalGoogleState(
@@ -963,12 +1863,54 @@ export class AppointmentBookingService implements OnModuleInit {
     });
     if (
       !candidate ||
-      candidate.externalProvider !== 'google' ||
+      !candidate.externalProvider ||
       !candidate.externalEventId ||
       ['completed', 'no_show'].includes(candidate.status)
     ) {
       return;
     }
+    if (this.providers) {
+      const adapter = this.providers.forStoredProvider(candidate.externalProvider);
+      return this.providers.withTenantBookingLock(
+        adapter.name,
+        candidate.tenantId,
+        async () => {
+          const appointment = await this.appointments.findOne({
+            where: { id: appointmentId, tenantId: candidate.tenantId },
+            relations: ['lead'],
+          });
+          if (
+            !appointment ||
+            !appointment.externalProvider ||
+            !appointment.externalEventId ||
+            ['completed', 'no_show'].includes(appointment.status)
+          ) {
+            return;
+          }
+          const boundAdapter = this.providers!.forStoredProvider(
+            appointment.externalProvider,
+          );
+          const external = await boundAdapter.getAppointment(
+            appointment.tenantId,
+            appointment.externalEventId,
+            appointment.externalCalendarId,
+            appointment.externalInviteeId,
+          );
+          const reconciled = await this.reconcileExternalProviderState(
+            boundAdapter,
+            appointment,
+            external,
+          );
+          if (
+            reconciled.status !== 'cancelled' &&
+            reconciled.startsAt > new Date()
+          ) {
+            return { nextRunAt: new Date(Date.now() + 6 * 60 * 60_000) };
+          }
+        },
+      );
+    }
+    if (candidate.externalProvider !== 'google') return;
     return this.calendar.withTenantBookingLock(candidate.tenantId, async () => {
       const appointment = await this.appointments.findOne({
         where: { id: appointmentId, tenantId: candidate.tenantId },
@@ -1020,6 +1962,8 @@ export class AppointmentBookingService implements OnModuleInit {
     idempotencyKey: string;
     source: Appointment['source'];
     calendarId: string;
+    provider?: BookingProviderName;
+    meetingMode?: AppointmentMode;
   }) {
     return this.durableJobs.schedule({
       taskType: 'appointment.reconcile_create',
@@ -1033,13 +1977,16 @@ export class AppointmentBookingService implements OnModuleInit {
         idempotencyKey: input.suppliedKey,
         source: input.source,
         calendarId: input.calendarId,
+        resourceId: input.calendarId,
+        provider: input.provider || '',
+        meetingMode: input.meetingMode || '',
       },
       maxAttempts: 8,
     });
   }
 
   private scheduleReconciliation(appointment: Appointment) {
-    if (appointment.externalProvider !== 'google' || !appointment.externalEventId) {
+    if (!appointment.externalProvider || !appointment.externalEventId) {
       return Promise.resolve(null);
     }
     return this.durableJobs.schedule({

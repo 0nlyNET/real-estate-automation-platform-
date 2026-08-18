@@ -34,6 +34,7 @@ describe('workspace AI configuration approval', () => {
   let settingsRepo: ReturnType<typeof repository<WorkspaceAiSettings>>;
   let knowledgeRepo: ReturnType<typeof repository<BrokerageKnowledge>>;
   let credentials: any;
+  let bookingProviders: any;
   let service: AiConfigurationService;
   const actor = {
     userId: '00000000-0000-4000-8000-000000000010',
@@ -44,6 +45,7 @@ describe('workspace AI configuration approval', () => {
     settingsRepo = repository(() => new WorkspaceAiSettings());
     knowledgeRepo = repository(() => new BrokerageKnowledge());
     credentials = { find: jest.fn().mockResolvedValue([]) };
+    bookingProviders = { status: jest.fn() };
     service = new AiConfigurationService(
       settingsRepo as any,
       knowledgeRepo as any,
@@ -59,6 +61,8 @@ describe('workspace AI configuration approval', () => {
         }),
       } as any,
       { recordHuman: jest.fn().mockResolvedValue({}) } as any,
+      undefined,
+      bookingProviders,
     );
     process.env.OPENAI_API_KEY = 'configured-for-test';
   });
@@ -183,5 +187,56 @@ describe('workspace AI configuration approval', () => {
       actor,
     );
     expect(result.settings.aiEnabled).toBe(true);
+  });
+
+  it.each([
+    'google_calendar',
+    'microsoft_calendar',
+    'calendly',
+  ] as const)(
+    'recognizes a tested %s connection without requiring the other providers',
+    async (activeProvider) => {
+      bookingProviders.status.mockResolvedValue({
+        activeProvider,
+        connected: true,
+        providers: {
+          google_calendar: {
+            connected: activeProvider === 'google_calendar',
+          },
+          microsoft_calendar: {
+            connected: activeProvider === 'microsoft_calendar',
+          },
+          calendly: { connected: activeProvider === 'calendly' },
+        },
+      });
+      const result = await service.getConfiguration(
+        '00000000-0000-4000-8000-000000000001',
+      );
+      expect(result.readiness).toMatchObject({
+        bookingProviderConnected: true,
+        activeBookingProvider: activeProvider,
+      });
+    },
+  );
+
+  it('blocks direct AI booking when the selected provider is not tested', async () => {
+    bookingProviders.status.mockResolvedValue({
+      activeProvider: 'microsoft_calendar',
+      connected: false,
+      providers: {
+        google_calendar: { connected: false },
+        microsoft_calendar: { connected: false },
+        calendly: { connected: false },
+      },
+    });
+    await expect(
+      service.updateSettings(
+        '00000000-0000-4000-8000-000000000001',
+        { bookingBehavior: 'calendar_booking' },
+        actor,
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'CALENDAR_NEEDS_ATTENTION' }),
+    });
   });
 });

@@ -206,13 +206,15 @@ describe('AI tool allowlist and validation', () => {
     );
   });
 
-  it('blocks the AI reply when Google cannot verify the booking', async () => {
+  it.each(['Google Calendar', 'Microsoft Outlook', 'Calendly'])(
+    'blocks the AI reply when %s cannot verify the booking',
+    async (providerLabel) => {
     const item = fixture();
     item.context.settings.bookingBehavior = 'calendar_booking';
     item.dependencies.clientOperations.createAppointment.mockRejectedValue(
       new ServiceUnavailableException({
         code: 'APPOINTMENT_RECONCILIATION_PENDING',
-        message: 'The booking result is uncertain. Do not claim it is booked.',
+        message: `${providerLabel} booking result is uncertain. Do not claim it is booked.`,
       }),
     );
     const startsAt = new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString();
@@ -229,7 +231,8 @@ describe('AI tool allowlist and validation', () => {
       status: 'blocked',
       code: 'APPOINTMENT_RECONCILIATION_PENDING',
     });
-  });
+    },
+  );
 
   it('blocks AI booking times that do not include an explicit UTC offset', async () => {
     const item = fixture();

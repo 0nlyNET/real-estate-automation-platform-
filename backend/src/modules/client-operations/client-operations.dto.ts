@@ -61,6 +61,10 @@ export class CreateAppointmentDto {
   @IsString()
   @MaxLength(255)
   externalEventId?: string;
+
+  @IsOptional()
+  @IsIn(['in_person', 'phone', 'virtual'])
+  meetingMode?: 'in_person' | 'phone' | 'virtual';
 }
 
 export class UpdateAppointmentDto {
@@ -88,4 +92,8 @@ export class UpdateAppointmentDto {
   @IsString()
   @MaxLength(2000)
   notes?: string;
+
+  @IsOptional()
+  @IsIn(['in_person', 'phone', 'virtual'])
+  meetingMode?: 'in_person' | 'phone' | 'virtual';
 }

@@ -1,4 +1,5 @@
-import { IsDateString, IsString, MaxLength } from 'class-validator';
+import { IsDateString, IsIn, IsString, MaxLength } from 'class-validator';
+import { BookingProviderName } from './booking-provider.types';
 
 export class SelectCalendarDto {
   @IsString()
@@ -12,4 +13,9 @@ export class CheckAvailabilityDto {
 
   @IsDateString()
   endsAt!: string;
+}
+
+export class SelectBookingProviderDto {
+  @IsIn(['google_calendar', 'microsoft_calendar', 'calendly'])
+  provider!: BookingProviderName;
 }

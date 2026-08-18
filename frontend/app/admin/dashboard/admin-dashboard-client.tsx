@@ -487,7 +487,7 @@ const onboardingGroups: Array<{ label: string; keys: string[] }> = [
   },
   { label: "Branding completed", keys: ["brand"] },
   { label: "Lead source and CRM connected", keys: ["meta", "intake_api", "intake_api_test", "crm_appointment_event"] },
-  { label: "Calendar connected and tested", keys: ["google_calendar"] },
+  { label: "Appointment provider connected and tested", keys: ["booking_provider"] },
   {
     label: "Message settings approved",
     keys: ["consent_policy", "twilio", "sendgrid", "twilio_provider_approval", "sendgrid_provider_approval", "sms_template", "email_template"],

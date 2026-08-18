@@ -18,7 +18,7 @@ import { AiUsageService } from './ai-usage.service';
 import { BrokerageKnowledge } from './brokerage-knowledge.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
 import { ProviderConfigService } from '../integrations/provider-config.service';
-import { CalendarService } from '../calendar/calendar.service';
+import { BookingProviderRegistry } from '../calendar/booking-provider.registry';
 
 type ConfigurationActor = {
   userId: string;
@@ -54,18 +54,18 @@ export class AiConfigurationService {
     private readonly usage: AiUsageService,
     private readonly audit: AiAuditService,
     @Optional() private readonly providerConfig?: ProviderConfigService,
-    @Optional() private readonly calendar?: CalendarService,
+    @Optional() private readonly bookingProviders?: BookingProviderRegistry,
   ) {}
 
   async getConfiguration(tenantId: string) {
-    const [settings, knowledge, usage, communications, tenantSettings, calendarStatus] =
+    const [settings, knowledge, usage, communications, tenantSettings, bookingStatus] =
       await Promise.all([
         this.getOrCreateSettings(tenantId),
         this.getOrCreateKnowledge(tenantId),
         this.usage.usageForWorkspace(tenantId),
         this.communicationReadiness(tenantId),
         this.tenantSettings.findOne({ where: { tenantId } }),
-        this.calendar?.status(tenantId) || Promise.resolve(null),
+        this.bookingProviders?.status(tenantId) || Promise.resolve(null),
       ]);
     return {
       assistantStatus:
@@ -85,7 +85,10 @@ export class AiConfigurationService {
           tenantSettings?.bookingLink &&
             tenantSettings.bookingLinkVerifiedAt,
         ),
-        googleCalendarConnected: calendarStatus?.connected === true,
+        bookingProviderConnected: bookingStatus?.connected === true,
+        activeBookingProvider: bookingStatus?.activeProvider || null,
+        googleCalendarConnected:
+          bookingStatus?.providers.google_calendar.connected === true,
       },
     };
   }
@@ -365,12 +368,12 @@ export class AiConfigurationService {
   }
 
   private async assertCalendarReady(tenantId: string) {
-    const status = await this.calendar?.status(tenantId);
+    const status = await this.bookingProviders?.status(tenantId);
     if (!status?.connected) {
       throw new ConflictException({
         code: 'CALENDAR_NEEDS_ATTENTION',
         message:
-          'Google Calendar must be connected, selected, and tested before enabling direct AI booking.',
+          'Choose one connected, selected, and tested appointment provider before enabling direct AI booking.',
       });
     }
   }

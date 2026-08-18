@@ -15,7 +15,7 @@ RealtyTechAI is a multi-tenant lead-response and follow-up platform for real est
 - In-app notifications and standards-based web push for trusted lead, client, support, billing, integration, and health events
 - A default-off controlled AI lead assistant for authenticated inbound SMS/email, draft review, guarded autopilot, persistent human takeover, verified brokerage knowledge, aggregate admin visibility, and tenant/platform emergency pauses
 - Credential-resolved universal Zapier lead intake, durable signed CRM outcome webhooks, automatic lead-first-response AI, and separate restricted client/operations assistants
-- Google Calendar OAuth with tenant-selected calendars, free/busy checks, real event and attendee creation, idempotent booking, and durable appointment reconciliation
+- One authoritative appointment workflow across Google Calendar, Microsoft Outlook/Teams, and Calendly, with provider-selected resources, live availability, externally confirmed creation, provider-bound appointments, signed change notifications, and durable reconciliation
 
 Provider accounts and production infrastructure are not included. Results, uptime, certifications, and legal compliance depend on the deployment and operating process.
 
@@ -91,6 +91,8 @@ See `backend/.env.example` and `frontend/.env.example`. At minimum, configure:
 - authenticated `SENDGRID_SENDING_DOMAIN` and random-token `SENDGRID_REPLY_DOMAIN`; publish and verify SPF, DKIM, and DMARC
 - server-only OpenAI configuration plus the authenticated `SENDGRID_INBOUND_WEBHOOK_URL=<api-origin>/webhooks/sendgrid/inbound`; follow the approval and test gates in `docs/controlled-ai-lead-agent.md`
 - server-only `GOOGLE_CALENDAR_CLIENT_ID` and `GOOGLE_CALENDAR_CLIENT_SECRET`, the Google Calendar API enabled, the exact redirect URI `<api-origin>/calendar/google/oauth/callback`, and the public HTTPS change-notification endpoint `<api-origin>/calendar/google/notifications`; follow `docs/google-calendar-production-setup.md`
+- server-only `MICROSOFT_CALENDAR_CLIENT_ID` and `MICROSOFT_CALENDAR_CLIENT_SECRET`, a multitenant organizational Entra application, the exact redirect URI `<api-origin>/calendar/microsoft/oauth/callback`, and the public HTTPS notification endpoint `<api-origin>/calendar/microsoft/notifications`; follow `docs/microsoft-calendar-production-setup.md`
+- server-only `CALENDLY_CLIENT_ID`, `CALENDLY_CLIENT_SECRET`, and `CALENDLY_WEBHOOK_SIGNING_KEY`, the exact redirect URI `<api-origin>/calendar/calendly/oauth/callback`, and the public HTTPS webhook endpoint `<api-origin>/calendar/calendly/notifications`; follow `docs/calendly-production-setup.md`
 - Meta app credentials, an active `FACEBOOK_GRAPH_API_VERSION`, and the exact
   `FACEBOOK_WEBHOOK_URL` only when Facebook Lead Ads is enabled
 - platform-owned SendGrid and Twilio credentials are saved once by the owner; tenant subaccounts, numbers, and email identities are provisioned server-side
@@ -111,6 +113,9 @@ Before accepting a pilot payment, complete:
 - `docs/managed-crm-ai-autopilot.md`
 - `docs/managed-autopilot-production-uat.md`
 - `docs/google-calendar-production-setup.md`
+- `docs/microsoft-calendar-production-setup.md`
+- `docs/calendly-production-setup.md`
+- `docs/appointment-provider-controlled-uat.md`
 - all 21 journeys in `docs/first-client-uat.md`
 
 ### Facebook Lead Ads production setup

@@ -77,6 +77,7 @@ export class SettingsService {
           : "test_required",
       bookingLinkVerificationExpiresAt:
         settings.bookingLinkVerificationExpiresAt || null,
+      activeBookingProvider: settings.activeBookingProvider || null,
       timeZoneVerifiedAt: settings.timeZoneVerifiedAt || null,
       automationsEnabled: settings.automationsEnabled,
       roundRobinEnabled: settings.roundRobinEnabled,

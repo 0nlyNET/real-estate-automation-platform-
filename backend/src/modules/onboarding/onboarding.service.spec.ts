@@ -303,7 +303,7 @@ describe('operator-controlled workspace activation', () => {
     expect(blocked.blockers.map((item) => item.key)).toEqual(
       expect.arrayContaining([
         'timezone',
-        'google_calendar',
+        'booking_provider',
         'crm_appointment_event',
         'appointment_uat',
         'sendgrid',

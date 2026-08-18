@@ -1,7 +1,12 @@
-import { Column, Entity, Index } from "typeorm";
+import { Check, Column, Entity, Index } from "typeorm";
 import { BaseEntity } from "../../common/base.entity";
+import { BookingProviderName } from '../calendar/booking-provider.types';
 
 @Entity({ name: "tenant_settings" })
+@Check(
+  'CK_tenant_settings_active_booking_provider',
+  '"active_booking_provider" IS NULL OR "active_booking_provider" IN (\'google_calendar\', \'microsoft_calendar\', \'calendly\')',
+)
 export class TenantSettings extends BaseEntity {
   @Index({ unique: true })
   @Column({ name: "tenant_id", type: "varchar" })
@@ -47,6 +52,14 @@ export class TenantSettings extends BaseEntity {
     nullable: true,
   })
   bookingLinkRevokedAt?: Date | null;
+
+  @Column({
+    name: 'active_booking_provider',
+    type: 'varchar',
+    length: 40,
+    nullable: true,
+  })
+  activeBookingProvider?: BookingProviderName | null;
 
   @Column({
     name: "time_zone_verified_at",

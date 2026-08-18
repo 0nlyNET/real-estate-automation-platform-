@@ -420,12 +420,19 @@ export class AiToolService {
     if (name === 'create_or_update_appointment') {
       if ((context.settings.bookingBehavior || 'verified_link_only') !== 'calendar_booking') {
         throw new BadRequestException(
-          'Direct AI booking requires a tested Google Calendar connection and calendar booking mode.',
+          'Direct AI booking requires a tested active appointment provider and calendar booking mode.',
         );
       }
       const appointmentId = stringValue(args.appointmentId, 80);
       const requestedStart = stringValue(args.startsAt, 80);
       const requestedEnd = stringValue(args.endsAt, 80);
+      const requestedMode = stringValue(args.meetingMode, 20);
+      if (
+        requestedMode &&
+        !['in_person', 'phone', 'virtual'].includes(requestedMode)
+      ) {
+        throw new BadRequestException('Appointment meeting mode is invalid.');
+      }
       if (requestedStart && !/(?:Z|[+-]\d{2}:\d{2})$/.test(requestedStart)) {
         throw new BadRequestException(
           'AI appointment times must include an explicit UTC offset.',
@@ -460,6 +467,9 @@ export class AiToolService {
               args.notes === undefined
                 ? undefined
                 : stringValue(args.notes, 2_000),
+            meetingMode: requestedMode
+              ? (requestedMode as 'in_person' | 'phone' | 'virtual')
+              : undefined,
           },
         );
         return { appointmentId: updated.id, updated: true };
@@ -482,6 +492,9 @@ export class AiToolService {
           endsAt: requestedEnd || undefined,
           notes: stringValue(args.notes, 2_000) || undefined,
           idempotencyKey,
+          meetingMode: requestedMode
+            ? (requestedMode as 'in_person' | 'phone' | 'virtual')
+            : undefined,
         },
         undefined,
         'conversation',

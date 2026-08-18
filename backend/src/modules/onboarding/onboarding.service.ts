@@ -29,6 +29,10 @@ import { TenantMessagingResource } from '../integrations/tenant-messaging-resour
 import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
 import { TestRun } from '../testing/test-run.entity';
 import { CalendarConnection } from '../calendar/calendar-connection.entity';
+import {
+  BookingProviderName,
+  storedProviderFromName,
+} from '../calendar/booking-provider.types';
 import { TenantWebhookSubscription } from '../crm-events/tenant-webhook-subscription.entity';
 
 type ReadinessCategory =
@@ -565,6 +569,7 @@ export class OnboardingService {
       agentNotification?: boolean;
       crmAppointmentEvent?: boolean;
       humanTakeover?: boolean;
+      bookingProvider?: BookingProviderName;
     },
   ) {
     const record = await this.getOrCreate(tenantId);
@@ -583,6 +588,9 @@ export class OnboardingService {
     ] as const;
     run.checks = {
       ...run.checks,
+      ...(evidence.bookingProvider
+        ? { bookingProvider: evidence.bookingProvider }
+        : {}),
       ...Object.fromEntries(
         names.filter((name) => evidence[name]).map((name) => [name, 'passed']),
       ),
@@ -611,6 +619,7 @@ export class OnboardingService {
           verifiedAt: now.toISOString(),
           verifiedBy: 'system:uat',
           testRunId: run.id,
+          bookingProvider: String(checks.bookingProvider || ''),
         },
       };
       record.providerTests = {
@@ -639,6 +648,16 @@ export class OnboardingService {
     return new Map(rows.map((row) => [String(row.channel), Number(row.count)]));
   }
 
+  private bookingProviderLabel(provider?: BookingProviderName | null) {
+    return provider === 'google_calendar'
+      ? 'Google Calendar'
+      : provider === 'microsoft_calendar'
+        ? 'Microsoft Outlook & Teams'
+        : provider === 'calendly'
+          ? 'Calendly'
+          : 'An appointment provider';
+  }
+
   async readiness(tenantId: string) {
     const record = await this.getOrCreate(tenantId);
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
@@ -650,7 +669,7 @@ export class OnboardingService {
       safetyIncidentOpen,
       managedTwilio,
       managedEmail,
-      googleCalendar,
+      bookingProviderConnection,
       appointmentCrmSubscription,
     ] =
       await Promise.all([
@@ -663,7 +682,12 @@ export class OnboardingService {
         this.emailIdentities?.findOne({ where: { tenantId } }) ||
           Promise.resolve(null),
         this.calendarConnections?.findOne({
-          where: { tenantId, provider: 'google' },
+          where: {
+            tenantId,
+            provider: settings?.activeBookingProvider
+              ? storedProviderFromName(settings.activeBookingProvider)
+              : 'google',
+          },
         }) || Promise.resolve(null),
         this.crmSubscriptions?.findOne({
           where: {
@@ -992,21 +1016,22 @@ export class OnboardingService {
       },
     );
     add(
-      'google_calendar',
-      'Google Calendar is connected, selected, and tested',
+      'booking_provider',
+      `${this.bookingProviderLabel(settings?.activeBookingProvider)} is selected, connected, and tested`,
       !record.bookingEnabled ||
         Boolean(
-          googleCalendar?.status === 'connected' &&
-            googleCalendar.selectedCalendarId &&
-            googleCalendar.lastTestedAt,
+          settings?.activeBookingProvider &&
+            bookingProviderConnection?.status === 'connected' &&
+            bookingProviderConnection.selectedCalendarId &&
+            bookingProviderConnection.lastTestedAt,
         ),
       record.bookingEnabled,
       {
         category: 'provider_configuration',
         statusMessage:
-          'Google Calendar is not ready, so availability and real event creation cannot be guaranteed.',
+          'The active appointment provider is not ready, so availability and real appointment creation cannot be guaranteed.',
         nextAction:
-          'Open Integrations, connect Google Calendar, choose a writable calendar, and run Test connection.',
+          'Open Connections, connect a provider, choose its calendar or meeting type, run Test connection, then select Use for new bookings.',
       },
     );
     add(
@@ -1016,7 +1041,7 @@ export class OnboardingService {
       false,
       {
         nextAction:
-          'Save and verify an HTTPS booking link for use when Google Calendar is unavailable.',
+          'Save and verify an HTTPS booking link for use when the active appointment provider is unavailable.',
       },
     );
     add(
@@ -1309,7 +1334,12 @@ export class OnboardingService {
       'appointment_uat',
       'Controlled appointment, notification, CRM, and takeover flow passed',
       !record.bookingEnabled ||
-        Boolean((record.verifiedItems as any)?.appointment_uat?.verifiedAt),
+        Boolean(
+          (record.verifiedItems as any)?.appointment_uat?.verifiedAt &&
+            settings?.activeBookingProvider &&
+            (record.verifiedItems as any)?.appointment_uat?.bookingProvider ===
+              settings.activeBookingProvider,
+        ),
       record.bookingEnabled,
       {
         category: 'controlled_live_test',

@@ -16,6 +16,8 @@ import { ControlledAiLeadAgent1784937600001 } from "./202607250001-controlled-ai
 import { StripeSetupFeeTracking1785801600001 } from "./202608040001-stripe-setup-fee-tracking";
 import { FirstClientSafetyPipeline1785974400001 } from "./202608060001-first-client-safety-pipeline";
 import { ManagedProviderArchitecture1786492800001 } from "./202608120001-managed-provider-architecture";
+import { GoogleCalendarReliability1787011200001 } from "./202608180001-google-calendar-reliability";
+import { MultiProviderScheduling1787011200002 } from "./202608180002-multi-provider-scheduling";
 import { TenantSettings } from "../../modules/settings/tenant-settings.entity";
 
 function memoryDatabase() {
@@ -101,6 +103,8 @@ describe("legacy auth compatibility migration", () => {
         StripeSetupFeeTracking1785801600001,
         FirstClientSafetyPipeline1785974400001,
         ManagedProviderArchitecture1786492800001,
+        GoogleCalendarReliability1787011200001,
+        MultiProviderScheduling1787011200002,
       ],
       migrationsRun: true,
       migrationsTableName: "app_migrations",

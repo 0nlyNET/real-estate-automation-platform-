@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { CalendarPlus, Check, Clock3, MessageSquareText } from "lucide-react"
+import { CalendarPlus, Check, Clock3, ExternalLink, MessageSquareText } from "lucide-react"
 import { PageShell } from "@/app/app/_components/PageShell"
 import { apiFetch } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
@@ -31,20 +31,61 @@ type Appointment = {
   followUpStatus: string
   notes?: string | null
   externalProvider?: string | null
+  externalJoinUrl?: string | null
+  externalCancelUrl?: string | null
+  externalRescheduleUrl?: string | null
+  meetingMode?: "in_person" | "phone" | "virtual"
   syncStatus?: "not_synced" | "synced" | "needs_attention"
   lastSyncedAt?: string | null
   lead: { id: string; fullName: string; phone?: string | null; email?: string | null }
 }
 
 type View = "upcoming" | "completed" | "cancelled" | "no_show"
+type BookingProvider = "google_calendar" | "microsoft_calendar" | "calendly"
+type ProviderStatus = {
+  connected: boolean
+  selectedResource: { name: string; timeZone: string | null } | null
+  issue: { what: string; why: string; how: string } | null
+}
 type CalendarStatus = {
   connected: boolean
+  activeProvider: BookingProvider | null
   issue: { what: string; why: string; how: string } | null
-  selectedCalendar: { name: string; timeZone: string | null } | null
+  selectedResource: { name: string; timeZone: string | null } | null
+  providers: Record<BookingProvider, ProviderStatus>
 }
 
 function label(value: string) {
   return value.replaceAll("_", " ")
+}
+
+function providerKey(value?: string | null): BookingProvider | null {
+  return value === "google"
+    ? "google_calendar"
+    : value === "microsoft"
+      ? "microsoft_calendar"
+      : value === "calendly"
+        ? "calendly"
+        : null
+}
+
+function providerLabel(value?: string | null) {
+  return value === "microsoft"
+    ? "Outlook"
+    : value === "calendly"
+      ? "Calendly"
+      : value === "google"
+        ? "Google"
+        : "Calendar"
+}
+
+function safeHttpsUrl(value?: string | null) {
+  try {
+    const parsed = new URL(String(value || ""))
+    return parsed.protocol === "https:" ? parsed.toString() : ""
+  } catch {
+    return ""
+  }
 }
 
 export default function AppointmentsPage() {
@@ -58,6 +99,7 @@ export default function AppointmentsPage() {
   const [leadId, setLeadId] = useState("")
   const [startsAt, setStartsAt] = useState("")
   const [notes, setNotes] = useState("")
+  const [meetingMode, setMeetingMode] = useState<"in_person" | "phone" | "virtual">("in_person")
   const [reschedule, setReschedule] = useState<Record<string, string>>({})
   const [calendar, setCalendar] = useState<CalendarStatus | null>(null)
   const [workspaceTimeZone, setWorkspaceTimeZone] = useState("")
@@ -71,11 +113,13 @@ export default function AppointmentsPage() {
         apiFetch<Lead[]>("/leads?take=200"),
         apiFetch<CalendarStatus>("/calendar/status").catch(() => ({
           connected: false,
-          selectedCalendar: null,
+          activeProvider: null,
+          selectedResource: null,
+          providers: {} as Record<BookingProvider, ProviderStatus>,
           issue: {
-            what: "Calendar status could not be loaded.",
+            what: "Appointment provider status could not be loaded.",
             why: "Real availability and event creation cannot be confirmed.",
-            how: "Open Connections and run the Google Calendar connection test.",
+            how: "Open Connections and test the provider selected for new bookings.",
           },
         })),
         apiFetch<{ timeZone: string }>("/settings/tenant").catch(() => ({ timeZone: "" })),
@@ -115,9 +159,10 @@ export default function AppointmentsPage() {
           startsAt,
           notes,
           idempotencyKey: requestKey,
+          meetingMode,
         },
       })
-      setOpen(false); setLeadId(""); setStartsAt(""); setNotes(""); setAppointmentRequestKey("")
+      setOpen(false); setLeadId(""); setStartsAt(""); setNotes(""); setMeetingMode("in_person"); setAppointmentRequestKey("")
       await load()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The appointment could not be saved")
@@ -145,8 +190,8 @@ export default function AppointmentsPage() {
       {!calendar?.connected ? (
         <Alert variant="destructive">
           <CalendarPlus />
-          <AlertTitle>{calendar?.issue?.what || "Google Calendar is not ready."}</AlertTitle>
-          <AlertDescription><span className="block">Why: {calendar?.issue?.why || "Real availability and event creation cannot be guaranteed."}</span><span className="block">How to fix: {calendar?.issue?.how || "Connect, choose, and test Google Calendar."} <Link className="underline" href="/app/integrations">Open Connections</Link>.</span></AlertDescription>
+          <AlertTitle>{calendar?.issue?.what || "The appointment provider is not ready."}</AlertTitle>
+          <AlertDescription><span className="block">Why: {calendar?.issue?.why || "Real availability and appointment creation cannot be guaranteed."}</span><span className="block">How to fix: {calendar?.issue?.how || "Connect, choose, and test an appointment provider."} <Link className="underline" href="/app/integrations">Open Connections</Link>.</span></AlertDescription>
         </Alert>
       ) : null}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -156,10 +201,11 @@ export default function AppointmentsPage() {
         <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (next && !appointmentRequestKey) setAppointmentRequestKey(window.crypto.randomUUID()) }}>
           <DialogTrigger asChild><Button disabled={!calendar?.connected}><CalendarPlus className="mr-2 h-4 w-4" />Schedule appointment</Button></DialogTrigger>
           <DialogContent>
-            <DialogHeader><DialogTitle>Schedule an appointment</DialogTitle><DialogDescription>Choose the exact time the lead agreed to in {workspaceTimeZone || "the workspace time zone"}. RealtyTechAI checks {calendar?.selectedCalendar?.name || "Google Calendar"} first, invites the lead when an email is available, then creates the internal record.</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle>Schedule an appointment</DialogTitle><DialogDescription>Choose the exact time the lead agreed to in {workspaceTimeZone || "the workspace time zone"}. RealtyTechAI verifies {calendar?.selectedResource?.name || "the active provider"}, creates the authoritative appointment there, then saves the internal record.</DialogDescription></DialogHeader>
             <form className="space-y-4" onSubmit={create}>
               <label className="grid gap-1.5 text-sm">Lead<select required className="h-10 rounded-md border bg-background px-3" value={leadId} onChange={(event) => setLeadId(event.target.value)}><option value="">Choose a lead</option>{leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.fullName}</option>)}</select></label>
               <label className="grid gap-1.5 text-sm">Date and time ({workspaceTimeZone || "workspace time zone"})<Input required type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>
+              <label className="grid gap-1.5 text-sm">Meeting format<select className="h-10 rounded-md border bg-background px-3" value={meetingMode} onChange={(event) => setMeetingMode(event.target.value as typeof meetingMode)}><option value="in_person">In person</option><option value="phone">Phone</option><option value="virtual">Virtual</option></select></label>
               <label className="grid gap-1.5 text-sm">Notes<Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="What was agreed?" /></label>
               <Button type="submit" disabled={busy === "create"}>{busy === "create" ? "Checking and booking…" : "Check and book"}</Button>
             </form>
@@ -172,21 +218,29 @@ export default function AppointmentsPage() {
       {!loading && !visible.length ? <div className="rounded-xl border border-dashed p-10 text-center"><CalendarPlus className="mx-auto h-6 w-6 text-muted-foreground" /><div className="mt-3 font-medium">No {label(view)} appointments.</div><p className="mt-1 text-sm text-muted-foreground">Appointments saved from the lead workflow will appear here.</p></div> : null}
 
       <div className="space-y-3">
-        {visible.map((item) => (
-          <Card key={item.id}>
+        {visible.map((item) => {
+          const boundProvider = providerKey(item.externalProvider)
+          const boundStatus = boundProvider ? calendar?.providers?.[boundProvider] : null
+          const canChangeProviderRecord = boundProvider
+            ? boundStatus?.connected === true
+            : calendar?.connected === true
+          const joinUrl = safeHttpsUrl(item.externalJoinUrl)
+          const rescheduleUrl = safeHttpsUrl(item.externalRescheduleUrl)
+          return <Card key={item.id}>
             <CardContent className="p-4 sm:p-5">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{item.lead.fullName}</h2><Badge variant={item.confirmationStatus === "confirmed" ? "default" : "secondary"}>{label(item.confirmationStatus)}</Badge><Badge variant="outline">{label(item.status)}</Badge><Badge variant={item.syncStatus === "synced" ? "default" : item.syncStatus === "needs_attention" ? "destructive" : "secondary"}>{item.syncStatus === "synced" ? "Google synced" : item.syncStatus === "needs_attention" ? "Calendar needs attention" : "Legacy internal record"}</Badge></div>
+                  <div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{item.lead.fullName}</h2><Badge variant={item.confirmationStatus === "confirmed" ? "default" : "secondary"}>{label(item.confirmationStatus)}</Badge><Badge variant="outline">{label(item.status)}</Badge><Badge variant="outline">{providerLabel(item.externalProvider)} · {label(item.meetingMode || "in_person")}</Badge><Badge variant={item.syncStatus === "synced" ? "default" : item.syncStatus === "needs_attention" ? "destructive" : "secondary"}>{item.syncStatus === "synced" ? `${providerLabel(item.externalProvider)} synced` : item.syncStatus === "needs_attention" ? `${providerLabel(item.externalProvider)} needs attention` : "Legacy internal record"}</Badge></div>
                   <div className="mt-2 flex items-center gap-2 text-sm"><Clock3 className="h-4 w-4 text-muted-foreground" />{new Date(item.startsAt).toLocaleString([], { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
                   {item.notes ? <p className="mt-2 text-sm text-muted-foreground">{item.notes}</p> : null}
-                  <div className="mt-3 flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/inbox?leadId=${item.lead.id}`}><MessageSquareText className="mr-2 h-4 w-4" />Conversation</Link></Button>{item.confirmationStatus !== "confirmed" && view === "upcoming" ? <Button size="sm" onClick={() => void update(item, { status: "confirmed", confirmationStatus: "confirmed" })} disabled={busy === item.id}><Check className="mr-2 h-4 w-4" />Confirm</Button> : null}{view === "upcoming" ? <Button size="sm" variant="outline" onClick={() => void update(item, { status: "completed", followUpStatus: "due" })} disabled={busy === item.id}>Mark completed</Button> : null}{view === "upcoming" ? <Button size="sm" variant="ghost" onClick={() => void update(item, { status: "cancelled" })} disabled={busy === item.id}>Cancel</Button> : null}</div>
+                  <div className="mt-3 flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/inbox?leadId=${item.lead.id}`}><MessageSquareText className="mr-2 h-4 w-4" />Conversation</Link></Button>{joinUrl ? <Button asChild size="sm" variant="outline"><a href={joinUrl} target="_blank" rel="noreferrer"><ExternalLink className="mr-2 h-4 w-4" />Join meeting</a></Button> : null}{item.confirmationStatus !== "confirmed" && view === "upcoming" ? <Button size="sm" onClick={() => void update(item, { status: "confirmed", confirmationStatus: "confirmed" })} disabled={busy === item.id}><Check className="mr-2 h-4 w-4" />Confirm</Button> : null}{view === "upcoming" ? <Button size="sm" variant="outline" onClick={() => void update(item, { status: "completed", followUpStatus: "due" })} disabled={busy === item.id}>Mark completed</Button> : null}{view === "upcoming" ? <Button size="sm" variant="ghost" onClick={() => void update(item, { status: "cancelled" })} disabled={busy === item.id || !canChangeProviderRecord}>Cancel</Button> : null}</div>
+                  {view === "upcoming" && !canChangeProviderRecord ? <p className="mt-2 text-xs text-destructive">Reconnect and test {providerLabel(item.externalProvider)} before changing its authoritative appointment.</p> : null}
                 </div>
-                {view === "upcoming" ? <div className="w-full space-y-2 rounded-lg border p-3 lg:w-72"><label className="grid gap-1 text-xs font-medium">New date and time ({workspaceTimeZone || "workspace time zone"})<Input type="datetime-local" value={reschedule[item.id] || ""} onChange={(event) => setReschedule((current) => ({ ...current, [item.id]: event.target.value }))} /></label><Button size="sm" variant="outline" disabled={!calendar?.connected || !reschedule[item.id] || busy === item.id} onClick={() => void update(item, { startsAt: reschedule[item.id] })}>Check and reschedule</Button></div> : null}
+                {view === "upcoming" && item.externalProvider === "calendly" ? <div className="w-full space-y-2 rounded-lg border p-3 lg:w-72"><div className="text-xs font-medium">Reschedule with Calendly</div><p className="text-xs text-muted-foreground">Calendly confirms the new time, then RealtyTechAI reconciles this same appointment.</p>{rescheduleUrl ? <Button asChild size="sm" variant="outline"><a href={rescheduleUrl} target="_blank" rel="noreferrer"><ExternalLink className="mr-2 h-4 w-4" />Open verified reschedule link</a></Button> : <p className="text-xs text-destructive">The verified reschedule link is unavailable. Reconcile or contact the lead before changing the time.</p>}</div> : view === "upcoming" ? <div className="w-full space-y-2 rounded-lg border p-3 lg:w-72"><label className="grid gap-1 text-xs font-medium">New date and time ({workspaceTimeZone || "workspace time zone"})<Input type="datetime-local" value={reschedule[item.id] || ""} onChange={(event) => setReschedule((current) => ({ ...current, [item.id]: event.target.value }))} /></label><Button size="sm" variant="outline" disabled={!canChangeProviderRecord || !reschedule[item.id] || busy === item.id} onClick={() => void update(item, { startsAt: reschedule[item.id] })}>Check and reschedule</Button></div> : null}
               </div>
             </CardContent>
           </Card>
-        ))}
+        })}
       </div>
     </PageShell>
   )

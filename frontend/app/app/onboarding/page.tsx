@@ -287,7 +287,7 @@ export default function OnboardingPage() {
                   <div className="grid gap-3 md:grid-cols-3">
                     <Choice label="Text messages" checked={data.smsEnabled} onChange={(value) => setData((current) => ({ ...current, smsEnabled: value }))} description="RealtyTechAI manages delivery using your approved brokerage identity" />
                     <Choice label="Email" checked={data.emailEnabled} onChange={(value) => setData((current) => ({ ...current, emailEnabled: value }))} description="RealtyTechAI manages the verified sending service for you" />
-                    <Choice label="Appointment booking" checked={data.bookingEnabled} onChange={(value) => setData((current) => ({ ...current, bookingEnabled: value }))} description="Checks and books verified times on the Google Calendar you choose" />
+                    <Choice label="Appointment booking" checked={data.bookingEnabled} onChange={(value) => setData((current) => ({ ...current, bookingEnabled: value }))} description="Checks and books verified times through the appointment provider you select" />
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <Field label="Brand or team name" value={data.brandCommunication.brandName} onChange={(value) => field("brandCommunication", "brandName", value)} />
@@ -345,7 +345,7 @@ export default function OnboardingPage() {
                   </div>
                   <Card className="border-primary/30 bg-primary/5">
                     <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources and calendar</div><p className="mt-1 text-sm text-muted-foreground">Connect your website or supported lead source, then connect, choose, and test Google Calendar. RealtyTechAI manages SMS and email delivery for you.</p></div></div>
+                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources and appointment provider</div><p className="mt-1 text-sm text-muted-foreground">Connect your website or supported lead source, then connect, choose, test, and activate Google Calendar, Microsoft Outlook, or Calendly. RealtyTechAI manages SMS and email delivery for you.</p></div></div>
                       <Button asChild type="button"><Link href="/app/integrations">Open connections</Link></Button>
                     </CardContent>
                   </Card>
