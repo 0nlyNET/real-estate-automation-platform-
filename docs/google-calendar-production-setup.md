@@ -15,10 +15,16 @@ and run the connection test.
    `<PUBLIC_API_URL>/calendar/google/oauth/callback`; production must use HTTPS.
 4. Save the client ID and secret only as backend secrets named
    `GOOGLE_CALENDAR_CLIENT_ID` and `GOOGLE_CALENDAR_CLIENT_SECRET`.
-5. Keep `INTEGRATIONS_ENCRYPTION_KEY` stable and backed up. It encrypts refresh
+5. Make `<PUBLIC_API_URL>/calendar/google/notifications` publicly reachable over
+   HTTPS for Google event-change notifications. Set
+   `GOOGLE_CALENDAR_WEBHOOK_URL` only if that exact callback must use a different
+   public HTTPS URL. No webhook secret is pasted into Google: RealtyTechAI creates
+   a unique channel token, stores only its SHA-256 hash, validates the channel,
+   resource, token, and monotonic message number, and then re-fetches events.
+6. Keep `INTEGRATIONS_ENCRYPTION_KEY` stable and backed up. It encrypts refresh
    and access tokens at rest; rotating it requires a reviewed token migration or
    every client reconnecting.
-6. Apply the registered database migration before exposing Connect Google
+7. Apply the registered database migration before exposing Connect Google
    Calendar.
 
 ## Client workflow
@@ -39,12 +45,16 @@ test team. Start an email-only test run if SMS/A2P is unavailable, then:
    and one durable `appointment.created` CRM delivery.
 4. Retry the same booking request and verify there is still one event and one
    appointment.
-5. Reschedule, then cancel; verify Google and RealtyTechAI match after each.
+5. Reschedule start-only, end-only, and both start/end; verify manually added
+   Google attendees remain present. Then cancel and verify both systems match.
 6. Revoke Google access and confirm booking stops with a handoff or verified
    external link; no internal scheduled appointment may be created.
 7. Repeat across a daylight-saving transition. Nonexistent and ambiguous local
    wall times must be rejected unless an explicit UTC offset resolves them.
-8. Use **Take over** and verify queued AI work and follow-up stop immediately.
+8. Modify the event directly in Google and verify the signed push notification
+   triggers prompt reconciliation. Also verify scheduled reconciliation still
+   repairs the appointment if notification delivery is interrupted.
+9. Use **Take over** and verify queued AI work and follow-up stop immediately.
 
 Retain only redacted IDs, timestamps, screenshots, and pass/fail evidence. Never
 copy OAuth codes, tokens, client secrets, message bodies containing personal

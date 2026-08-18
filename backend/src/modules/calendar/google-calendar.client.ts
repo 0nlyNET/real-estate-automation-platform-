@@ -33,7 +33,22 @@ export type GoogleCalendarEvent = {
   end?: { dateTime?: string; date?: string; timeZone?: string };
   transparency?: string;
   htmlLink?: string;
+  attendees?: Array<{
+    email?: string;
+    displayName?: string;
+    responseStatus?: string;
+    organizer?: boolean;
+    self?: boolean;
+  }>;
   extendedProperties?: { private?: Record<string, string> };
+};
+
+export type GoogleNotificationChannel = {
+  id: string;
+  resourceId: string;
+  resourceUri?: string;
+  token?: string;
+  expiration?: string | number;
 };
 
 export class GoogleCalendarApiError extends Error {
@@ -289,17 +304,14 @@ export class GoogleCalendarClient {
       calendarId: string;
       eventId: string;
       etag?: string | null;
-      summary: string;
       start: Date;
       end: Date;
       timeZone: string;
-      attendeeEmail?: string | null;
     },
   ) {
     const url = new URL(
       `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(input.calendarId)}/events/${encodeURIComponent(input.eventId)}`,
     );
-    url.searchParams.set('sendUpdates', input.attendeeEmail ? 'all' : 'none');
     return this.authorizedJson<GoogleCalendarEvent>(accessToken, url.toString(), {
       method: 'PATCH',
       headers: {
@@ -307,12 +319,66 @@ export class GoogleCalendarClient {
         ...(input.etag ? { 'If-Match': input.etag } : {}),
       },
       body: JSON.stringify({
-        summary: input.summary,
         start: { dateTime: input.start.toISOString(), timeZone: input.timeZone },
         end: { dateTime: input.end.toISOString(), timeZone: input.timeZone },
-        attendees: input.attendeeEmail ? [{ email: input.attendeeEmail }] : undefined,
       }),
     });
+  }
+
+  watchEvents(
+    accessToken: string,
+    input: {
+      calendarId: string;
+      channelId: string;
+      address: string;
+      token: string;
+      ttlSeconds?: number;
+    },
+  ) {
+    const url = new URL(
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(input.calendarId)}/events/watch`,
+    );
+    return this.authorizedJson<GoogleNotificationChannel>(
+      accessToken,
+      url.toString(),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: input.channelId,
+          type: 'web_hook',
+          address: input.address,
+          token: input.token,
+          params: {
+            ttl: String(
+              Math.min(Math.max(input.ttlSeconds || 604_800, 3_600), 604_800),
+            ),
+          },
+        }),
+      },
+      { attempts: 1 },
+    );
+  }
+
+  async stopChannel(
+    accessToken: string,
+    input: { channelId: string; resourceId: string },
+  ) {
+    await this.request(
+      'https://www.googleapis.com/calendar/v3/channels/stop',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: input.channelId,
+          resourceId: input.resourceId,
+        }),
+      },
+      { expectEmpty: true, attempts: 1 },
+    );
   }
 
   async deleteEvent(

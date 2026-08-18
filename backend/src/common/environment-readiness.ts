@@ -229,6 +229,11 @@ export function environmentReadiness() {
       redirectUri: present('PUBLIC_API_URL')
         ? `${String(process.env.PUBLIC_API_URL).replace(/\/+$/, '')}/calendar/google/oauth/callback`
         : null,
+      webhookUrl: present('GOOGLE_CALENDAR_WEBHOOK_URL')
+        ? String(process.env.GOOGLE_CALENDAR_WEBHOOK_URL)
+        : present('PUBLIC_API_URL')
+          ? `${String(process.env.PUBLIC_API_URL).replace(/\/+$/, '')}/calendar/google/notifications`
+          : null,
     },
     retention: {
       status: 'up',

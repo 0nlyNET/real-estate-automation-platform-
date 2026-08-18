@@ -1,4 +1,7 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import {
+  ConflictException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { AppointmentBookingService } from './appointment-booking.service';
 
 describe('AppointmentBookingService calendar boundary', () => {
@@ -201,6 +204,280 @@ describe('AppointmentBookingService calendar boundary', () => {
     expect(item.calendar.updateBookingEvent.mock.invocationCallOrder[0]).toBeLessThan(
       item.dataSource.transaction.mock.invocationCallOrder[0],
     );
+  });
+
+  it.each([
+    ['start time only', 24 * 60 * 60_000, 24 * 60 * 60_000, true, false],
+    ['end time only', 0, 30 * 60_000, false, true],
+    ['both start and end', 24 * 60 * 60_000, 25 * 60 * 60_000, true, true],
+    ['a duration decrease', 0, -10 * 60_000, false, true],
+  ])(
+    'updates Google first when %s changes',
+    async (_label, startDelta, endDelta, includeStart, includeEnd) => {
+      const item = fixture();
+      const appointment: any = {
+        id: 'appointment-1',
+        tenantId: 'tenant-1',
+        leadId: 'lead-1',
+        lead: item.lead,
+        assignedUserId: 'user-1',
+        startsAt: futureStart,
+        endsAt: futureEnd,
+        status: 'scheduled',
+        externalProvider: 'google',
+        externalEventId: 'google-event-1',
+        externalEventEtag: 'etag-1',
+        externalCalendarId: 'calendar-1',
+      };
+      jest
+        .spyOn(item.service as any, 'requireAppointmentAccess')
+        .mockResolvedValue(appointment);
+      const requestedStart = new Date(futureStart.getTime() + startDelta);
+      const requestedEnd = new Date(futureEnd.getTime() + endDelta);
+      const expectedEnd = includeEnd
+        ? requestedEnd
+        : new Date(
+            requestedStart.getTime() +
+              (futureEnd.getTime() - futureStart.getTime()),
+          );
+      item.dataSource.transaction.mockResolvedValue({
+        ...appointment,
+        startsAt: requestedStart,
+        endsAt: expectedEnd,
+      });
+      await item.service.update('appointment-1', 'tenant-1', {
+        startsAt: includeStart ? requestedStart.toISOString() : undefined,
+        endsAt: includeEnd ? requestedEnd.toISOString() : undefined,
+      });
+      expect(item.calendar.updateBookingEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventId: 'google-event-1',
+          start: requestedStart,
+          end: expectedEnd,
+        }),
+      );
+      expect(
+        item.calendar.updateBookingEvent.mock.invocationCallOrder[0],
+      ).toBeLessThan(item.dataSource.transaction.mock.invocationCallOrder[0]);
+    },
+  );
+
+  it('rejects a colliding duration increase without changing either record', async () => {
+    const item = fixture();
+    const appointment: any = {
+      id: 'appointment-1',
+      tenantId: 'tenant-1',
+      leadId: 'lead-1',
+      lead: item.lead,
+      assignedUserId: 'user-1',
+      startsAt: futureStart,
+      endsAt: futureEnd,
+      status: 'scheduled',
+      syncStatus: 'synced',
+      externalProvider: 'google',
+      externalEventId: 'google-event-1',
+      externalEventEtag: 'etag-1',
+      externalCalendarId: 'calendar-1',
+    };
+    jest
+      .spyOn(item.service as any, 'requireAppointmentAccess')
+      .mockResolvedValue(appointment);
+    item.calendar.updateBookingEvent.mockRejectedValue(
+      new ConflictException({
+        code: 'CALENDAR_TIME_UNAVAILABLE',
+        message: 'That time is busy.',
+      }),
+    );
+    await expect(
+      item.service.update('appointment-1', 'tenant-1', {
+        endsAt: new Date(futureEnd.getTime() + 30 * 60_000).toISOString(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'CALENDAR_TIME_UNAVAILABLE' }),
+    });
+    expect(item.dataSource.transaction).not.toHaveBeenCalled();
+    expect(item.appointments.update).not.toHaveBeenCalled();
+  });
+
+  it('does not call Google when appointment timing did not change', async () => {
+    const item = fixture();
+    const appointment: any = {
+      id: 'appointment-1',
+      tenantId: 'tenant-1',
+      leadId: 'lead-1',
+      lead: item.lead,
+      assignedUserId: 'user-1',
+      startsAt: futureStart,
+      endsAt: futureEnd,
+      status: 'scheduled',
+      externalProvider: 'google',
+      externalEventId: 'google-event-1',
+      externalEventEtag: 'etag-1',
+      externalCalendarId: 'calendar-1',
+    };
+    jest
+      .spyOn(item.service as any, 'requireAppointmentAccess')
+      .mockResolvedValue(appointment);
+    item.dataSource.transaction.mockResolvedValue({
+      ...appointment,
+      notes: 'Updated note',
+    });
+    await item.service.update('appointment-1', 'tenant-1', {
+      notes: 'Updated note',
+    });
+    expect(item.calendar.updateBookingEvent).not.toHaveBeenCalled();
+    expect(item.calendar.cancelBookingEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not update the internal duration when Google fails an end-time-only change', async () => {
+    const item = fixture();
+    const appointment: any = {
+      id: 'appointment-1',
+      tenantId: 'tenant-1',
+      leadId: 'lead-1',
+      lead: item.lead,
+      assignedUserId: 'user-1',
+      startsAt: futureStart,
+      endsAt: futureEnd,
+      status: 'scheduled',
+      externalProvider: 'google',
+      externalEventId: 'google-event-1',
+      externalEventEtag: 'etag-1',
+      externalCalendarId: 'calendar-1',
+    };
+    jest
+      .spyOn(item.service as any, 'requireAppointmentAccess')
+      .mockResolvedValue(appointment);
+    item.calendar.updateBookingEvent.mockRejectedValue(
+      new ServiceUnavailableException({
+        code: 'GOOGLE_CALENDAR_TEMPORARY_FAILURE',
+        message: 'Google is unavailable.',
+      }),
+    );
+    await expect(
+      item.service.update('appointment-1', 'tenant-1', {
+        endsAt: new Date(futureEnd.getTime() + 15 * 60_000).toISOString(),
+      }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(item.dataSource.transaction).not.toHaveBeenCalled();
+    expect(item.appointments.update).toHaveBeenCalledWith(
+      { id: 'appointment-1', tenantId: 'tenant-1' },
+      expect.objectContaining({
+        syncStatus: 'needs_attention',
+        syncErrorCode: 'GOOGLE_CALENDAR_TEMPORARY_FAILURE',
+      }),
+    );
+  });
+
+  it('refreshes a stale event ETag and retries without overwriting attendees', async () => {
+    const item = fixture();
+    const appointment: any = {
+      id: 'appointment-1',
+      tenantId: 'tenant-1',
+      leadId: 'lead-1',
+      lead: item.lead,
+      assignedUserId: 'user-1',
+      startsAt: futureStart,
+      endsAt: futureEnd,
+      status: 'scheduled',
+      externalProvider: 'google',
+      externalEventId: 'google-event-1',
+      externalEventEtag: 'etag-1',
+      externalCalendarId: 'calendar-1',
+    };
+    jest
+      .spyOn(item.service as any, 'requireAppointmentAccess')
+      .mockResolvedValue(appointment);
+    const newEnd = new Date(futureEnd.getTime() + 15 * 60_000);
+    item.calendar.updateBookingEvent
+      .mockRejectedValueOnce(
+        new ConflictException({
+          code: 'GOOGLE_CALENDAR_CHANGED',
+          message: 'The event changed.',
+        }),
+      )
+      .mockResolvedValueOnce({
+        id: 'google-event-1',
+        etag: 'etag-3',
+        startsAt: futureStart,
+        endsAt: newEnd,
+      });
+    item.calendar.getBookingEvent.mockResolvedValue({
+      id: 'google-event-1',
+      etag: 'etag-2',
+      status: 'confirmed',
+      startsAt: futureStart,
+      endsAt: futureEnd,
+    });
+    item.dataSource.transaction.mockResolvedValue({
+      ...appointment,
+      endsAt: newEnd,
+      externalEventEtag: 'etag-3',
+    });
+    await item.service.update('appointment-1', 'tenant-1', {
+      endsAt: newEnd.toISOString(),
+    });
+    expect(item.calendar.getBookingEvent).toHaveBeenCalledTimes(1);
+    expect(item.calendar.updateBookingEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ etag: 'etag-2', end: newEnd }),
+    );
+    expect(item.calendar.updateBookingEvent.mock.calls[1][0]).not.toHaveProperty(
+      'attendeeEmail',
+    );
+    expect(item.appointments.update).not.toHaveBeenCalled();
+  });
+
+  it('reconciles an externally rescheduled event without disabling unrelated bookings', async () => {
+    const item = fixture();
+    const appointment: any = {
+      id: 'appointment-1',
+      tenantId: 'tenant-1',
+      leadId: 'lead-1',
+      lead: item.lead,
+      assignedUserId: 'user-1',
+      startsAt: futureStart,
+      endsAt: futureEnd,
+      status: 'scheduled',
+      externalProvider: 'google',
+      externalEventId: 'google-event-1',
+      externalEventEtag: 'etag-1',
+      externalCalendarId: 'calendar-1',
+    };
+    jest
+      .spyOn(item.service as any, 'requireAppointmentAccess')
+      .mockResolvedValue(appointment);
+    item.calendar.updateBookingEvent.mockRejectedValue(
+      new ConflictException({
+        code: 'GOOGLE_CALENDAR_CHANGED',
+        message: 'The event changed.',
+      }),
+    );
+    const providerStart = new Date(futureStart.getTime() + 60 * 60_000);
+    const providerEnd = new Date(futureEnd.getTime() + 60 * 60_000);
+    const external = {
+      id: 'google-event-1',
+      etag: 'etag-2',
+      status: 'confirmed',
+      startsAt: providerStart,
+      endsAt: providerEnd,
+    };
+    item.calendar.getBookingEvent.mockResolvedValue(external);
+    const reconcile = jest
+      .spyOn(item.service as any, 'reconcileExternalGoogleState')
+      .mockResolvedValue({ ...appointment, ...external });
+    await expect(
+      item.service.update('appointment-1', 'tenant-1', {
+        endsAt: new Date(futureEnd.getTime() + 15 * 60_000).toISOString(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+      }),
+    });
+    expect(reconcile).toHaveBeenCalledWith(appointment, external);
+    expect(item.appointments.update).not.toHaveBeenCalled();
+    expect(item.calendar.readyCalendarId).not.toHaveBeenCalled();
   });
 
   it('cancels Google before marking the internal appointment cancelled', async () => {

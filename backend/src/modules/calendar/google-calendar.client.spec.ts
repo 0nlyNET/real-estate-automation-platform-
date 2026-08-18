@@ -81,6 +81,74 @@ describe('GoogleCalendarClient', () => {
     ).rejects.toMatchObject({ code: 'GOOGLE_FREE_BUSY_UNCERTAIN' });
   });
 
+  it('patches only timing fields so a reschedule preserves provider-side attendees', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'event-1',
+          etag: 'etag-2',
+          attendees: [
+            { email: 'lead@example.com' },
+            { email: 'broker@example.com' },
+          ],
+          start: { dateTime: '2026-09-01T15:00:00Z' },
+          end: { dateTime: '2026-09-01T16:00:00Z' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    await client.patchEvent('access-token', {
+      calendarId: 'primary',
+      eventId: 'event-1',
+      etag: 'etag-1',
+      start: new Date('2026-09-01T15:00:00Z'),
+      end: new Date('2026-09-01T16:00:00Z'),
+      timeZone: 'America/New_York',
+    });
+    const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
+    const body = JSON.parse(String(init.body));
+    expect(url).not.toContain('sendUpdates=');
+    expect(body).toEqual({
+      start: {
+        dateTime: '2026-09-01T15:00:00.000Z',
+        timeZone: 'America/New_York',
+      },
+      end: {
+        dateTime: '2026-09-01T16:00:00.000Z',
+        timeZone: 'America/New_York',
+      },
+    });
+    expect(body).not.toHaveProperty('attendees');
+  });
+
+  it('creates expiring event watch channels with an opaque verification token', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'channel-1',
+          resourceId: 'resource-1',
+          expiration: String(Date.now() + 604_800_000),
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    await client.watchEvents('access-token', {
+      calendarId: 'primary',
+      channelId: 'channel-1',
+      address: 'https://api.example.com/calendar/google/notifications',
+      token: 'opaque-channel-token',
+    });
+    const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(url).toContain('/events/watch');
+    expect(JSON.parse(String(init.body))).toEqual({
+      id: 'channel-1',
+      type: 'web_hook',
+      address: 'https://api.example.com/calendar/google/notifications',
+      token: 'opaque-channel-token',
+      params: { ttl: '604800' },
+    });
+  });
+
   it('rejects malformed Google busy intervals instead of treating them as free', async () => {
     (global.fetch as jest.Mock).mockResolvedValue(
       new Response(

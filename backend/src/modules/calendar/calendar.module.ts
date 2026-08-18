@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditModule } from '../audit/audit.module';
 import { OperationsModule } from '../operations/operations.module';
+import { Appointment } from '../client-operations/appointment.entity';
 import { CalendarConnection } from './calendar-connection.entity';
 import { CalendarController } from './calendar.controller';
 import { CalendarOAuthState } from './calendar-oauth-state.entity';
@@ -10,7 +11,11 @@ import { GoogleCalendarClient } from './google-calendar.client';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([CalendarConnection, CalendarOAuthState]),
+    TypeOrmModule.forFeature([
+      CalendarConnection,
+      CalendarOAuthState,
+      Appointment,
+    ]),
     AuditModule,
     OperationsModule,
   ],

@@ -1,15 +1,20 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
+  NotFoundException,
+  OnModuleInit,
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHash, randomBytes } from 'crypto';
-import { DataSource, Not, Repository } from 'typeorm';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
+import { DataSource, In, IsNull, Not, Repository } from 'typeorm';
 import { decryptString, encryptString } from '../../common/crypto-secrets';
 import { AuditService } from '../audit/audit.service';
+import { Appointment } from '../client-operations/appointment.entity';
+import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 import { OperationsService } from '../operations/operations.service';
 import {
   CalendarConnection,
@@ -24,6 +29,8 @@ import {
 } from './google-calendar.client';
 
 const OAUTH_STATE_TTL_MS = 10 * 60_000;
+const GOOGLE_WATCH_TTL_SECONDS = 7 * 24 * 60 * 60;
+const GOOGLE_WATCH_RENEWAL_LEAD_MS = 12 * 60 * 60_000;
 
 type BookingEventInput = {
   tenantId: string;
@@ -44,8 +51,15 @@ type UpdateEventInput = {
   etag?: string | null;
   start: Date;
   end: Date;
-  summary: string;
-  attendeeEmail?: string | null;
+};
+
+export type GoogleChangeNotification = {
+  channelId?: string;
+  channelToken?: string;
+  resourceId?: string;
+  resourceState?: string;
+  messageNumber?: string;
+  channelExpiration?: string;
 };
 
 function sha256(value: string) {
@@ -54,6 +68,29 @@ function sha256(value: string) {
 
 function base64UrlSha256(value: string) {
   return createHash('sha256').update(value).digest('base64url');
+}
+
+function sameHash(left: string, right: string) {
+  const leftBuffer = Buffer.from(left, 'hex');
+  const rightBuffer = Buffer.from(right, 'hex');
+  return (
+    leftBuffer.length === 32 &&
+    rightBuffer.length === 32 &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  );
+}
+
+function compareUnsignedIntegerStrings(left: string, right: string) {
+  const normalizedLeft = left.replace(/^0+(?=\d)/, '');
+  const normalizedRight = right.replace(/^0+(?=\d)/, '');
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return normalizedLeft.length < normalizedRight.length ? -1 : 1;
+  }
+  return normalizedLeft === normalizedRight
+    ? 0
+    : normalizedLeft < normalizedRight
+      ? -1
+      : 1;
 }
 
 function validEmail(value?: string | null) {
@@ -97,7 +134,7 @@ function publicError(code?: string | null) {
 }
 
 @Injectable()
-export class CalendarService {
+export class CalendarService implements OnModuleInit {
   private readonly refreshing = new Map<string, Promise<string>>();
 
   constructor(
@@ -109,7 +146,64 @@ export class CalendarService {
     private readonly google: GoogleCalendarClient,
     @Optional() private readonly audit?: AuditService,
     @Optional() private readonly operations?: OperationsService,
+    @Optional() private readonly durableJobs?: DurableJobsService,
+    @Optional()
+    @InjectRepository(Appointment)
+    private readonly appointments?: Repository<Appointment>,
   ) {}
+
+  onModuleInit() {
+    this.durableJobs?.register('calendar.google.renew_watch', async (job) => {
+      const connectionId = String(job.payload.connectionId || '');
+      if (!connectionId) {
+        throw new Error('Google watch renewal is missing connectionId');
+      }
+      const connection = await this.connections.findOne({
+        where: { id: connectionId, provider: 'google' },
+      });
+      if (
+        !connection ||
+        connection.status === 'disconnected' ||
+        !connection.selectedCalendarId
+      ) {
+        return;
+      }
+      return this.withTenantBookingLock(connection.tenantId, async () => {
+        const current = await this.connections.findOne({
+          where: { id: connection.id, provider: 'google' },
+        });
+        if (
+          !current ||
+          current.status === 'disconnected' ||
+          !current.selectedCalendarId
+        ) {
+          return;
+        }
+        if (
+          current.webhookExpiresAt &&
+          current.webhookExpiresAt.getTime() >
+            Date.now() + GOOGLE_WATCH_RENEWAL_LEAD_MS
+        ) {
+          return {
+            nextRunAt: new Date(
+              current.webhookExpiresAt.getTime() -
+                GOOGLE_WATCH_RENEWAL_LEAD_MS,
+            ),
+          };
+        }
+        const expiration = await this.ensureGoogleWatch(current, true);
+        if (!expiration) return;
+        return {
+          nextRunAt: new Date(
+            Math.max(
+              Date.now() + 60_000,
+              expiration.getTime() - GOOGLE_WATCH_RENEWAL_LEAD_MS,
+            ),
+          ),
+        };
+      });
+    });
+  }
 
   async status(tenantId: string) {
     const connection = await this.connections.findOne({
@@ -123,6 +217,10 @@ export class CalendarService {
         selectedCalendar: null,
         lastTestedAt: null,
         lastSuccessfulSyncAt: null,
+        changeNotifications: {
+          status: 'reconciliation_only',
+          expiresAt: null,
+        },
         issue: {
           what: 'Google Calendar is not connected.',
           why: 'RealtyTechAI cannot verify availability or create a real appointment.',
@@ -156,6 +254,16 @@ export class CalendarService {
         : null,
       lastTestedAt: connection.lastTestedAt,
       lastSuccessfulSyncAt: connection.lastSuccessfulSyncAt,
+      changeNotifications: {
+        status:
+          connection.webhookChannelId &&
+          connection.webhookResourceId &&
+          connection.webhookExpiresAt &&
+          connection.webhookExpiresAt > new Date()
+            ? 'active'
+            : 'reconciliation_only',
+        expiresAt: connection.webhookExpiresAt || null,
+      },
       issue:
         status === 'choose_calendar'
           ? {
@@ -283,6 +391,11 @@ export class CalendarService {
       selectedCalendarId: null,
       selectedCalendarName: null,
       selectedCalendarTimeZone: null,
+      webhookChannelId: null,
+      webhookResourceId: null,
+      webhookTokenHash: null,
+      webhookExpiresAt: null,
+      webhookLastMessageNumber: null,
       lastTestedAt: null,
       lastErrorCode: null,
       lastErrorAt: null,
@@ -331,6 +444,13 @@ export class CalendarService {
     }
     return this.withTenantBookingLock(tenantId, async () => {
       const connection = await this.requireAuthorizedConnection(tenantId);
+      if (
+        connection.selectedCalendarId &&
+        connection.selectedCalendarId !== selected.id &&
+        connection.webhookChannelId
+      ) {
+        await this.stopGoogleWatch(connection);
+      }
       connection.selectedCalendarId = selected.id;
       connection.selectedCalendarName = selected.name;
       connection.selectedCalendarTimeZone = selected.timeZone;
@@ -392,6 +512,7 @@ export class CalendarService {
       connection.lastErrorCode = null;
       connection.lastErrorAt = null;
       await this.connections.save(connection);
+      await this.configureGoogleWatch(connection);
       await this.audit?.record({
         tenantId,
         actorId,
@@ -432,6 +553,7 @@ export class CalendarService {
       where: { tenantId, provider: 'google' },
     });
     if (!connection) return this.status(tenantId);
+    await this.stopGoogleWatch(connection);
     const token = connection.refreshTokenEncrypted
       ? decryptString(connection.refreshTokenEncrypted)
       : connection.accessTokenEncrypted
@@ -468,6 +590,11 @@ export class CalendarService {
       selectedCalendarId: null,
       selectedCalendarName: null,
       selectedCalendarTimeZone: null,
+      webhookChannelId: null,
+      webhookResourceId: null,
+      webhookTokenHash: null,
+      webhookExpiresAt: null,
+      webhookLastMessageNumber: null,
       lastTestedAt: null,
       lastErrorCode: null,
       lastErrorAt: null,
@@ -721,17 +848,31 @@ export class CalendarService {
         calendarId: input.calendarId || connection.selectedCalendarId!,
         eventId: input.eventId,
         etag: input.etag,
-        summary: input.summary,
         start: input.start,
         end: input.end,
         timeZone: connection.selectedCalendarTimeZone || 'UTC',
-        attendeeEmail: validEmail(input.attendeeEmail) ? input.attendeeEmail!.trim() : null,
       });
-      await this.noteSyncSuccess(connection);
-      return this.externalEvent(
+      const external = this.externalEvent(
         updated,
         input.calendarId || connection.selectedCalendarId!,
       );
+      if (
+        external.id !== input.eventId ||
+        !external.startsAt ||
+        !external.endsAt ||
+        external.startsAt.getTime() !== input.start.getTime() ||
+        external.endsAt.getTime() !== input.end.getTime()
+      ) {
+        throw new GoogleCalendarApiError(
+          'GOOGLE_EVENT_RESULT_UNCERTAIN',
+          'Google Calendar did not confirm the updated event time.',
+          null,
+          true,
+          true,
+        );
+      }
+      await this.noteSyncSuccess(connection);
+      return external;
     } catch (error) {
       await this.handleProviderError(connection, error);
       throw this.publicProviderException(error);
@@ -808,6 +949,334 @@ export class CalendarService {
       ]);
       return callback();
     });
+  }
+
+  async handleGoogleChangeNotification(input: GoogleChangeNotification) {
+    const channelId = String(input.channelId || '').trim();
+    const channelToken = String(input.channelToken || '').trim();
+    const resourceId = String(input.resourceId || '').trim();
+    const resourceState = String(input.resourceState || '').trim();
+    const messageNumber = String(input.messageNumber || '').trim();
+    if (
+      !channelId ||
+      channelId.length > 120 ||
+      !channelToken ||
+      channelToken.length > 256 ||
+      !resourceId ||
+      resourceId.length > 2_000 ||
+      !['sync', 'exists', 'not_exists'].includes(resourceState) ||
+      !/^\d{1,40}$/.test(messageNumber)
+    ) {
+      throw new BadRequestException('Invalid Google Calendar notification headers.');
+    }
+
+    const accepted = await this.dataSource.transaction(async (manager) => {
+      const repository = manager.getRepository(CalendarConnection);
+      const connection = await repository
+        .createQueryBuilder('connection')
+        .setLock('pessimistic_write')
+        .where(
+          'connection.provider = :provider AND connection.webhookChannelId = :channelId',
+          { provider: 'google', channelId },
+        )
+        .getOne();
+      if (!connection || !connection.webhookTokenHash) {
+        throw new NotFoundException('Google Calendar notification channel not found.');
+      }
+      if (!sameHash(connection.webhookTokenHash, sha256(channelToken))) {
+        throw new ForbiddenException('Invalid Google Calendar notification token.');
+      }
+      if (
+        connection.webhookResourceId &&
+        connection.webhookResourceId !== resourceId
+      ) {
+        throw new ForbiddenException('Invalid Google Calendar notification resource.');
+      }
+      const currentNumber = connection.webhookLastMessageNumber || '0';
+      if (compareUnsignedIntegerStrings(messageNumber, currentNumber) <= 0) {
+        return { connection, duplicate: true };
+      }
+      connection.webhookResourceId = resourceId;
+      connection.webhookLastMessageNumber = messageNumber;
+      const headerExpiration = input.channelExpiration
+        ? new Date(input.channelExpiration)
+        : null;
+      if (headerExpiration && !Number.isNaN(headerExpiration.getTime())) {
+        connection.webhookExpiresAt = headerExpiration;
+      }
+      await repository.save(connection);
+      return { connection, duplicate: false };
+    });
+
+    if (accepted.duplicate || resourceState === 'sync') {
+      return { accepted: true, duplicate: accepted.duplicate, scheduled: 0 };
+    }
+
+    const connection = accepted.connection;
+    const appointments =
+      connection.selectedCalendarId && this.appointments
+        ? await this.appointments.find({
+            where: {
+              tenantId: connection.tenantId,
+              externalProvider: 'google',
+              externalCalendarId: connection.selectedCalendarId,
+              externalEventId: Not(IsNull()),
+              status: Not(In(['completed', 'no_show'])),
+            },
+            select: { id: true, tenantId: true },
+          })
+        : [];
+    await Promise.all(
+      appointments.map((appointment) =>
+        this.durableJobs?.schedule({
+          taskType: 'appointment.reconcile_calendar',
+          tenantId: appointment.tenantId,
+          dedupeKey: `appointment-calendar-reconcile:${appointment.id}`,
+          payload: { appointmentId: appointment.id },
+          maxAttempts: 12,
+        }),
+      ),
+    );
+    await this.audit?.recordSystemEvent({
+      tenantId: connection.tenantId,
+      eventType: 'calendar.change_notification_received',
+      resourceType: 'calendar_connection',
+      resourceId: connection.id,
+      metadata: {
+        provider: 'google',
+        resourceState,
+        scheduledAppointments: appointments.length,
+      },
+    });
+    return { accepted: true, duplicate: false, scheduled: appointments.length };
+  }
+
+  private async configureGoogleWatch(connection: CalendarConnection) {
+    let expiration: Date | null = null;
+    try {
+      expiration = await this.ensureGoogleWatch(connection);
+    } catch (error) {
+      await this.operations?.createTask({
+        tenantId: connection.tenantId,
+        category: 'calendar_provider_failure',
+        title: 'Google Calendar change notifications need attention',
+        description:
+          'Direct booking remains protected by live free/busy and scheduled reconciliation, but Google push notifications could not be activated. Verify the public HTTPS webhook URL and test the connection again.',
+        priority: 'high',
+        relatedEntityType: 'calendar_connection',
+        relatedEntityId: connection.id,
+        dedupeOpen: true,
+      });
+      await this.audit?.recordSystemEvent({
+        tenantId: connection.tenantId,
+        eventType: 'calendar.change_subscription_failed',
+        resourceType: 'calendar_connection',
+        resourceId: connection.id,
+        metadata: { provider: 'google', errorCode: this.errorCode(error) },
+      });
+      return;
+    }
+    if (!expiration || !this.durableJobs) return;
+    await this.durableJobs.schedule({
+      taskType: 'calendar.google.renew_watch',
+      tenantId: connection.tenantId,
+      dedupeKey: `calendar-google-renew-watch:${connection.id}`,
+      payload: { connectionId: connection.id },
+      nextRunAt: new Date(
+        Math.max(
+          Date.now() + 60_000,
+          expiration.getTime() - GOOGLE_WATCH_RENEWAL_LEAD_MS,
+        ),
+      ),
+      maxAttempts: 20,
+    });
+  }
+
+  private async ensureGoogleWatch(
+    connection: CalendarConnection,
+    force = false,
+  ): Promise<Date | null> {
+    const address = this.googleWebhookUrl();
+    if (!address || !connection.selectedCalendarId) return null;
+    if (
+      !force &&
+      connection.webhookChannelId &&
+      connection.webhookResourceId &&
+      connection.webhookExpiresAt &&
+      connection.webhookExpiresAt.getTime() >
+        Date.now() + GOOGLE_WATCH_RENEWAL_LEAD_MS
+    ) {
+      return connection.webhookExpiresAt;
+    }
+
+    const accessToken = await this.accessToken(connection);
+    const previous = {
+      channelId: connection.webhookChannelId,
+      resourceId: connection.webhookResourceId,
+      tokenHash: connection.webhookTokenHash,
+      expiresAt: connection.webhookExpiresAt,
+      lastMessageNumber: connection.webhookLastMessageNumber,
+    };
+    const channelId = randomUUID();
+    const channelToken = randomBytes(32).toString('base64url');
+    const provisionalExpiration = new Date(
+      Date.now() + GOOGLE_WATCH_TTL_SECONDS * 1_000,
+    );
+    Object.assign(connection, {
+      webhookChannelId: channelId,
+      webhookResourceId: null,
+      webhookTokenHash: sha256(channelToken),
+      webhookExpiresAt: provisionalExpiration,
+      webhookLastMessageNumber: null,
+    });
+    await this.connections.save(connection);
+
+    try {
+      const channel = await this.google.watchEvents(accessToken, {
+        calendarId: connection.selectedCalendarId,
+        channelId,
+        address,
+        token: channelToken,
+        ttlSeconds: GOOGLE_WATCH_TTL_SECONDS,
+      });
+      const expiration = new Date(Number(channel?.expiration));
+      if (
+        channel?.id !== channelId ||
+        !channel?.resourceId ||
+        Number.isNaN(expiration.getTime()) ||
+        expiration.getTime() <= Date.now()
+      ) {
+        throw new GoogleCalendarApiError(
+          'GOOGLE_WATCH_RESULT_UNCERTAIN',
+          'Google did not confirm the notification channel.',
+          null,
+          true,
+          true,
+        );
+      }
+      const result = await this.connections.update(
+        { id: connection.id, webhookChannelId: channelId },
+        {
+          webhookResourceId: channel.resourceId,
+          webhookExpiresAt: expiration,
+        },
+      );
+      if (!result.affected) {
+        throw new GoogleCalendarApiError(
+          'GOOGLE_WATCH_REPLACED',
+          'The Google notification channel was replaced concurrently.',
+          null,
+          false,
+        );
+      }
+      connection.webhookResourceId = channel.resourceId;
+      connection.webhookExpiresAt = expiration;
+      if (previous.channelId && previous.resourceId) {
+        await this.google
+          .stopChannel(accessToken, {
+            channelId: previous.channelId,
+            resourceId: previous.resourceId,
+          })
+          .catch(() => undefined);
+      }
+      await this.audit?.recordSystemEvent({
+        tenantId: connection.tenantId,
+        eventType: 'calendar.change_subscription_active',
+        resourceType: 'calendar_connection',
+        resourceId: connection.id,
+        metadata: { provider: 'google', expiresAt: expiration.toISOString() },
+      });
+      return expiration;
+    } catch (error) {
+      await this.connections.update(
+        { id: connection.id, webhookChannelId: channelId },
+        {
+          webhookChannelId: previous.channelId,
+          webhookResourceId: previous.resourceId,
+          webhookTokenHash: previous.tokenHash,
+          webhookExpiresAt: previous.expiresAt,
+          webhookLastMessageNumber: previous.lastMessageNumber,
+        },
+      );
+      Object.assign(connection, {
+        webhookChannelId: previous.channelId,
+        webhookResourceId: previous.resourceId,
+        webhookTokenHash: previous.tokenHash,
+        webhookExpiresAt: previous.expiresAt,
+        webhookLastMessageNumber: previous.lastMessageNumber,
+      });
+      throw error;
+    }
+  }
+
+  private async stopGoogleWatch(connection: CalendarConnection) {
+    const channelId = connection.webhookChannelId;
+    const resourceId = connection.webhookResourceId;
+    if (channelId && resourceId) {
+      try {
+        const accessToken = await this.accessToken(connection);
+        await this.google.stopChannel(accessToken, { channelId, resourceId });
+      } catch {
+        await this.operations
+          ?.createTask({
+            tenantId: connection.tenantId,
+            category: 'calendar_provider_failure',
+            title: 'An old Google notification channel could not be stopped',
+            description:
+              'RealtyTechAI removed the local channel credentials. Google will expire the old channel automatically; review the integration if unexpected notifications continue.',
+            priority: 'normal',
+            relatedEntityType: 'calendar_connection',
+            relatedEntityId: connection.id,
+            dedupeOpen: true,
+          })
+          .catch(() => undefined);
+      }
+    }
+    const cleared = {
+      webhookChannelId: null,
+      webhookResourceId: null,
+      webhookTokenHash: null,
+      webhookExpiresAt: null,
+      webhookLastMessageNumber: null,
+    };
+    await this.connections.update({ id: connection.id }, cleared);
+    Object.assign(connection, cleared);
+  }
+
+  private googleWebhookUrl() {
+    const explicit = String(
+      process.env.GOOGLE_CALENDAR_WEBHOOK_URL || '',
+    ).trim();
+    const publicApiUrl = String(process.env.PUBLIC_API_URL || '').replace(
+      /\/+$/,
+      '',
+    );
+    const value = explicit || (publicApiUrl ? `${publicApiUrl}/calendar/google/notifications` : '');
+    if (!value) return null;
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error('GOOGLE_CALENDAR_WEBHOOK_URL must be a valid HTTPS URL');
+    }
+    const hostname = url.hostname.toLowerCase();
+    const blockedHost =
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '::1' ||
+      hostname.endsWith('.local') ||
+      /^10\./.test(hostname) ||
+      /^192\.168\./.test(hostname) ||
+      /^172\.(?:1[6-9]|2\d|3[01])\./.test(hostname);
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      blockedHost
+    ) {
+      throw new Error('GOOGLE_CALENDAR_WEBHOOK_URL must be a public HTTPS URL');
+    }
+    return url.toString();
   }
 
   private externalEvent(event: GoogleCalendarEvent, calendarId: string) {
@@ -983,6 +1452,9 @@ export class CalendarService {
     error: unknown,
   ) {
     const code = this.errorCode(error);
+    // A stale event ETag is scoped to one appointment. The OAuth grant,
+    // selected calendar, and unrelated bookings can still be healthy.
+    if (code === 'GOOGLE_CALENDAR_CHANGED') return;
     const update: Partial<CalendarConnection> = {
       lastErrorCode: code,
       lastErrorAt: new Date(),

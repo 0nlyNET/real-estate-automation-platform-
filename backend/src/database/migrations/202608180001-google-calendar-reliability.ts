@@ -20,6 +20,11 @@ export class GoogleCalendarReliability1787011200001
         "selected_calendar_id" text,
         "selected_calendar_name" varchar(255),
         "selected_calendar_time_zone" varchar(100),
+        "webhook_channel_id" varchar(120),
+        "webhook_resource_id" text,
+        "webhook_token_hash" char(64),
+        "webhook_expires_at" timestamptz,
+        "webhook_last_message_number" varchar(40),
         "last_tested_at" timestamptz,
         "last_successful_sync_at" timestamptz,
         "last_error_code" varchar(100),
@@ -31,6 +36,21 @@ export class GoogleCalendarReliability1787011200001
           FOREIGN KEY ("tenant_id") REFERENCES "tenants"("id") ON DELETE CASCADE
       )
     `);
+    await queryRunner.query(
+      `ALTER TABLE "calendar_connections" ADD COLUMN IF NOT EXISTS "webhook_channel_id" varchar(120)`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "calendar_connections" ADD COLUMN IF NOT EXISTS "webhook_resource_id" text`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "calendar_connections" ADD COLUMN IF NOT EXISTS "webhook_token_hash" char(64)`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "calendar_connections" ADD COLUMN IF NOT EXISTS "webhook_expires_at" timestamptz`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "calendar_connections" ADD COLUMN IF NOT EXISTS "webhook_last_message_number" varchar(40)`,
+    );
     await queryRunner.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS "UQ_calendar_connection_tenant_provider"
       ON "calendar_connections" ("tenant_id", "provider")
@@ -38,6 +58,16 @@ export class GoogleCalendarReliability1787011200001
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "IDX_calendar_connection_status"
       ON "calendar_connections" ("status", "last_tested_at")
+    `);
+    await queryRunner.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_calendar_connection_webhook_channel"
+      ON "calendar_connections" ("webhook_channel_id")
+      WHERE "webhook_channel_id" IS NOT NULL
+    `);
+    await queryRunner.query(`
+      CREATE INDEX IF NOT EXISTS "IDX_calendar_connection_webhook_expiry"
+      ON "calendar_connections" ("provider", "webhook_expires_at")
+      WHERE "webhook_channel_id" IS NOT NULL
     `);
 
     await queryRunner.query(`

@@ -143,6 +143,7 @@ describe('production configuration contract', () => {
       status: 'configured',
       missing: [],
       redirectUri: 'https://api.example.com/calendar/google/oauth/callback',
+      webhookUrl: 'https://api.example.com/calendar/google/notifications',
     });
     expect(JSON.stringify(report)).not.toContain('calendar-client-secret');
     delete process.env.GOOGLE_CALENDAR_CLIENT_SECRET;

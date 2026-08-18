@@ -45,6 +45,21 @@ export class CalendarConnection extends BaseEntity {
   @Column({ name: 'selected_calendar_time_zone', type: 'varchar', length: 100, nullable: true })
   selectedCalendarTimeZone!: string | null;
 
+  @Column({ name: 'webhook_channel_id', type: 'varchar', length: 120, nullable: true })
+  webhookChannelId!: string | null;
+
+  @Column({ name: 'webhook_resource_id', type: 'text', nullable: true })
+  webhookResourceId!: string | null;
+
+  @Column({ name: 'webhook_token_hash', type: 'char', length: 64, nullable: true })
+  webhookTokenHash!: string | null;
+
+  @Column({ name: 'webhook_expires_at', type: 'timestamptz', nullable: true })
+  webhookExpiresAt!: Date | null;
+
+  @Column({ name: 'webhook_last_message_number', type: 'varchar', length: 40, nullable: true })
+  webhookLastMessageNumber!: string | null;
+
   @Column({ name: 'last_tested_at', type: 'timestamptz', nullable: true })
   lastTestedAt!: Date | null;
 

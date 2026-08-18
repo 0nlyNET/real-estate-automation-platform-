@@ -287,6 +287,7 @@ export class AppointmentBookingService implements OnModuleInit {
     const timeZone = await this.tenantTimeZone(appointment.tenantId);
     const previousStatus = appointment.status;
     const previousStartsAt = appointment.startsAt;
+    const previousEndsAt = appointment.endsAt;
     const previousDuration = Math.max(
       appointment.endsAt.getTime() - appointment.startsAt.getTime(),
       30 * 60_000,
@@ -300,7 +301,9 @@ export class AppointmentBookingService implements OnModuleInit {
         ? new Date(startsAt.getTime() + previousDuration)
         : appointment.endsAt;
     this.validateWindow(startsAt, endsAt, true);
-    const wasRescheduled = startsAt.getTime() !== previousStartsAt.getTime();
+    const timingChanged =
+      startsAt.getTime() !== previousStartsAt.getTime() ||
+      endsAt.getTime() !== previousEndsAt.getTime();
     const cancelled = dto.status === 'cancelled' && appointment.status !== 'cancelled';
 
     let externalEventId = appointment.externalEventId || null;
@@ -309,27 +312,17 @@ export class AppointmentBookingService implements OnModuleInit {
     try {
       if (appointment.externalProvider === 'google' && externalEventId) {
         if (cancelled) {
-          await this.calendar.cancelBookingEvent({
-            tenantId: appointment.tenantId,
-            eventId: externalEventId,
-            etag: externalEventEtag,
-            calendarId: appointment.externalCalendarId,
-          });
+          await this.cancelGoogleEventWithConflictResolution(appointment);
           externalEventEtag = null;
-        } else if (wasRescheduled) {
-          const updated = await this.calendar.updateBookingEvent({
-            tenantId: appointment.tenantId,
-            eventId: externalEventId,
-            etag: externalEventEtag,
-            calendarId: appointment.externalCalendarId,
-            start: startsAt,
-            end: endsAt,
-            summary: `Appointment with ${appointment.lead.fullName}`.slice(0, 180),
-            attendeeEmail: appointment.lead.email || null,
-          });
+        } else if (timingChanged) {
+          const updated = await this.updateGoogleTimeWithConflictResolution(
+            appointment,
+            startsAt,
+            endsAt,
+          );
           externalEventEtag = updated.etag;
         }
-      } else if (wasRescheduled && !cancelled) {
+      } else if (timingChanged && !cancelled) {
         const converted = await this.calendar.createBookingEvent({
           tenantId: appointment.tenantId,
           leadId: appointment.leadId,
@@ -345,6 +338,17 @@ export class AppointmentBookingService implements OnModuleInit {
         externalCalendarId = converted.calendarId;
       }
     } catch (error: any) {
+      const errorCode = String(
+        error?.response?.code || error?.code || '',
+      );
+      if (
+        [
+          'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+          'CALENDAR_TIME_UNAVAILABLE',
+        ].includes(errorCode)
+      ) {
+        throw error;
+      }
       await this.appointments.update(
         { id: appointment.id, tenantId: appointment.tenantId },
         {
@@ -373,7 +377,7 @@ export class AppointmentBookingService implements OnModuleInit {
         if (dto.confirmationStatus) locked.confirmationStatus = dto.confirmationStatus;
         if (dto.followUpStatus) locked.followUpStatus = dto.followUpStatus;
         if (dto.notes !== undefined) locked.notes = dto.notes.trim() || null;
-        if (wasRescheduled) {
+        if (timingChanged) {
           locked.status = 'scheduled';
           locked.confirmationStatus = 'pending';
           locked.confirmationTaskCreatedAt = new Date();
@@ -440,27 +444,27 @@ export class AppointmentBookingService implements OnModuleInit {
         return result;
       });
       await this.scheduleReconciliation(saved);
-      if (saved.status !== previousStatus || wasRescheduled) {
+      if (saved.status !== previousStatus || timingChanged) {
         await this.notifications.createForTenant({
           tenantId: saved.tenantId,
           assignedUserId: saved.assignedUserId,
           eventType: cancelled
             ? 'appointment.cancelled'
-            : wasRescheduled
+            : timingChanged
               ? 'appointment.rescheduled'
               : 'appointment.updated',
           category: 'leads',
           severity: cancelled ? 'warning' : 'success',
           title: cancelled
             ? `Appointment with ${saved.lead.fullName} was cancelled`
-            : wasRescheduled
+            : timingChanged
               ? `Appointment with ${saved.lead.fullName} was rescheduled`
               : `Appointment with ${saved.lead.fullName} is ${saved.status}`,
           message: cancelled
             ? 'Google Calendar and RealtyTechAI were updated. Agree on the next step.'
             : 'Google Calendar, RealtyTechAI, and Today were updated.',
-          deduplicationKey: wasRescheduled
-            ? `appointment-rescheduled:${saved.id}:${saved.startsAt.toISOString()}`
+          deduplicationKey: timingChanged
+            ? `appointment-rescheduled:${saved.id}:${saved.startsAt.toISOString()}:${saved.endsAt.toISOString()}`
             : `appointment-status:${saved.id}:${saved.status}`,
           actionUrl: `/app/appointments?appointmentId=${saved.id}`,
           entityType: 'appointment',
@@ -476,6 +480,160 @@ export class AppointmentBookingService implements OnModuleInit {
           'Google Calendar was updated, but RealtyTechAI is reconciling the appointment record. Do not repeat the change.',
       });
     }
+  }
+
+  private async updateGoogleTimeWithConflictResolution(
+    appointment: Appointment,
+    startsAt: Date,
+    endsAt: Date,
+  ) {
+    const update = (etag: string | null | undefined) =>
+      this.calendar.updateBookingEvent({
+        tenantId: appointment.tenantId,
+        eventId: appointment.externalEventId!,
+        etag,
+        calendarId: appointment.externalCalendarId,
+        start: startsAt,
+        end: endsAt,
+      });
+    try {
+      return await update(appointment.externalEventEtag);
+    } catch (error: any) {
+      if (this.providerErrorCode(error) !== 'GOOGLE_CALENDAR_CHANGED') {
+        throw error;
+      }
+    }
+
+    const latest = await this.calendar.getBookingEvent(
+      appointment.tenantId,
+      appointment.externalEventId!,
+      appointment.externalCalendarId,
+    );
+    if (!latest || latest.status === 'cancelled') {
+      await this.reconcileExternalGoogleState(appointment, latest);
+      throw new ConflictException({
+        code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+        message:
+          'The Google event was cancelled outside RealtyTechAI. The appointment now matches Google; review it before making another change.',
+      });
+    }
+    if (!latest.startsAt || !latest.endsAt) {
+      await this.markAppointmentConflict(
+        appointment,
+        'GOOGLE_EVENT_TIME_MISSING',
+      );
+      throw new ConflictException({
+        code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+        message:
+          'The Google event changed into a format RealtyTechAI cannot safely reschedule. Review this appointment before retrying.',
+      });
+    }
+    if (
+      latest.startsAt.getTime() === startsAt.getTime() &&
+      latest.endsAt.getTime() === endsAt.getTime()
+    ) {
+      return latest;
+    }
+    const onlyNonTimingDataChanged =
+      latest.startsAt.getTime() === appointment.startsAt.getTime() &&
+      latest.endsAt.getTime() === appointment.endsAt.getTime();
+    if (onlyNonTimingDataChanged) {
+      try {
+        return await update(latest.etag);
+      } catch (error: any) {
+        if (this.providerErrorCode(error) !== 'GOOGLE_CALENDAR_CHANGED') {
+          throw error;
+        }
+        const newest = await this.calendar.getBookingEvent(
+          appointment.tenantId,
+          appointment.externalEventId!,
+          appointment.externalCalendarId,
+        );
+        await this.reconcileExternalGoogleState(appointment, newest);
+        throw new ConflictException({
+          code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+          message:
+            'The Google event changed again while RealtyTechAI was rescheduling it. The latest provider state was reconciled; review it before retrying.',
+        });
+      }
+    }
+
+    await this.reconcileExternalGoogleState(appointment, latest);
+    throw new ConflictException({
+      code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+      message:
+        'The Google event was rescheduled outside RealtyTechAI. The appointment now matches Google; review the new time before retrying.',
+    });
+  }
+
+  private async cancelGoogleEventWithConflictResolution(
+    appointment: Appointment,
+  ) {
+    const cancel = (etag: string | null | undefined) =>
+      this.calendar.cancelBookingEvent({
+        tenantId: appointment.tenantId,
+        eventId: appointment.externalEventId!,
+        etag,
+        calendarId: appointment.externalCalendarId,
+      });
+    try {
+      return await cancel(appointment.externalEventEtag);
+    } catch (error: any) {
+      if (this.providerErrorCode(error) !== 'GOOGLE_CALENDAR_CHANGED') {
+        throw error;
+      }
+    }
+    const latest = await this.calendar.getBookingEvent(
+      appointment.tenantId,
+      appointment.externalEventId!,
+      appointment.externalCalendarId,
+    );
+    if (!latest || latest.status === 'cancelled') {
+      return { cancelled: true };
+    }
+    try {
+      return await cancel(latest.etag);
+    } catch (error: any) {
+      if (this.providerErrorCode(error) !== 'GOOGLE_CALENDAR_CHANGED') {
+        throw error;
+      }
+      const newest = await this.calendar.getBookingEvent(
+        appointment.tenantId,
+        appointment.externalEventId!,
+        appointment.externalCalendarId,
+      );
+      await this.reconcileExternalGoogleState(appointment, newest);
+      throw new ConflictException({
+        code: 'APPOINTMENT_EXTERNAL_CHANGE_RECONCILED',
+        message:
+          'The Google event changed again while RealtyTechAI was cancelling it. The latest provider state was reconciled; review it before retrying.',
+      });
+    }
+  }
+
+  private providerErrorCode(error: any) {
+    return String(error?.response?.code || error?.code || '');
+  }
+
+  private async markAppointmentConflict(
+    appointment: Appointment,
+    syncErrorCode: string,
+  ) {
+    await this.appointments.update(
+      { id: appointment.id, tenantId: appointment.tenantId },
+      { syncStatus: 'needs_attention', syncErrorCode },
+    );
+    await this.operations.createTask({
+      tenantId: appointment.tenantId,
+      category: 'appointment_workflow',
+      title: 'A Google appointment needs individual review',
+      description:
+        'The provider connection is still available, but this appointment could not be reconciled safely. Review the Google event and RealtyTechAI appointment before retrying.',
+      priority: 'high',
+      relatedEntityType: 'appointment',
+      relatedEntityId: appointment.id,
+      dedupeOpen: true,
+    });
   }
 
   private async createInternal(input: {
@@ -663,6 +821,141 @@ export class AppointmentBookingService implements OnModuleInit {
     await this.appointments.save(appointment);
   }
 
+  private async reconcileExternalGoogleState(
+    appointment: Appointment,
+    external: {
+      etag: string | null;
+      status: string;
+      startsAt: Date | null;
+      endsAt: Date | null;
+    } | null,
+  ) {
+    const cancelled = !external || external.status === 'cancelled';
+    if (!cancelled && (!external.startsAt || !external.endsAt)) {
+      await this.markAppointmentConflict(
+        appointment,
+        'GOOGLE_EVENT_TIME_MISSING',
+      );
+      throw new Error('Google Calendar event has no timed start/end');
+    }
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      const repository = manager.getRepository(Appointment);
+      const locked = await repository
+        .createQueryBuilder('appointment')
+        .leftJoinAndSelect('appointment.lead', 'lead')
+        .setLock('pessimistic_write')
+        .where(
+          'appointment.id = :id AND appointment.tenantId = :tenantId',
+          { id: appointment.id, tenantId: appointment.tenantId },
+        )
+        .getOneOrFail();
+      const timingChanged = Boolean(
+        !cancelled &&
+          external?.startsAt &&
+          external?.endsAt &&
+          (external.startsAt.getTime() !== locked.startsAt.getTime() ||
+            external.endsAt.getTime() !== locked.endsAt.getTime()),
+      );
+      const cancellationChanged = cancelled && locked.status !== 'cancelled';
+
+      locked.externalEventEtag = external?.etag || null;
+      locked.lastSyncedAt = new Date();
+      locked.syncStatus = 'synced';
+      locked.syncErrorCode = null;
+      if (timingChanged && external?.startsAt && external.endsAt) {
+        locked.startsAt = external.startsAt;
+        locked.endsAt = external.endsAt;
+        locked.confirmationStatus = 'pending';
+        locked.reminderStatus = 'scheduled';
+        locked.reminderSentAt = null;
+        locked.lead.nextFollowUpAt = external.startsAt;
+        locked.lead.recommendedNextAction =
+          'Review the externally changed appointment time and confirm it with the lead.';
+        await manager.getRepository(Lead).save(locked.lead);
+      }
+      if (cancellationChanged) {
+        locked.status = 'cancelled';
+        locked.reminderStatus = 'cancelled';
+        locked.followUpStatus =
+          locked.followUpStatus === 'completed' ? 'completed' : 'due';
+        locked.lead.nextFollowUpAt = new Date();
+        locked.lead.recommendedNextAction =
+          'The calendar appointment was cancelled. Contact the lead and agree on the next step.';
+        if (locked.lead.stage === 'appointment_set') {
+          const otherUpcoming = await repository.count({
+            where: {
+              id: Not(locked.id),
+              leadId: locked.leadId,
+              status: In(['scheduled', 'confirmed']),
+            },
+          });
+          if (!otherUpcoming) {
+            const previousStage = locked.lead.stage;
+            locked.lead.stage = 'qualified';
+            await manager.getRepository(LeadStageEvent).save(
+              manager.getRepository(LeadStageEvent).create({
+                tenantId: locked.tenantId,
+                leadId: locked.leadId,
+                previousStage,
+                newStage: locked.lead.stage,
+                changedByUserId: null,
+                changeSource: 'external_calendar_reconciliation',
+              }),
+            );
+          }
+        }
+        await manager.getRepository(Lead).save(locked.lead);
+      }
+      const saved = await repository.save(locked);
+      if (timingChanged || cancellationChanged) {
+        await manager.getRepository(LeadEvent).save(
+          manager.getRepository(LeadEvent).create({
+            lead: locked.lead,
+            eventType: 'appointment_reconciled',
+            metadata: {
+              appointmentId: locked.id,
+              externalProvider: 'google',
+              change: cancellationChanged ? 'cancelled' : 'rescheduled',
+            },
+          }),
+        );
+      }
+      return { saved, timingChanged, cancellationChanged };
+    });
+
+    if (result.timingChanged || result.cancellationChanged) {
+      await this.notifications.createForTenant({
+        tenantId: result.saved.tenantId,
+        assignedUserId: result.saved.assignedUserId,
+        eventType: 'appointment.reconciled',
+        category: 'leads',
+        severity: 'warning',
+        title: `Calendar change reconciled for ${result.saved.lead.fullName}`,
+        message: result.cancellationChanged
+          ? 'The Google event was cancelled outside RealtyTechAI. The internal appointment now matches it.'
+          : 'The Google Calendar time changed outside RealtyTechAI. The internal appointment now matches it.',
+        deduplicationKey: result.cancellationChanged
+          ? `appointment-reconciled:${result.saved.id}:cancelled`
+          : `appointment-reconciled:${result.saved.id}:${result.saved.startsAt.toISOString()}:${result.saved.endsAt.toISOString()}`,
+        actionUrl: `/app/appointments?appointmentId=${result.saved.id}`,
+        entityType: 'appointment',
+        entityId: result.saved.id,
+      });
+      await this.audit.recordSystemEvent({
+        tenantId: result.saved.tenantId,
+        eventType: 'appointment.external_change_reconciled',
+        resourceType: 'appointment',
+        resourceId: result.saved.id,
+        metadata: {
+          provider: 'google',
+          change: result.cancellationChanged ? 'cancelled' : 'rescheduled',
+        },
+      });
+    }
+    return result.saved;
+  }
+
   private async reconcile(appointmentId: string) {
     const candidate = await this.appointments.findOne({
       where: { id: appointmentId },
@@ -694,50 +987,11 @@ export class AppointmentBookingService implements OnModuleInit {
         appointment.externalEventId,
         appointment.externalCalendarId,
       );
-      if (!external || external.status === 'cancelled') {
-        if (appointment.status !== 'cancelled') {
-          await this.updateInsideLock(appointment, { status: 'cancelled' });
-        }
-        return;
-      }
-      if (!external.startsAt || !external.endsAt) {
-        appointment.syncStatus = 'needs_attention';
-        appointment.syncErrorCode = 'GOOGLE_EVENT_TIME_MISSING';
-        await this.appointments.save(appointment);
-        throw new Error('Google Calendar event has no timed start/end');
-      }
-      const changed =
-        external.startsAt.getTime() !== appointment.startsAt.getTime() ||
-        external.endsAt.getTime() !== appointment.endsAt.getTime();
-      appointment.externalEventEtag = external.etag;
-      appointment.lastSyncedAt = new Date();
-      appointment.syncStatus = 'synced';
-      appointment.syncErrorCode = null;
-      if (changed) {
-        appointment.startsAt = external.startsAt;
-        appointment.endsAt = external.endsAt;
-        appointment.confirmationStatus = 'pending';
-        appointment.reminderStatus = 'scheduled';
-        appointment.reminderSentAt = null;
-      }
-      await this.appointments.save(appointment);
-      if (changed) {
-        await this.notifications.createForTenant({
-          tenantId: appointment.tenantId,
-          assignedUserId: appointment.assignedUserId,
-          eventType: 'appointment.reconciled',
-          category: 'leads',
-          severity: 'warning',
-          title: `Calendar change reconciled for ${appointment.lead.fullName}`,
-          message:
-            'The Google Calendar time changed outside RealtyTechAI. The internal appointment now matches it.',
-          deduplicationKey: `appointment-reconciled:${appointment.id}:${appointment.startsAt.toISOString()}`,
-          actionUrl: `/app/appointments?appointmentId=${appointment.id}`,
-          entityType: 'appointment',
-          entityId: appointment.id,
-        });
-      }
-      if (appointment.startsAt > new Date()) {
+      const reconciled = await this.reconcileExternalGoogleState(
+        appointment,
+        external,
+      );
+      if (reconciled.status !== 'cancelled' && reconciled.startsAt > new Date()) {
         return { nextRunAt: new Date(Date.now() + 6 * 60 * 60_000) };
       }
     });

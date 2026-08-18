@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
+  HttpCode,
   Post,
   Put,
   Query,
@@ -100,5 +102,22 @@ export class CalendarController {
   @RequireRole('admin')
   disconnect(@Req() req: any) {
     return this.calendar.disconnect(req.user?.tenantId, req.user?.sub);
+  }
+
+  @Post('google/notifications')
+  @HttpCode(204)
+  async googleNotifications(@Headers() headers: Record<string, string | string[] | undefined>) {
+    const header = (name: string) => {
+      const value = headers[name];
+      return Array.isArray(value) ? value[0] : value;
+    };
+    await this.calendar.handleGoogleChangeNotification({
+      channelId: header('x-goog-channel-id'),
+      channelToken: header('x-goog-channel-token'),
+      resourceId: header('x-goog-resource-id'),
+      resourceState: header('x-goog-resource-state'),
+      messageNumber: header('x-goog-message-number'),
+      channelExpiration: header('x-goog-channel-expiration'),
+    });
   }
 }

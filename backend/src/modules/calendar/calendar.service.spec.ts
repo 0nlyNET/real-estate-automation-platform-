@@ -1,4 +1,5 @@
 import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { decryptString, encryptString } from '../../common/crypto-secrets';
 import { CalendarService } from './calendar.service';
 import {
@@ -27,6 +28,11 @@ describe('CalendarService production behavior', () => {
       lastSuccessfulSyncAt: new Date(),
       lastErrorCode: null,
       lastErrorAt: null,
+      webhookChannelId: null,
+      webhookResourceId: null,
+      webhookTokenHash: null,
+      webhookExpiresAt: null,
+      webhookLastMessageNumber: null,
     };
     Object.assign(connection, overrides);
     const connections = {
@@ -52,12 +58,23 @@ describe('CalendarService production behavior', () => {
       insertEvent: jest.fn(),
       patchEvent: jest.fn(),
       deleteEvent: jest.fn(),
+      watchEvents: jest.fn().mockImplementation(async (_token, input) => ({
+        id: input.channelId,
+        resourceId: 'google-resource-1',
+        expiration: String(Date.now() + 7 * 24 * 60 * 60_000),
+      })),
+      stopChannel: jest.fn().mockResolvedValue(undefined),
     };
     const audit = {
       record: jest.fn().mockResolvedValue({}),
       recordSystemEvent: jest.fn().mockResolvedValue({}),
     };
     const operations = { createTask: jest.fn().mockResolvedValue({}) };
+    const durableJobs = {
+      register: jest.fn(),
+      schedule: jest.fn().mockResolvedValue({ id: 'job-1' }),
+    };
+    const appointments = { find: jest.fn().mockResolvedValue([]) };
     const dataSource = {
       transaction: jest.fn(async (callback) =>
         callback({ query: jest.fn(), getRepository: jest.fn() }),
@@ -70,6 +87,8 @@ describe('CalendarService production behavior', () => {
       google as any,
       audit as any,
       operations as any,
+      durableJobs as any,
+      appointments as any,
     );
     return {
       service,
@@ -79,6 +98,8 @@ describe('CalendarService production behavior', () => {
       google,
       audit,
       operations,
+      durableJobs,
+      appointments,
       dataSource,
     };
   }
@@ -160,6 +181,91 @@ describe('CalendarService production behavior', () => {
         how: expect.stringMatching(/Test connection/i),
       },
     });
+  });
+
+  it('activates and schedules renewal for a validated Google event watch channel', async () => {
+    const item = fixture({ status: 'configured', lastTestedAt: null });
+    item.google.getCalendar.mockResolvedValue({
+      id: 'calendar@example.com',
+      summary: 'Appointments',
+      accessRole: 'writer',
+      timeZone: 'America/New_York',
+    });
+    await expect(
+      item.service.testConnection('tenant-1', 'user-1'),
+    ).resolves.toMatchObject({ connected: true });
+    expect(item.google.watchEvents).toHaveBeenCalledWith(
+      'current-access-token',
+      expect.objectContaining({
+        calendarId: 'calendar@example.com',
+        address: 'https://api.example.com/calendar/google/notifications',
+        ttlSeconds: 604_800,
+      }),
+    );
+    const watchToken = item.google.watchEvents.mock.calls[0][1].token;
+    expect(item.connection.webhookTokenHash).toBe(
+      createHash('sha256').update(watchToken).digest('hex'),
+    );
+    expect(JSON.stringify(item.connection)).not.toContain(watchToken);
+    expect(item.durableJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskType: 'calendar.google.renew_watch',
+        dedupeKey: 'calendar-google-renew-watch:connection-1',
+      }),
+    );
+  });
+
+  it('validates and deduplicates Google notifications before scheduling reconciliation', async () => {
+    const token = 'opaque-channel-token';
+    const item = fixture({
+      webhookChannelId: 'channel-1',
+      webhookResourceId: 'resource-1',
+      webhookTokenHash: createHash('sha256').update(token).digest('hex'),
+      webhookExpiresAt: new Date(Date.now() + 60_000),
+      webhookLastMessageNumber: null,
+    });
+    const builder: any = {};
+    builder.setLock = jest.fn(() => builder);
+    builder.where = jest.fn(() => builder);
+    builder.getOne = jest.fn().mockResolvedValue(item.connection);
+    const repository = {
+      createQueryBuilder: jest.fn(() => builder),
+      save: jest.fn(async (value) => value),
+    };
+    item.dataSource.transaction.mockImplementation(async (callback) =>
+      callback({ getRepository: jest.fn(() => repository) }),
+    );
+    item.appointments.find.mockResolvedValue([
+      { id: 'appointment-1', tenantId: 'tenant-1' },
+    ]);
+    const notification = {
+      channelId: 'channel-1',
+      channelToken: token,
+      resourceId: 'resource-1',
+      resourceState: 'exists',
+      messageNumber: '7',
+    };
+    await expect(
+      item.service.handleGoogleChangeNotification(notification),
+    ).resolves.toEqual({ accepted: true, duplicate: false, scheduled: 1 });
+    expect(item.durableJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskType: 'appointment.reconcile_calendar',
+        dedupeKey: 'appointment-calendar-reconcile:appointment-1',
+      }),
+    );
+    item.durableJobs.schedule.mockClear();
+    await expect(
+      item.service.handleGoogleChangeNotification(notification),
+    ).resolves.toEqual({ accepted: true, duplicate: true, scheduled: 0 });
+    expect(item.durableJobs.schedule).not.toHaveBeenCalled();
+    await expect(
+      item.service.handleGoogleChangeNotification({
+        ...notification,
+        channelToken: 'wrong-token',
+        messageNumber: '8',
+      }),
+    ).rejects.toThrow(/invalid google calendar notification token/i);
   });
 
   it('rejects OAuth completion without a fresh refresh token to prevent account mixing', async () => {
@@ -423,7 +529,12 @@ describe('CalendarService production behavior', () => {
         end: { dateTime: end.toISOString() },
       },
     ]);
-    item.google.patchEvent.mockResolvedValue({ id: 'event-1', etag: 'etag-2' });
+    item.google.patchEvent.mockResolvedValue({
+      id: 'event-1',
+      etag: 'etag-2',
+      start: { dateTime: start.toISOString() },
+      end: { dateTime: end.toISOString() },
+    });
     await expect(
       item.service.updateBookingEvent({
         tenantId: 'tenant-1',
@@ -432,7 +543,6 @@ describe('CalendarService production behavior', () => {
         etag: 'etag-1',
         start,
         end,
-        summary: 'Rescheduled appointment',
       }),
     ).resolves.toMatchObject({ id: 'event-1', etag: 'etag-2' });
     expect(item.google.freeBusy).toHaveBeenCalledWith(
@@ -459,6 +569,46 @@ describe('CalendarService production behavior', () => {
         etag: 'etag-2',
       }),
     );
+  });
+
+  it('keeps the provider connected when one event has a stale ETag', async () => {
+    const item = fixture();
+    const start = new Date('2026-09-03T14:00:00Z');
+    const end = new Date('2026-09-03T14:30:00Z');
+    item.google.patchEvent.mockRejectedValue(
+      new GoogleCalendarApiError(
+        'GOOGLE_CALENDAR_CHANGED',
+        'The event changed outside RealtyTechAI.',
+        412,
+        false,
+      ),
+    );
+    await expect(
+      item.service.updateBookingEvent({
+        tenantId: 'tenant-1',
+        eventId: 'event-1',
+        calendarId: 'calendar@example.com',
+        etag: 'stale-etag',
+        start,
+        end,
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'GOOGLE_CALENDAR_CHANGED' }),
+    });
+    expect(item.connection.status).toBe('connected');
+    expect(item.connections.update).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: 'needs_attention' }),
+    );
+
+    item.google.freeBusy.mockResolvedValue([]);
+    await expect(
+      item.service.checkAvailability(
+        'tenant-1',
+        new Date('2026-09-04T14:00:00Z'),
+        new Date('2026-09-04T14:30:00Z'),
+      ),
+    ).resolves.toMatchObject({ available: true });
   });
 
   it('does not treat an inaccessible original calendar as a cancelled event after reconnect', async () => {
