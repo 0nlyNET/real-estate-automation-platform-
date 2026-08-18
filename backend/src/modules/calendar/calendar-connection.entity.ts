@@ -1,5 +1,6 @@
-import { Column, Entity, Index } from 'typeorm';
+import { Check, Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '../../common/base.entity';
+import { StoredBookingProvider } from './booking-provider.types';
 
 export type CalendarConnectionStatus =
   | 'configured'
@@ -8,6 +9,10 @@ export type CalendarConnectionStatus =
   | 'disconnected';
 
 @Entity({ name: 'calendar_connections' })
+@Check(
+  'CK_calendar_connection_provider',
+  '"provider" IN (\'google\', \'microsoft\', \'calendly\')',
+)
 @Index('UQ_calendar_connection_tenant_provider', ['tenantId', 'provider'], {
   unique: true,
 })
@@ -16,7 +21,7 @@ export class CalendarConnection extends BaseEntity {
   tenantId!: string;
 
   @Column({ type: 'varchar', length: 30, default: 'google' })
-  provider!: 'google';
+  provider!: StoredBookingProvider;
 
   @Column({ name: 'access_token_enc', type: 'text', nullable: true })
   accessTokenEncrypted!: string | null;
@@ -33,6 +38,12 @@ export class CalendarConnection extends BaseEntity {
   @Column({ name: 'granted_scopes', type: 'simple-array', nullable: true })
   grantedScopes!: string[] | null;
 
+  @Column({ name: 'provider_account_id', type: 'text', nullable: true })
+  providerAccountId!: string | null;
+
+  @Column({ name: 'provider_tenant_id', type: 'text', nullable: true })
+  providerTenantId!: string | null;
+
   @Column({ type: 'varchar', length: 30, default: 'configured' })
   status!: CalendarConnectionStatus;
 
@@ -45,6 +56,15 @@ export class CalendarConnection extends BaseEntity {
   @Column({ name: 'selected_calendar_time_zone', type: 'varchar', length: 100, nullable: true })
   selectedCalendarTimeZone!: string | null;
 
+  @Column({ name: 'selected_resource_type', type: 'varchar', length: 50, nullable: true })
+  selectedResourceType!: string | null;
+
+  @Column({ name: 'selected_resource_uri', type: 'text', nullable: true })
+  selectedResourceUri!: string | null;
+
+  @Column({ name: 'selected_resource_metadata', type: 'jsonb', nullable: true })
+  selectedResourceMetadata!: Record<string, unknown> | null;
+
   @Column({ name: 'webhook_channel_id', type: 'varchar', length: 120, nullable: true })
   webhookChannelId!: string | null;
 
@@ -53,6 +73,9 @@ export class CalendarConnection extends BaseEntity {
 
   @Column({ name: 'webhook_token_hash', type: 'char', length: 64, nullable: true })
   webhookTokenHash!: string | null;
+
+  @Column({ name: 'webhook_secret_enc', type: 'text', nullable: true })
+  webhookSecretEncrypted!: string | null;
 
   @Column({ name: 'webhook_expires_at', type: 'timestamptz', nullable: true })
   webhookExpiresAt!: Date | null;

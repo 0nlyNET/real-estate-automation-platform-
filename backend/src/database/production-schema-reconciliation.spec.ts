@@ -22,6 +22,7 @@ import { ManagedProviderArchitecture1786492800001 } from "./migrations/202608120
 import { TurnkeyLaunchOperation1786579200001 } from "./migrations/202608130001-turnkey-launch-operation";
 import { ManagedCrmAiAutopilot1786665600001 } from "./migrations/202608140001-managed-crm-ai-autopilot";
 import { GoogleCalendarReliability1787011200001 } from "./migrations/202608180001-google-calendar-reliability";
+import { MultiProviderScheduling1787011200002 } from './migrations/202608180002-multi-provider-scheduling';
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -107,11 +108,14 @@ describe("deployed legacy schema reproduction", () => {
     const sequenceId = randomUUID();
     const stepId = randomUUID();
     const credentialId = randomUUID();
+    const leadId = randomUUID();
     db.public.none(`
       INSERT INTO tenants (id, name, slug)
       VALUES ('${tenantId}', 'Legacy Realty', 'legacy-realty');
       INSERT INTO users (id, email, name, password_hash, tenant_id)
       VALUES ('${userId}', 'broker@example.com', 'Broker', 'legacy-hash', '${tenantId}');
+      INSERT INTO leads (id, full_name, email, tenant_id)
+      VALUES ('${leadId}', 'Controlled Lead', 'controlled@example.com', '${tenantId}');
       INSERT INTO sequences (id, tenant_id, name)
       VALUES ('${sequenceId}', '${tenantId}', 'Legacy nurture');
       INSERT INTO sequence_steps (id, sequence_id, offset_minutes, channel, template)
@@ -126,7 +130,7 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 59,
+      expectedTables: 60,
       actualTables: 12,
       missingTables: [
         "account_invitations",
@@ -138,6 +142,7 @@ describe("deployed legacy schema reproduction", () => {
         "appointments",
         "assistant_runs",
         "billing_events",
+        "booking_webhook_receipts",
         "brokerage_ai_knowledge",
         "calendar_connections",
         "calendar_oauth_states",
@@ -198,12 +203,13 @@ describe("deployed legacy schema reproduction", () => {
     await new TurnkeyLaunchOperation1786579200001().up(queryRunner);
     await new ManagedCrmAiAutopilot1786665600001().up(queryRunner);
     await new GoogleCalendarReliability1787011200001().up(queryRunner);
+    await new MultiProviderScheduling1787011200002().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 59,
-      actualTables: 59,
+      expectedTables: 60,
+      actualTables: 60,
       missingTables: [],
       missingColumns: [],
     });
@@ -244,8 +250,61 @@ describe("deployed legacy schema reproduction", () => {
       }),
     ).resolves.toMatchObject({ offsetMinutes: 30 });
 
+    const appointmentId = randomUUID();
+    await dataSource.query(
+      `INSERT INTO "appointments"
+        ("id", "tenant_id", "lead_id", "starts_at", "ends_at",
+         "idempotency_key", "external_provider", "external_event_id")
+       VALUES ($1, $2, $3, $4, $5, $6, 'microsoft', $7)`,
+      [
+        appointmentId,
+        tenantId,
+        leadId,
+        new Date('2027-01-10T14:00:00Z'),
+        new Date('2027-01-10T14:30:00Z'),
+        'manual:database-constraint-test',
+        'provider-event-1',
+      ],
+    );
+    await expect(
+      dataSource.query(
+        `INSERT INTO "appointments"
+          ("tenant_id", "lead_id", "starts_at", "ends_at", "idempotency_key")
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          tenantId,
+          leadId,
+          new Date('2027-01-11T14:00:00Z'),
+          new Date('2027-01-11T14:30:00Z'),
+          'manual:database-constraint-test',
+        ],
+      ),
+    ).rejects.toBeDefined();
+
+    await dataSource.query(
+      `INSERT INTO "booking_webhook_receipts"
+        ("tenant_id", "provider", "event_key", "payload_hash", "received_at")
+       VALUES ($1, 'calendly', 'webhook-event-1', $2, now())`,
+      [tenantId, 'a'.repeat(64)],
+    );
+    await expect(
+      dataSource.query(
+        `INSERT INTO "booking_webhook_receipts"
+          ("tenant_id", "provider", "event_key", "payload_hash", "received_at")
+         VALUES ($1, 'calendly', 'webhook-event-1', $2, now())`,
+        [tenantId, 'b'.repeat(64)],
+      ),
+    ).rejects.toBeDefined();
+    await expect(
+      dataSource.query(
+        `INSERT INTO "calendar_connections" ("tenant_id", "provider")
+         VALUES ($1, 'unsupported')`,
+        [tenantId],
+      ),
+    ).rejects.toBeDefined();
+
     await dataSource.destroy();
-  });
+  }, 15_000);
 
   it("bootstraps all application tables on an empty database", async () => {
     const db = memoryDatabase();
@@ -271,18 +330,20 @@ describe("deployed legacy schema reproduction", () => {
     await new TurnkeyLaunchOperation1786579200001().up(queryRunner);
     await new ManagedCrmAiAutopilot1786665600001().up(queryRunner);
     await new GoogleCalendarReliability1787011200001().up(queryRunner);
+    await new MultiProviderScheduling1787011200002().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 59,
-      actualTables: 59,
+      expectedTables: 60,
+      actualTables: 60,
       missingTables: [],
       missingColumns: [],
     });
 
     const rollbackRunner = dataSource.createQueryRunner();
     await rollbackRunner.connect();
+    await new MultiProviderScheduling1787011200002().down(rollbackRunner);
     await new GoogleCalendarReliability1787011200001().down(rollbackRunner);
     await new ManagedCrmAiAutopilot1786665600001().down(rollbackRunner);
     await new TurnkeyLaunchOperation1786579200001().down(rollbackRunner);
@@ -302,5 +363,5 @@ describe("deployed legacy schema reproduction", () => {
     ).resolves.toEqual([]);
 
     await dataSource.destroy();
-  });
+  }, 15_000);
 });

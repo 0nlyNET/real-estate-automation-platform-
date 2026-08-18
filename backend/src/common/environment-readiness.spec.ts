@@ -142,14 +142,60 @@ describe('production configuration contract', () => {
     expect(report.googleCalendar).toEqual({
       status: 'configured',
       missing: [],
+      issues: [],
       redirectUri: 'https://api.example.com/calendar/google/oauth/callback',
       webhookUrl: 'https://api.example.com/calendar/google/notifications',
     });
     expect(JSON.stringify(report)).not.toContain('calendar-client-secret');
     delete process.env.GOOGLE_CALENDAR_CLIENT_SECRET;
     expect(environmentReadiness().googleCalendar).toMatchObject({
-      status: 'not_configured',
+      status: 'down',
       missing: ['GOOGLE_CALENDAR_CLIENT_SECRET'],
+    });
+  });
+
+  it('treats Microsoft and Calendly as optional units and rejects partial setup', () => {
+    process.env.PUBLIC_API_URL = 'https://api.example.com';
+    for (const name of [
+      'MICROSOFT_CALENDAR_CLIENT_ID',
+      'MICROSOFT_CALENDAR_CLIENT_SECRET',
+      'MICROSOFT_CALENDAR_WEBHOOK_URL',
+      'CALENDLY_CLIENT_ID',
+      'CALENDLY_CLIENT_SECRET',
+      'CALENDLY_WEBHOOK_SIGNING_KEY',
+      'CALENDLY_WEBHOOK_URL',
+    ]) delete process.env[name];
+
+    expect(environmentReadiness().microsoftCalendar.status).toBe(
+      'not_configured',
+    );
+    expect(environmentReadiness().calendly.status).toBe('not_configured');
+
+    process.env.MICROSOFT_CALENDAR_CLIENT_ID = 'microsoft-client';
+    expect(environmentReadiness().microsoftCalendar).toMatchObject({
+      status: 'down',
+      missing: ['MICROSOFT_CALENDAR_CLIENT_SECRET'],
+    });
+
+    process.env.MICROSOFT_CALENDAR_CLIENT_SECRET = 'microsoft-secret';
+    expect(environmentReadiness().microsoftCalendar).toMatchObject({
+      status: 'configured',
+      missing: [],
+      redirectUri:
+        'https://api.example.com/calendar/microsoft/oauth/callback',
+      webhookUrl:
+        'https://api.example.com/calendar/microsoft/notifications',
+    });
+
+    Object.assign(process.env, {
+      CALENDLY_CLIENT_ID: 'calendly-client',
+      CALENDLY_CLIENT_SECRET: 'calendly-secret',
+      CALENDLY_WEBHOOK_SIGNING_KEY: 'calendly-signing-key',
+      CALENDLY_WEBHOOK_URL: 'http://localhost/calendly',
+    });
+    expect(environmentReadiness().calendly).toMatchObject({
+      status: 'down',
+      issues: ['CALENDLY_WEBHOOK_URL must be an absolute HTTPS URL'],
     });
   });
 });

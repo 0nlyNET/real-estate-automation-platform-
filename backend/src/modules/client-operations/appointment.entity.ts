@@ -1,5 +1,6 @@
 import {
   Column,
+  Check,
   Entity,
   Index,
   JoinColumn,
@@ -9,6 +10,11 @@ import { BaseEntity } from '../../common/base.entity';
 import { Lead } from '../leads/lead.entity';
 import { Tenant } from '../tenants/tenant.entity';
 import { User } from '../users/user.entity';
+import {
+  AppointmentMode,
+  StoredBookingProvider,
+} from '../calendar/booking-provider.types';
+import { CalendarConnection } from '../calendar/calendar-connection.entity';
 
 export type AppointmentStatus =
   | 'scheduled'
@@ -18,9 +24,17 @@ export type AppointmentStatus =
   | 'no_show';
 
 @Entity({ name: 'appointments' })
+@Check(
+  'CK_appointment_external_provider',
+  '"external_provider" IS NULL OR "external_provider" IN (\'google\', \'microsoft\', \'calendly\')',
+)
+@Check(
+  'CK_appointment_meeting_mode',
+  '"meeting_mode" IN (\'in_person\', \'phone\', \'virtual\')',
+)
 @Index(['tenantId', 'status', 'startsAt'])
 @Index(['assignedUserId', 'status', 'startsAt'])
-@Index('IDX_appointment_external_event', ['tenantId', 'externalEventId'], {
+@Index('IDX_appointment_external_event', ['tenantId', 'externalProvider', 'externalEventId'], {
   unique: true,
   where: 'external_event_id IS NOT NULL',
 })
@@ -28,6 +42,16 @@ export type AppointmentStatus =
   unique: true,
   where: 'idempotency_key IS NOT NULL',
 })
+@Index(
+  'IDX_appointment_external_invitee',
+  ['tenantId', 'externalProvider', 'externalInviteeId'],
+  { where: 'external_invitee_id IS NOT NULL' },
+)
+@Index(
+  'IDX_appointment_external_connection',
+  ['externalConnectionId', 'syncStatus'],
+  { where: 'external_connection_id IS NOT NULL' },
+)
 export class Appointment extends BaseEntity {
   @Column({ name: 'tenant_id', type: 'uuid' })
   tenantId!: string;
@@ -90,10 +114,35 @@ export class Appointment extends BaseEntity {
   externalEventEtag?: string | null;
 
   @Column({ name: 'external_provider', type: 'varchar', length: 30, nullable: true })
-  externalProvider?: 'google' | null;
+  externalProvider?: StoredBookingProvider | null;
 
   @Column({ name: 'external_calendar_id', type: 'text', nullable: true })
   externalCalendarId?: string | null;
+
+  @Column({ name: 'external_connection_id', type: 'uuid', nullable: true })
+  externalConnectionId?: string | null;
+
+  @ManyToOne(() => CalendarConnection, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'external_connection_id' })
+  externalConnection?: CalendarConnection | null;
+
+  @Column({ name: 'external_invitee_id', type: 'text', nullable: true })
+  externalInviteeId?: string | null;
+
+  @Column({ name: 'external_join_url', type: 'text', nullable: true })
+  externalJoinUrl?: string | null;
+
+  @Column({ name: 'external_cancel_url', type: 'text', nullable: true })
+  externalCancelUrl?: string | null;
+
+  @Column({ name: 'external_reschedule_url', type: 'text', nullable: true })
+  externalRescheduleUrl?: string | null;
+
+  @Column({ name: 'external_provider_updated_at', type: 'timestamptz', nullable: true })
+  externalProviderUpdatedAt?: Date | null;
+
+  @Column({ name: 'meeting_mode', type: 'varchar', length: 20, default: 'in_person' })
+  meetingMode!: AppointmentMode;
 
   @Column({ name: 'idempotency_key', type: 'varchar', length: 160, nullable: true })
   idempotencyKey?: string | null;

@@ -8,7 +8,7 @@ describe('AppointmentBookingService calendar boundary', () => {
   const futureStart = new Date(Date.now() + 30 * 24 * 60 * 60_000);
   const futureEnd = new Date(futureStart.getTime() + 30 * 60_000);
 
-  function fixture() {
+  function fixture(providers?: any) {
     const lead: any = {
       id: 'lead-1',
       tenantId: 'tenant-1',
@@ -56,6 +56,7 @@ describe('AppointmentBookingService calendar boundary', () => {
       operations as any,
       audit as any,
       onboarding as any,
+      providers,
     );
     return {
       service,
@@ -67,8 +68,148 @@ describe('AppointmentBookingService calendar boundary', () => {
       notifications,
       crmEvents,
       operations,
+      providers,
     };
   }
+
+  it('keeps existing appointments bound to Google after switching new bookings to Microsoft', async () => {
+    const google = {
+      name: 'google_calendar',
+      storedProvider: 'google',
+      updateAppointment: jest.fn().mockResolvedValue({
+        provider: 'google_calendar',
+        storedProvider: 'google',
+        connectionId: 'google-connection-1',
+        resourceId: 'google-calendar-1',
+        id: 'google-event-1',
+        inviteeId: null,
+        version: 'google-etag-2',
+        status: 'confirmed',
+        startsAt: futureStart,
+        endsAt: new Date(futureEnd.getTime() + 15 * 60_000),
+        joinUrl: null,
+        cancelUrl: null,
+        rescheduleUrl: null,
+        providerUpdatedAt: null,
+      }),
+    };
+    const microsoft = {
+      name: 'microsoft_calendar',
+      storedProvider: 'microsoft',
+      readyBinding: jest.fn().mockResolvedValue({
+        provider: 'microsoft_calendar',
+        storedProvider: 'microsoft',
+        connectionId: 'microsoft-connection-1',
+        resourceId: 'microsoft-calendar-1',
+        resourceName: 'Appointments',
+        timeZone: 'America/New_York',
+      }),
+      createAppointment: jest.fn().mockResolvedValue({
+        provider: 'microsoft_calendar',
+        storedProvider: 'microsoft',
+        connectionId: 'microsoft-connection-1',
+        resourceId: 'microsoft-calendar-1',
+        id: 'microsoft-event-1',
+        inviteeId: null,
+        version: 'microsoft-version-1',
+        status: 'confirmed',
+        startsAt: futureStart,
+        endsAt: futureEnd,
+        joinUrl: null,
+        cancelUrl: null,
+        rescheduleUrl: null,
+        providerUpdatedAt: null,
+      }),
+    };
+    const providers = {
+      active: jest.fn().mockResolvedValue(microsoft),
+      forStoredProvider: jest.fn((provider) =>
+        provider === 'google' ? google : microsoft,
+      ),
+      withTenantBookingLock: jest.fn(
+        async (_provider, _tenantId, callback) => callback(),
+      ),
+    };
+    const item = fixture(providers);
+    const googleAppointment: any = {
+      id: 'appointment-google-1',
+      tenantId: 'tenant-1',
+      leadId: 'lead-1',
+      lead: item.lead,
+      assignedUserId: 'user-1',
+      startsAt: futureStart,
+      endsAt: futureEnd,
+      meetingMode: 'in_person',
+      status: 'scheduled',
+      externalProvider: 'google',
+      externalConnectionId: 'google-connection-1',
+      externalEventId: 'google-event-1',
+      externalEventEtag: 'google-etag-1',
+      externalCalendarId: 'google-calendar-1',
+    };
+    jest
+      .spyOn(item.service as any, 'requireAppointmentAccess')
+      .mockResolvedValue(googleAppointment);
+    const newEnd = new Date(futureEnd.getTime() + 15 * 60_000);
+    item.dataSource.transaction.mockResolvedValue({
+      ...googleAppointment,
+      endsAt: newEnd,
+      externalEventEtag: 'google-etag-2',
+    });
+
+    await item.service.update('appointment-google-1', 'tenant-1', {
+      endsAt: newEnd.toISOString(),
+    });
+
+    expect(providers.forStoredProvider).toHaveBeenCalledWith('google');
+    expect(google.updateAppointment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId: 'google-event-1',
+        resourceId: 'google-calendar-1',
+        version: 'google-etag-1',
+        start: futureStart,
+        end: newEnd,
+      }),
+    );
+    expect(google.updateAppointment.mock.calls[0][0]).not.toHaveProperty(
+      'attendeeEmail',
+    );
+    expect(providers.active).not.toHaveBeenCalled();
+    expect(microsoft.createAppointment).not.toHaveBeenCalled();
+
+    const internal = {
+      id: 'appointment-microsoft-1',
+      tenantId: 'tenant-1',
+      lead: item.lead,
+    };
+    const persist = jest
+      .spyOn(item.service as any, 'createInternal')
+      .mockResolvedValue(internal);
+    await expect(
+      item.service.create('tenant-1', {
+        leadId: 'lead-1',
+        startsAt: futureStart.toISOString(),
+        endsAt: futureEnd.toISOString(),
+        idempotencyKey: 'microsoft-request-1',
+      }),
+    ).resolves.toBe(internal);
+
+    expect(providers.active).toHaveBeenCalledWith('tenant-1');
+    expect(microsoft.createAppointment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        resourceId: 'microsoft-calendar-1',
+        idempotencyKey: 'manual:microsoft-request-1',
+      }),
+    );
+    expect(persist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        externalProvider: 'microsoft',
+        externalConnectionId: 'microsoft-connection-1',
+        externalEventId: 'microsoft-event-1',
+      }),
+    );
+  });
 
   it('creates Google first, then persists the internal appointment with the external ID', async () => {
     const item = fixture();

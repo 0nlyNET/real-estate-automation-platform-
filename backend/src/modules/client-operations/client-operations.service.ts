@@ -55,6 +55,10 @@ type ClientAppointment = {
   followUpStatus: string;
   notes: string | null;
   externalProvider: string | null;
+  externalJoinUrl: string | null;
+  externalCancelUrl: string | null;
+  externalRescheduleUrl: string | null;
+  meetingMode: string;
   syncStatus: string;
   lastSyncedAt: Date | null;
 };
@@ -163,6 +167,10 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
       followUpStatus: appointment.followUpStatus,
       notes: appointment.notes || null,
       externalProvider: appointment.externalProvider || null,
+      externalJoinUrl: appointment.externalJoinUrl || null,
+      externalCancelUrl: appointment.externalCancelUrl || null,
+      externalRescheduleUrl: appointment.externalRescheduleUrl || null,
+      meetingMode: appointment.meetingMode || 'in_person',
       syncStatus: appointment.syncStatus,
       lastSyncedAt: appointment.lastSyncedAt || null,
     };

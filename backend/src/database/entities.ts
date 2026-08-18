@@ -57,6 +57,7 @@ import { IntegrationDeliveryEvent } from '../modules/crm-events/integration-deli
 import { AssistantRun } from '../modules/ai/assistant-run.entity';
 import { CalendarConnection } from '../modules/calendar/calendar-connection.entity';
 import { CalendarOAuthState } from '../modules/calendar/calendar-oauth-state.entity';
+import { BookingWebhookReceipt } from '../modules/calendar/booking-webhook-receipt.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -118,4 +119,5 @@ export const databaseEntities = [
   AssistantRun,
   CalendarConnection,
   CalendarOAuthState,
+  BookingWebhookReceipt,
 ] as const;

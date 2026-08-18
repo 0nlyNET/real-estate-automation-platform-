@@ -297,6 +297,7 @@ export class CalendarService implements OnModuleInit {
         stateHash: sha256(state),
         tenantId,
         userId,
+        provider: 'google',
         codeVerifierEncrypted: encryptString(verifier),
         expiresAt: new Date(Date.now() + OAUTH_STATE_TTL_MS),
         consumedAt: null,
@@ -330,7 +331,10 @@ export class CalendarService implements OnModuleInit {
       const row = await repository
         .createQueryBuilder('state')
         .setLock('pessimistic_write')
-        .where('state.stateHash = :stateHash', { stateHash })
+        .where(
+          'state.stateHash = :stateHash AND state.provider = :provider',
+          { stateHash, provider: 'google' },
+        )
         .getOne();
       if (!row || row.consumedAt || row.expiresAt <= new Date()) {
         throw new BadRequestException('The Google Calendar connection request expired. Start again.');
@@ -391,9 +395,13 @@ export class CalendarService implements OnModuleInit {
       selectedCalendarId: null,
       selectedCalendarName: null,
       selectedCalendarTimeZone: null,
+      selectedResourceType: null,
+      selectedResourceUri: null,
+      selectedResourceMetadata: null,
       webhookChannelId: null,
       webhookResourceId: null,
       webhookTokenHash: null,
+      webhookSecretEncrypted: null,
       webhookExpiresAt: null,
       webhookLastMessageNumber: null,
       lastTestedAt: null,
@@ -454,6 +462,9 @@ export class CalendarService implements OnModuleInit {
       connection.selectedCalendarId = selected.id;
       connection.selectedCalendarName = selected.name;
       connection.selectedCalendarTimeZone = selected.timeZone;
+      connection.selectedResourceType = 'calendar';
+      connection.selectedResourceUri = selected.id;
+      connection.selectedResourceMetadata = null;
       connection.status = 'configured';
       connection.lastTestedAt = null;
       connection.lastErrorCode = null;
@@ -590,9 +601,13 @@ export class CalendarService implements OnModuleInit {
       selectedCalendarId: null,
       selectedCalendarName: null,
       selectedCalendarTimeZone: null,
+      selectedResourceType: null,
+      selectedResourceUri: null,
+      selectedResourceMetadata: null,
       webhookChannelId: null,
       webhookResourceId: null,
       webhookTokenHash: null,
+      webhookSecretEncrypted: null,
       webhookExpiresAt: null,
       webhookLastMessageNumber: null,
       lastTestedAt: null,
@@ -1432,7 +1447,12 @@ export class CalendarService implements OnModuleInit {
   }
 
   private async noteSyncSuccess(connection: CalendarConnection) {
-    const update: Partial<CalendarConnection> = {
+    const update: {
+      lastSuccessfulSyncAt: Date;
+      lastErrorCode: null;
+      lastErrorAt: null;
+      status?: CalendarConnection['status'];
+    } = {
       lastSuccessfulSyncAt: new Date(),
       lastErrorCode: null,
       lastErrorAt: null,
@@ -1455,7 +1475,11 @@ export class CalendarService implements OnModuleInit {
     // A stale event ETag is scoped to one appointment. The OAuth grant,
     // selected calendar, and unrelated bookings can still be healthy.
     if (code === 'GOOGLE_CALENDAR_CHANGED') return;
-    const update: Partial<CalendarConnection> = {
+    const update: {
+      lastErrorCode: string;
+      lastErrorAt: Date;
+      status: CalendarConnection['status'];
+    } = {
       lastErrorCode: code,
       lastErrorAt: new Date(),
       status: 'needs_attention',
