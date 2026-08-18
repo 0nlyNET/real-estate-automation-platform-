@@ -951,7 +951,7 @@ export class MicrosoftCalendarService
     let candidate = event;
     if (
       candidate?.id &&
-      (virtual && !candidate.onlineMeeting?.joinUrl) 
+      (virtual && !candidate.onlineMeeting?.joinUrl)
     ) {
       candidate =
         (await this.graph.getEvent(accessToken, calendarId, candidate.id)) ||
