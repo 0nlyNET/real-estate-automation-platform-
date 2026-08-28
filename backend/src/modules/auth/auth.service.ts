@@ -401,7 +401,11 @@ export class AuthService {
         const reset = await resets
           .createQueryBuilder('reset')
           .setLock('pessimistic_write')
-          .leftJoinAndSelect('reset.user', 'user')
+          // PostgreSQL rejects FOR UPDATE across a LEFT JOIN because the
+          // nullable relation side cannot be locked. A usable reset token must
+          // have a user, so an INNER JOIN both rejects orphaned tokens and lets
+          // the transaction lock the token and user rows atomically.
+          .innerJoinAndSelect('reset.user', 'user')
           .where('reset.token_hash = :tokenHash', { tokenHash })
           .getOne();
         this.validatePasswordReset(reset);
