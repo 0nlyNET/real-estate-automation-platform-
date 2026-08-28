@@ -7,6 +7,7 @@ import { LeadIngestionEvent } from "./lead-ingestion-event.entity";
 import { LeadIngestionService } from "./lead-ingestion.service";
 import { RealtorLeadAdapter } from "./realtor-lead.adapter";
 import { ZillowLeadAdapter } from "./zillow-lead.adapter";
+import { decryptString, encryptString } from "../../common/crypto-secrets";
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -105,10 +106,15 @@ function harness(keyTenants: Record<string, string> = { "key-a": "tenant-a" }) {
       return entry ? { tenantId: entry[1] } : null;
     }),
   };
+  const credentialRepository = {
+    findOne: jest.fn(),
+    find: jest.fn(),
+    save: jest.fn(async (value) => value),
+  };
   const service = new LeadIngestionService(
     dataSource as never,
     settingsRepository as never,
-    { findOne: jest.fn(), find: jest.fn() } as never,
+    credentialRepository as never,
     tenantRepository as never,
     new ZillowLeadAdapter(),
     new RealtorLeadAdapter(),
@@ -121,6 +127,7 @@ function harness(keyTenants: Record<string, string> = { "key-a": "tenant-a" }) {
     leadRepository,
     eventRepository,
     leadEventRepository,
+    credentialRepository,
     setFailEventPersistence(value: boolean) {
       failEventPersistence = value;
     },
@@ -195,6 +202,52 @@ describe("LeadIngestionService", () => {
       correlationId: "request-validation",
       providerLeadId: "realtor-invalid",
     });
+  });
+
+  it("marks Realtor.com connected after an authenticated unified delivery", async () => {
+    const originalKey = process.env.INTEGRATIONS_ENCRYPTION_KEY;
+    process.env.INTEGRATIONS_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString("base64");
+    try {
+      const item = harness();
+      const credential: any = {
+        provider: "realtor_com",
+        tenant: { id: "tenant-a" },
+        encryptedValue: encryptString(
+          JSON.stringify({
+            configured: true,
+            connected: false,
+            apiKey: "key-a",
+            lastSync: null,
+            error: "Previous test failed",
+          }),
+        ),
+      };
+      item.credentialRepository.findOne.mockResolvedValue(credential);
+
+      await item.service.ingest({
+        headers: {
+          authorization: "Bearer key-a",
+          "x-lead-provider": "realtor",
+        },
+        correlationId: "request-realtor-connected",
+        body: {
+          leadId: "realtor-1",
+          email: "lead@example.com",
+        },
+      });
+
+      const saved = JSON.parse(decryptString(credential.encryptedValue));
+      expect(saved).toMatchObject({
+        configured: true,
+        connected: true,
+        lastSync: expect.any(String),
+        error: null,
+      });
+      expect(item.credentialRepository.save).toHaveBeenCalledWith(credential);
+    } finally {
+      if (originalKey === undefined) delete process.env.INTEGRATIONS_ENCRYPTION_KEY;
+      else process.env.INTEGRATIONS_ENCRYPTION_KEY = originalKey;
+    }
   });
 
   it("rejects a missing or invalid provider credential before opening a transaction", async () => {

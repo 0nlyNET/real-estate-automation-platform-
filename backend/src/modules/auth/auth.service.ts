@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Optional, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, Optional, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
@@ -13,12 +13,15 @@ import { MailService } from '../../mail/mail.service';
 import { OperationsService } from '../operations/operations.service';
 import { AccountInvitation } from './account-invitation.entity';
 import { AuditService } from '../audit/audit.service';
+import { operationalEvent } from '../../common/operational-log';
 
 const STANDARD_SESSION_EXPIRES_IN = '12h' as const;
 const REMEMBERED_SESSION_EXPIRES_IN = '30d' as const;
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
@@ -156,14 +159,7 @@ export class AuthService {
       return invitedUser;
     });
 
-    const claimedAt = await this.usersService.claimWelcomeEmail(user.id);
-    if (claimedAt) {
-      try {
-        await this.mail.sendWelcomeEmail({ to: user.email });
-      } catch {
-        await this.usersService.releaseWelcomeEmail(user.id, claimedAt);
-      }
-    }
+    await this.sendWelcomeEmail(user);
     await this.audit?.recordSystemEvent({
       tenantId: user.tenantId,
       eventType: 'account.invitation_accepted',
@@ -238,13 +234,26 @@ export class AuthService {
 
   async verifyEmail(token: string) {
     const user = await this.usersService.verifyEmail(token);
+    await this.sendWelcomeEmail(user);
+    return {
+      ok: true,
+      userId: user.id,
+      email: user.email,
+      isEmailVerified: user.isEmailVerified,
+    };
+  }
+
+  private async sendWelcomeEmail(user: User) {
     const claimedAt = await this.usersService.claimWelcomeEmail(user.id);
-    if (claimedAt) {
-      try {
-        await this.mail.sendWelcomeEmail({ to: user.email });
-      } catch {
-        await this.usersService.releaseWelcomeEmail(user.id, claimedAt);
-        await this.operations.createTask({
+    if (!claimedAt) return;
+    try {
+      await this.mail.sendWelcomeEmail({ to: user.email });
+    } catch (error: unknown) {
+      await this.usersService
+        .releaseWelcomeEmail(user.id, claimedAt)
+        .catch(() => undefined);
+      await this.operations
+        .createTask({
           tenantId: user.tenantId,
           category: 'notification_failure',
           title: 'Welcome email failed',
@@ -253,15 +262,19 @@ export class AuthService {
           relatedEntityType: 'user',
           relatedEntityId: user.id,
           dedupeOpen: true,
-        });
-      }
+        })
+        .catch(() => undefined);
+      this.logger.error(
+        operationalEvent('welcome_email_failed', {
+          userId: user.id,
+          tenantId: user.tenantId,
+          error:
+            error instanceof Error
+              ? error.message.slice(0, 500)
+              : String(error).slice(0, 500),
+        }),
+      );
     }
-    return {
-      ok: true,
-      userId: user.id,
-      email: user.email,
-      isEmailVerified: user.isEmailVerified,
-    };
   }
 
   async requestPasswordReset(email: string) {
@@ -283,24 +296,34 @@ export class AuthService {
       };
     }
 
-    await this.passwordResetRepo
-      .createQueryBuilder()
-      .update(PasswordResetToken)
-      .set({ usedAt: new Date() })
-      .where('userId = :userId', { userId: user.id })
-      .andWhere('usedAt IS NULL')
-      .execute();
-
     const rawToken = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    const persistReset = async (repository: Repository<PasswordResetToken>) => {
+      // password_reset_tokens is a legacy mixed-case table: the relation column
+      // is "userId", while lifecycle columns use snake_case. Raw property names
+      // are not translated by an update query builder on PostgreSQL.
+      await repository
+        .createQueryBuilder()
+        .update(PasswordResetToken)
+        .set({ usedAt: new Date() })
+        .where('"userId" = :userId', { userId: user.id })
+        .andWhere('"used_at" IS NULL')
+        .execute();
 
-    const reset = this.passwordResetRepo.create({
-      user,
-      tokenHash,
-      expiresAt,
-    });
-    await this.passwordResetRepo.save(reset);
+      return repository.save(
+        repository.create({
+          user,
+          tokenHash,
+          expiresAt,
+        }),
+      );
+    };
+    const reset = this.dataSource
+      ? await this.dataSource.transaction((manager) =>
+          persistReset(manager.getRepository(PasswordResetToken)),
+        )
+      : await persistReset(this.passwordResetRepo);
 
     const frontend = process.env.FRONTEND_URL || 'http://localhost:3000';
     const resetLink = `${frontend.replace(/\/+$/, '')}/reset-password?token=${rawToken}`;
@@ -310,11 +333,44 @@ export class AuthService {
         to: user.email,
         subject: 'Reset your RealtyTechAI password',
         text: `Reset your password using this link: ${resetLink}\n\nThis link expires in one hour.`,
+        html: `
+          <div style="font-family:Arial,sans-serif;line-height:1.5">
+            <h2 style="margin:0 0 12px">Reset your RealtyTechAI password</h2>
+            <p style="margin:0 0 16px">Use this single-use link within one hour.</p>
+            <p style="margin:0 0 16px"><a href="${resetLink}" style="display:inline-block;padding:10px 14px;background:#111827;color:#fff;text-decoration:none;border-radius:6px">Reset password</a></p>
+            <p style="margin:0;font-size:12px;color:#6b7280">If the button does not work, paste this link into your browser: ${resetLink}</p>
+          </div>`,
       });
-    } catch {
-      if (process.env.NODE_ENV === 'production') {
-        throw new BadRequestException('Password reset email could not be delivered');
-      }
+    } catch (error: unknown) {
+      // Do not reveal whether an account exists through a different status or
+      // response body. Invalidate the undelivered token and create an operator
+      // task so a provider failure is never silently treated as success.
+      await this.passwordResetRepo
+        .update({ id: reset.id }, { usedAt: new Date() })
+        .catch(() => undefined);
+      await this.operations
+        .createTask({
+          tenantId: user.tenantId,
+          category: 'notification_failure',
+          title: 'Password reset email failed',
+          description:
+            'The reset token was invalidated because system email did not confirm acceptance. Restore system email and ask the user to request a new link.',
+          priority: 'high',
+          relatedEntityType: 'user',
+          relatedEntityId: user.id,
+          dedupeOpen: true,
+        })
+        .catch(() => undefined);
+      this.logger.error(
+        operationalEvent('password_reset_email_failed', {
+          userId: user.id,
+          tenantId: user.tenantId,
+          error:
+            error instanceof Error
+              ? error.message.slice(0, 500)
+              : String(error).slice(0, 500),
+        }),
+      );
     }
 
     return {
@@ -337,48 +393,77 @@ export class AuthService {
     }
 
     const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-    const reset = await this.passwordResetRepo.findOne({
-      where: { tokenHash },
-      relations: ['user'],
+    let changedUser: User;
+
+    if (this.dataSource) {
+      changedUser = await this.dataSource.transaction(async (manager) => {
+        const resets = manager.getRepository(PasswordResetToken);
+        const reset = await resets
+          .createQueryBuilder('reset')
+          .setLock('pessimistic_write')
+          .leftJoinAndSelect('reset.user', 'user')
+          .where('reset.token_hash = :tokenHash', { tokenHash })
+          .getOne();
+        this.validatePasswordReset(reset);
+
+        const user = reset!.user;
+        user.passwordHash = await bcrypt.hash(passwordClean, 12);
+        user.mustChangePassword = false;
+        user.passwordChangedAt = new Date();
+        user.sessionVersion += 1;
+        reset!.usedAt = new Date();
+        await manager.getRepository(User).save(user);
+        await resets.save(reset!);
+        return user;
+      });
+    } else {
+      const reset = await this.passwordResetRepo.findOne({
+        where: { tokenHash },
+        relations: ['user'],
+      });
+      this.validatePasswordReset(reset);
+
+      const claim = await this.passwordResetRepo
+        .createQueryBuilder()
+        .update(PasswordResetToken)
+        .set({ usedAt: new Date() })
+        .where('id = :id', { id: reset!.id })
+        .andWhere('"used_at" IS NULL')
+        .andWhere('"expires_at" > :now', { now: new Date() })
+        .execute();
+      if (claim.affected !== 1)
+        throw new BadRequestException('Token already used or expired');
+
+      changedUser = reset!.user;
+      changedUser.passwordHash = await bcrypt.hash(passwordClean, 12);
+      changedUser.mustChangePassword = false;
+      changedUser.passwordChangedAt = new Date();
+      changedUser.sessionVersion += 1;
+      await this.usersService.save(changedUser);
+    }
+
+    await this.audit?.recordSystemEvent({
+      tenantId: changedUser.tenantId,
+      eventType: 'account.password_reset',
+      resourceType: 'user',
+      resourceId: changedUser.id,
+      afterState: { sessionVersion: changedUser.sessionVersion },
     });
-
-    if (!reset) {
-      throw new BadRequestException('Invalid token');
-    }
-
-    if (reset.usedAt) {
-      throw new BadRequestException('Token already used');
-    }
-
-    if (reset.expiresAt.getTime() < Date.now()) {
-      throw new BadRequestException('Token expired');
-    }
-
-    const user = reset.user;
-    if (!user) {
-      throw new BadRequestException('Invalid token');
-    }
-
-    const claim = await this.passwordResetRepo
-      .createQueryBuilder()
-      .update(PasswordResetToken)
-      .set({ usedAt: new Date() })
-      .where('id = :id', { id: reset.id })
-      .andWhere('usedAt IS NULL')
-      .andWhere('expiresAt > :now', { now: new Date() })
-      .execute();
-    if (claim.affected !== 1) throw new BadRequestException('Token already used or expired');
-
-    user.passwordHash = await bcrypt.hash(passwordClean, 12);
-    user.mustChangePassword = false;
-    user.passwordChangedAt = new Date();
-    user.sessionVersion += 1;
-    await this.usersService.save(user);
 
     return {
       ok: true,
       message: 'Password updated successfully.',
     };
+  }
+
+  private validatePasswordReset(
+    reset: PasswordResetToken | null | undefined,
+  ): asserts reset is PasswordResetToken & { user: User } {
+    if (!reset?.user) throw new BadRequestException('Invalid token');
+    if (reset.usedAt) throw new BadRequestException('Token already used');
+    if (reset.expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException('Token expired');
+    }
   }
 
   async changeTemporaryPassword(email: string, temporaryPassword: string, newPassword: string) {

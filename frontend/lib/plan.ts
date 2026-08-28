@@ -33,13 +33,8 @@ export type MePlan = {
   serviceRestoredAt: string | null
 }
 
-export async function fetchMePlan(): Promise<MePlan | null> {
-  try {
-    const res = await apiFetch("/me/plan")
-    return res || null
-  } catch {
-    return null
-  }
+export async function fetchMePlan(): Promise<MePlan> {
+  return apiFetch<MePlan>("/me/plan")
 }
 
 export function formatDate(d: string | null | undefined) {

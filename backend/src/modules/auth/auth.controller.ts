@@ -1,9 +1,10 @@
-import { Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { Throttle } from '@nestjs/throttler';
 import { AcceptInvitationDto, ChangeTemporaryPasswordDto, ForgotPasswordDto, LoginDto, ResetPasswordDto, VerifyEmailDto } from './auth.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { OptionalJwtAuthGuard } from './optional-jwt-auth.guard';
 import {
   clearSessionCookie,
   PRIMARY_SESSION_COOKIE,
@@ -19,6 +20,7 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post('login')
+  @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) response: Response) {
     const rememberMe = dto.rememberMe === true;
@@ -34,6 +36,7 @@ export class AuthController {
   }
 
   @Post('accept-invitation')
+  @HttpCode(200)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async acceptInvitation(
     @Body() dto: AcceptInvitationDto,
@@ -46,7 +49,8 @@ export class AuthController {
   }
 
   @Post('logout')
-  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  @UseGuards(OptionalJwtAuthGuard)
   async logout(
     @Req() request: Request & { user?: { sub?: string; impersonatedBy?: unknown } },
     @Res({ passthrough: true }) response: Response,
@@ -60,6 +64,7 @@ export class AuthController {
   }
 
   @Post('stop-impersonation')
+  @HttpCode(200)
   @UseGuards(JwtAuthGuard)
   stopImpersonation(
     @Req() request: Request,
@@ -76,6 +81,7 @@ export class AuthController {
   }
 
   @Post('change-temporary-password')
+  @HttpCode(200)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   changeTemporaryPassword(@Body() dto: ChangeTemporaryPasswordDto) {
     return this.auth.changeTemporaryPassword(
@@ -86,18 +92,21 @@ export class AuthController {
   }
 
   @Post('verify-email')
+  @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async verifyEmail(@Body() dto: VerifyEmailDto) {
     return await this.auth.verifyEmail(dto.token);
   }
 
   @Post('forgot-password')
+  @HttpCode(200)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
     return await this.auth.requestPasswordReset(dto.email);
   }
 
   @Post('reset-password')
+  @HttpCode(200)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return await this.auth.resetPassword(dto.token, dto.password);

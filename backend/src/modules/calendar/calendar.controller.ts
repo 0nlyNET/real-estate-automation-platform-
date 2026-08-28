@@ -65,23 +65,14 @@ export class CalendarController {
     @Query('state') state?: string,
     @Query('error') error?: string,
   ) {
-    const frontend = String(
-      process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || 'http://localhost:3000',
-    ).replace(/\/+$/, '');
-    if (error || !code || !state) {
-      return response.redirect(`${frontend}/app/integrations?calendar=error&code=OAUTH_DENIED`);
-    }
-    try {
-      await this.calendar.completeGoogleOAuth(code, state);
-      return response.redirect(`${frontend}/app/integrations?calendar=choose`);
-    } catch (cause: any) {
-      const codeValue = String(
-        cause?.response?.code || cause?.code || 'OAUTH_FAILED',
-      ).replace(/[^A-Z0-9_]/gi, '');
-      return response.redirect(
-        `${frontend}/app/integrations?calendar=error&code=${encodeURIComponent(codeValue)}`,
-      );
-    }
+    return this.providerCallback(
+      response,
+      'google',
+      error,
+      code,
+      state,
+      () => this.calendar.completeGoogleOAuth(code!, state!),
+    );
   }
 
   @Get('google/calendars')
@@ -300,7 +291,7 @@ export class CalendarController {
 
   private async providerCallback(
     response: Response,
-    provider: 'microsoft' | 'calendly',
+    provider: 'google' | 'microsoft' | 'calendly',
     error: string | undefined,
     code: string | undefined,
     state: string | undefined,
@@ -311,9 +302,14 @@ export class CalendarController {
         process.env.PUBLIC_APP_URL ||
         'http://localhost:3000',
     ).replace(/\/+$/, '');
-    if (error || !code || !state) {
+    if (error) {
       return response.redirect(
         `${frontend}/app/integrations?scheduling=${provider}&status=error&code=OAUTH_DENIED`,
+      );
+    }
+    if (!code || !state) {
+      return response.redirect(
+        `${frontend}/app/integrations?scheduling=${provider}&status=error&code=OAUTH_CALLBACK_INVALID`,
       );
     }
     try {

@@ -1,4 +1,3 @@
-import { ConflictException } from '@nestjs/common';
 import { BillingService } from './billing.service';
 import {
   planForStripePrice,
@@ -75,7 +74,7 @@ describe('Stripe billing safety controls', () => {
     );
   });
 
-  it('blocks duplicate checkout before creating a Stripe session', async () => {
+  it('resumes an existing open checkout instead of creating a duplicate', async () => {
     const { service } = setup({
       tenant: {
         id: 'tenant-1',
@@ -84,7 +83,15 @@ describe('Stripe billing safety controls', () => {
       },
     });
     const fakeStripe = {
-      checkout: { sessions: { create: jest.fn() } },
+      checkout: {
+        sessions: {
+          create: jest.fn(),
+          retrieve: jest.fn().mockResolvedValue({
+            status: 'open',
+            url: 'https://checkout.stripe.test/cs_open',
+          }),
+        },
+      },
       subscriptions: { list: jest.fn() },
     };
     (service as any).stripe = fakeStripe;
@@ -95,8 +102,9 @@ describe('Stripe billing safety controls', () => {
         successUrl: 'https://app.example.com/success',
         cancelUrl: 'https://app.example.com/cancel',
       }),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).resolves.toEqual({ url: 'https://checkout.stripe.test/cs_open' });
     expect(fakeStripe.checkout.sessions.create).not.toHaveBeenCalled();
+    expect(fakeStripe.checkout.sessions.retrieve).toHaveBeenCalledWith('cs_open');
   });
 
   it('verifies the signature before touching the replay ledger', async () => {

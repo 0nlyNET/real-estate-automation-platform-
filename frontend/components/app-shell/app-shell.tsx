@@ -24,15 +24,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     let mounted = true
 
     async function load() {
-      const p = await fetchMePlan()
-      if (!mounted) return
-      setPlan(p)
+      try {
+        const p = await fetchMePlan()
+        if (mounted) setPlan(p)
+      } catch {
+        // The authenticated request helper emits the session-expired event for
+        // a 401. Other transient failures leave the last verified service state
+        // visible until the next poll succeeds.
+      }
     }
 
-    load()
+    void load()
 
     // re-check occasionally so UI stays truthful
-    const interval = setInterval(load, 30_000)
+    const interval = setInterval(() => void load(), 30_000)
     apiFetch("/presence/heartbeat", { method: "POST", body: { status: "online" } }).catch(() => undefined)
     const presenceInterval = setInterval(() => {
       apiFetch("/presence/heartbeat", { method: "POST", body: { status: "online" } }).catch(() => undefined)

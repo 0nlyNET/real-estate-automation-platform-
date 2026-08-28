@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
+import { apiFetch } from "@/lib/api"
 
 export default function ResetPasswordClient() {
   const router = useRouter()
@@ -17,9 +18,8 @@ export default function ResetPasswordClient() {
   const token = useMemo(() => params.get("token") || "", [params])
 
   const [password, setPassword] = useState("")
+  const [confirmation, setConfirmation] = useState("")
   const [loading, setLoading] = useState(false)
-
-  const apiUrl = "/api/backend"
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -27,21 +27,20 @@ export default function ResetPasswordClient() {
       toast({ title: "Missing token", description: "Use the link from your email." })
       return
     }
+    if (password !== confirmation) {
+      toast({ title: "Passwords do not match", description: "Enter the same new password twice." })
+      return
+    }
     setLoading(true)
     try {
-      const res = await fetch(`${apiUrl}/auth/reset-password`, {
+      await apiFetch("/auth/reset-password", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, password }),
+        body: { token, password },
       })
-      if (!res.ok) {
-        const j = await res.json().catch(() => null)
-        throw new Error(j?.message || "Reset failed")
-      }
       toast({ title: "Password updated", description: "You can log in now." })
       router.push("/login")
-    } catch (e: any) {
-      toast({ title: "Error", description: e?.message || "Something went wrong." })
+    } catch (error) {
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Something went wrong." })
     } finally {
       setLoading(false)
     }
@@ -66,9 +65,23 @@ export default function ResetPasswordClient() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 minLength={12}
+                autoComplete="new-password"
                 required
               />
               <p className="text-xs text-muted-foreground">Minimum 12 characters.</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="confirmation">Confirm new password</Label>
+              <Input
+                id="confirmation"
+                type="password"
+                value={confirmation}
+                onChange={(e) => setConfirmation(e.target.value)}
+                minLength={12}
+                autoComplete="new-password"
+                required
+              />
             </div>
 
             <Button className="w-full" type="submit" disabled={loading}>

@@ -30,7 +30,7 @@ describe('AuthService session and account-recovery controls', () => {
       save: jest.fn(async (value) => value),
       verifyEmail: jest.fn().mockResolvedValue(user),
       claimWelcomeEmail: jest.fn().mockResolvedValue(null),
-      releaseWelcomeEmail: jest.fn(),
+      releaseWelcomeEmail: jest.fn().mockResolvedValue(undefined),
     };
     const resetBuilder = resetQueryBuilder();
     const resets = {
@@ -38,6 +38,7 @@ describe('AuthService session and account-recovery controls', () => {
       findOne: jest.fn(),
       create: jest.fn((value) => ({ id: 'reset-1', ...value })),
       save: jest.fn(async (value) => value),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
     const jwt = { sign: jest.fn().mockReturnValue('signed-session') };
     const mail = {
@@ -124,6 +125,10 @@ describe('AuthService session and account-recovery controls', () => {
       message: 'If that email exists, a reset link has been created.',
     });
     expect(resetBuilder.execute).toHaveBeenCalled();
+    expect(resetBuilder.where).toHaveBeenCalledWith('"userId" = :userId', {
+      userId: user.id,
+    });
+    expect(resetBuilder.andWhere).toHaveBeenCalledWith('"used_at" IS NULL');
     expect(resets.create).toHaveBeenCalledWith(
       expect.objectContaining({
         user,
@@ -138,6 +143,34 @@ describe('AuthService session and account-recovery controls', () => {
       /https:\/\/app\.example\.test\/reset-password\?token=[a-f0-9]{64}/,
     );
     expect(email.text).not.toContain(saved.tokenHash);
+  });
+
+  it('does not disclose an account when the email provider rejects the reset message', async () => {
+    process.env.NODE_ENV = 'production';
+    const user = {
+      id: 'user-1',
+      tenantId: 'tenant-1',
+      email: 'owner@example.test',
+    };
+    const { service, resets, mail, operations } = setup(user);
+    mail.sendEmail.mockRejectedValueOnce(new Error('SendGrid unavailable'));
+
+    await expect(service.requestPasswordReset(user.email)).resolves.toEqual({
+      ok: true,
+      message: 'If that email exists, a reset link has been created.',
+    });
+    expect(resets.update).toHaveBeenCalledWith(
+      { id: 'reset-1' },
+      { usedAt: expect.any(Date) },
+    );
+    expect(operations.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: user.tenantId,
+        category: 'notification_failure',
+        priority: 'high',
+        relatedEntityId: user.id,
+      }),
+    );
   });
 
   it('sends a welcome email only when the idempotent claim succeeds', async () => {
@@ -199,19 +232,21 @@ describe('AuthService single-use invitations', () => {
     };
     const dataSource = { transaction: jest.fn(async (callback) => callback(manager)) };
     const users: any = {
-      claimWelcomeEmail: jest.fn().mockResolvedValue(null), releaseWelcomeEmail: jest.fn(),
+      claimWelcomeEmail: jest.fn().mockResolvedValue(null),
+      releaseWelcomeEmail: jest.fn().mockResolvedValue(undefined),
     };
     const jwt = { sign: jest.fn().mockReturnValue('signed-session') };
     const mail = {
       sendAccountInvitation: jest.fn().mockResolvedValue(undefined),
       sendWelcomeEmail: jest.fn().mockResolvedValue(undefined),
     };
+    const operations = { createTask: jest.fn().mockResolvedValue({}) };
     const audit = { recordSystemEvent: jest.fn().mockResolvedValue(undefined) };
     const service = new AuthService(
-      users, jwt as any, {} as any, mail as any, {} as any,
+      users, jwt as any, {} as any, mail as any, operations as any,
       invitations, dataSource as any, audit as any,
     );
-    return { service, user, invitation, invitations, invitationQuery, revokeQuery, usersRepo, mail, audit };
+    return { service, user, invitation, invitations, invitationQuery, revokeQuery, usersRepo, users, mail, operations, audit };
   }
 
   it('accepts a valid invitation, verifies email, and stores a selected password', async () => {
@@ -226,6 +261,27 @@ describe('AuthService single-use invitations', () => {
     expect(audit.recordSystemEvent).toHaveBeenCalledWith(expect.objectContaining({
       tenantId: user.tenantId, eventType: 'account.invitation_accepted', resourceId: user.id,
     }));
+  });
+
+  it('keeps an accepted invitation usable and surfaces a failed welcome email to operations', async () => {
+    const { service, users, mail, operations, user } = setupInvitation();
+    users.claimWelcomeEmail.mockResolvedValueOnce(new Date());
+    mail.sendWelcomeEmail.mockRejectedValueOnce(new Error('SendGrid unavailable'));
+
+    await expect(
+      service.acceptInvitation('w'.repeat(43), 'Chosen-password-123'),
+    ).resolves.toMatchObject({ user: { id: user.id } });
+
+    expect(users.releaseWelcomeEmail).toHaveBeenCalledWith(
+      user.id,
+      expect.any(Date),
+    );
+    expect(operations.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: 'notification_failure',
+        relatedEntityId: user.id,
+      }),
+    );
   });
 
   it.each([

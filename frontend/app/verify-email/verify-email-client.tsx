@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
+import { apiFetch } from "@/lib/api"
 
 export default function VerifyEmailClient() {
   const searchParams = useSearchParams()
@@ -11,9 +12,10 @@ export default function VerifyEmailClient() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
-  const apiUrl = "/api/backend"
-
   useEffect(() => {
+    let cancelled = false
+    let redirectTimer: ReturnType<typeof setTimeout> | undefined
+
     async function run() {
       if (!token) {
         setMessage("Missing verification token.")
@@ -24,32 +26,27 @@ export default function VerifyEmailClient() {
       setMessage(null)
 
       try {
-        const res = await fetch(`${apiUrl}/auth/verify-email`, {
+        await apiFetch("/auth/verify-email", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token }),
+          body: { token },
         })
-
-        if (!res.ok) {
-          let err = "Verification failed."
-          try {
-            const j = await res.json()
-            err = j?.message || err
-          } catch {}
-          throw new Error(err)
-        }
-
+        if (cancelled) return
         setMessage("Email verified. Redirecting to login...")
-        setTimeout(() => router.push("/login"), 900)
-      } catch (e: any) {
-        setMessage(e?.message || "Verification failed.")
+        redirectTimer = setTimeout(() => router.push("/login"), 900)
+      } catch (error) {
+        if (cancelled) return
+        setMessage(error instanceof Error ? error.message : "Verification failed.")
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
-    run()
-  }, [token, router, apiUrl])
+    void run()
+    return () => {
+      cancelled = true
+      if (redirectTimer) clearTimeout(redirectTimer)
+    }
+  }, [token, router])
 
   return (
     <div className="mx-auto flex min-h-[70vh] max-w-md items-center justify-center px-4">

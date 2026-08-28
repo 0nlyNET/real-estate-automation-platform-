@@ -87,7 +87,13 @@ export class LeadsService {
     ]
       .filter((value): value is string => Boolean(value))
       .sort();
-    if (lockNames.length === 0) return callback();
+    if (lockNames.length === 0) {
+      // Facebook and CRM sources can legitimately deliver a lead before any
+      // usable contact field is known. Do not retain an idle pool connection
+      // for that path when there is no advisory key to lock.
+      await runner.release();
+      return callback();
+    }
     const locked: string[] = [];
     try {
       for (const lockName of lockNames) {

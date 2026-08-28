@@ -33,6 +33,10 @@ describe('RealtorComService', () => {
   it('authenticates a provider test and exposes only the API key suffix afterward', async () => {
     credentials.findOne.mockResolvedValue(null);
     const setup = await service.rotateKey('tenant-1');
+    expect(setup.endpointPath).toBe('/webhooks/realtor-com/tenant-1');
+    expect(setup.endpointUrl).toBe(
+      'https://api.example.com/webhooks/realtor-com/tenant-1',
+    );
     const row = credentials.save.mock.calls[0][0];
     credentials.findOne.mockResolvedValue(row);
 

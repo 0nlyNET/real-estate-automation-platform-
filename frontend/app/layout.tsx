@@ -2,6 +2,7 @@ import type React from "react"
 import type { Metadata, Viewport } from "next"
 import { Toaster } from "@/components/ui/toaster"
 import { ThemeProvider } from "@/components/theme-provider"
+import { SessionExpiryRedirect } from "@/components/session-expiry-redirect"
 import "./globals.css"
 
 export const metadata: Metadata = {
@@ -45,6 +46,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className="font-sans antialiased">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+          <SessionExpiryRedirect />
           {children}
           <Toaster />
         </ThemeProvider>

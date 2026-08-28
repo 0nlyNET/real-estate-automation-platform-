@@ -30,6 +30,46 @@ function serviceFor(leads: Lead[]) {
 }
 
 describe('lead history and tenant isolation', () => {
+  it('releases an unused query runner when an intake has no deduplication key', async () => {
+    const runner = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn(),
+      release: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new LeadsService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      { createQueryRunner: jest.fn(() => runner) } as any,
+    );
+    const callback = jest.fn().mockResolvedValue('saved-without-contact');
+
+    await expect(
+      (service as any).withDedupLock(
+        'tenant-a',
+        undefined,
+        undefined,
+        undefined,
+        callback,
+      ),
+    ).resolves.toBe('saved-without-contact');
+
+    expect(runner.connect).toHaveBeenCalledTimes(1);
+    expect(runner.query).not.toHaveBeenCalled();
+    expect(runner.release).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
   it('records immutable stage history with tenant and actor attribution', async () => {
     const lead = Object.assign(new Lead(), {
       id: 'lead-a',

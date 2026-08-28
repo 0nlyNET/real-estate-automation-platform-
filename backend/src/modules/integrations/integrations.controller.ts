@@ -136,20 +136,20 @@ export class IntegrationsController {
     @Query("code") code?: string,
     @Query("state") state?: string,
     @Query("error") error?: string,
-    @Query("error_description") errorDescription?: string,
   ) {
-    const frontend = process.env.FRONTEND_URL || "http://localhost:3000";
+    const frontend = String(
+      process.env.FRONTEND_URL || "http://localhost:3000",
+    ).replace(/\/+$/, "");
 
     if (error) {
-      const msg = errorDescription ? String(errorDescription) : String(error);
       return res.redirect(
-        `${frontend}/app/integrations?facebook=error&message=${encodeURIComponent(msg)}`,
+        `${frontend}/app/integrations?facebook=error&code=OAUTH_DENIED`,
       );
     }
 
     if (!code || !state) {
       return res.redirect(
-        `${frontend}/app/integrations?facebook=error&message=${encodeURIComponent("Missing code/state")}`,
+        `${frontend}/app/integrations?facebook=error&code=OAUTH_CALLBACK_INVALID`,
       );
     }
 
@@ -162,11 +162,8 @@ export class IntegrationsController {
       return res.redirect(`${frontend}/app/integrations?facebook=success`);
     }
 
-    const msg = result?.error
-      ? String(result.error)
-      : "Facebook connect failed";
     return res.redirect(
-      `${frontend}/app/integrations?facebook=error&message=${encodeURIComponent(msg)}`,
+      `${frontend}/app/integrations?facebook=error&code=OAUTH_FAILED`,
     );
   }
 }

@@ -50,11 +50,11 @@ Requirements: Docker with Compose.
 
 To create the first verified owner, add `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` to the root `.env`, then run `docker compose exec backend npm run seed`. Add the same email to `PLATFORM_ADMIN_EMAILS` only if that account should manage every tenant.
 
-The local Compose stack enables TypeORM schema synchronization for an empty development database. Do not enable `TYPEORM_SYNC` in production.
+The local Compose stack runs the reviewed migrations with `TYPEORM_SYNC=false` by default. Set `TYPEORM_SYNC=true` only for a disposable empty local database; never enable it in production.
 
 ## Run without Docker
 
-Requirements: Node.js 22 and PostgreSQL 15 or newer.
+Requirements: Node.js 24 and PostgreSQL 15 or newer.
 
 ```bash
 cp backend/.env.example backend/.env

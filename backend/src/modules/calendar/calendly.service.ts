@@ -44,6 +44,7 @@ import {
 } from './calendar-connection.entity';
 import { CalendarOAuthState } from './calendar-oauth-state.entity';
 
+const CALENDLY_RECONCILIATION_INTERVAL_MS = 15 * 60_000;
 const OAUTH_STATE_TTL_MS = 10 * 60_000;
 const WEBHOOK_SIGNATURE_TOLERANCE_SECONDS = 180;
 
@@ -102,6 +103,11 @@ export class CalendlyService implements BookingProviderAdapter, OnModuleInit {
       });
       if (!connection || connection.status === 'disconnected') return;
       await this.scheduleAll(connection);
+      return {
+        nextRunAt: new Date(
+          Date.now() + CALENDLY_RECONCILIATION_INTERVAL_MS,
+        ),
+      };
     });
   }
 
@@ -459,6 +465,16 @@ export class CalendlyService implements BookingProviderAdapter, OnModuleInit {
       });
       await this.connections.save(connection);
       await this.ensureWebhook(connection);
+      await this.durableJobs?.schedule({
+        taskType: 'calendar.calendly.reconcile_all',
+        tenantId,
+        dedupeKey: `calendar-calendly-reconcile-all:${connection.id}`,
+        payload: { connectionId: connection.id },
+        nextRunAt: new Date(
+          Date.now() + CALENDLY_RECONCILIATION_INTERVAL_MS,
+        ),
+        maxAttempts: 12,
+      });
       await this.audit?.record({
         tenantId,
         actorId,

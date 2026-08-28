@@ -2,7 +2,7 @@
 
 import type React from "react";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,17 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(false);
 
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const reason = new URLSearchParams(window.location.search).get("reason");
+    if (reason !== "session_expired") return;
+    window.history.replaceState(window.history.state, "", window.location.pathname);
+    const notice = window.setTimeout(
+      () => setError("Your session expired or was revoked. Sign in again to continue."),
+      0,
+    );
+    return () => window.clearTimeout(notice);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

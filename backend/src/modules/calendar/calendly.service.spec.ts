@@ -185,6 +185,30 @@ describe('CalendlyService', () => {
     });
   });
 
+  it('starts durable periodic reconciliation after the provider test succeeds', async () => {
+    const item = fixture();
+    item.calendly.getEventType.mockResolvedValue({
+      uri: 'https://api.calendly.com/event_types/event-type-1',
+      active: true,
+      duration: 30,
+      name: 'Buyer consultation',
+      locations: [{ kind: 'google_conference' }],
+    });
+    item.calendly.listAvailableTimes.mockResolvedValue([]);
+
+    await item.service.testConnection('tenant-1', 'actor-1');
+
+    expect(item.durableJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskType: 'calendar.calendly.reconcile_all',
+        tenantId: 'tenant-1',
+        dedupeKey: 'calendar-calendly-reconcile-all:connection-1',
+        payload: { connectionId: 'connection-1' },
+        nextRunAt: expect.any(Date),
+      }),
+    );
+  });
+
   it('uses authoritative event-type availability and confirms the external invitee before returning success', async () => {
     const item = fixture();
     const start = new Date('2027-01-10T14:00:00Z');

@@ -196,7 +196,6 @@ export class PublicService {
       application.assignedOperatorId = patch.assignedOperatorId;
     if (
       patch.status === 'accepted' &&
-      previousStatus !== 'accepted' &&
       !application.convertedTenantId
     ) {
       if (!this.admin) throw new Error('Workspace provisioning is unavailable');
@@ -218,6 +217,18 @@ export class PublicService {
     }
     if (patch.status === 'accepted') application.status = 'accepted';
     const saved = await this.applications.save(application);
+    if (patch.status === 'accepted' && saved.convertedTenantId) {
+      // A prior request can commit workspace creation and then fail while
+      // resolving its operations task. Repeating the admin action must repair
+      // that post-commit state without provisioning a second workspace.
+      await this.operations.resolveRecoverableTasks({
+        tenantId: null,
+        category: 'new_application',
+        relatedEntityType: 'prospect_application',
+        relatedEntityId: saved.id,
+        evidenceNote: 'The approved application was converted automatically.',
+      });
+    }
     if (
       patch.status !== undefined &&
       patch.status !== previousStatus &&

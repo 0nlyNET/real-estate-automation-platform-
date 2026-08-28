@@ -69,8 +69,8 @@ export class RealtorComService {
     return value;
   }
 
-  private endpointPath(_tenantId: string) {
-    return '/api/v1/ingest/lead';
+  private endpointPath(tenantId: string) {
+    return `/webhooks/realtor-com/${encodeURIComponent(tenantId)}`;
   }
 
   async getSetup(tenantId: string) {

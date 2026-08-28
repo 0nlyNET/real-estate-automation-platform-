@@ -143,6 +143,35 @@ describe('Stripe one-time setup fee billing', () => {
     );
   });
 
+  it('recovers an ambiguously failed checkout with the same persisted Stripe idempotency key', async () => {
+    const { service, getTenant } = setup();
+    const create = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('connection reset after request'))
+      .mockResolvedValueOnce({
+        id: 'cs_recovered',
+        url: 'https://checkout.stripe.test/cs_recovered',
+      });
+    (service as any).stripe = {
+      checkout: { sessions: { create } },
+      subscriptions: { list: jest.fn().mockResolvedValue({ data: [] }) },
+    };
+
+    await expect(service.createCheckoutSession(checkoutParams)).rejects.toThrow(
+      'connection reset after request',
+    );
+    expect(getTenant().stripeCheckoutSessionId).toMatch(/^creating:[a-f0-9-]{36}$/);
+
+    await expect(service.createCheckoutSession(checkoutParams)).resolves.toEqual({
+      url: 'https://checkout.stripe.test/cs_recovered',
+    });
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0][1].idempotencyKey).toBe(
+      create.mock.calls[1][1].idempotencyKey,
+    );
+    expect(getTenant().stripeCheckoutSessionId).toBe('cs_recovered');
+  });
+
   it('does not open a new-client checkout when the setup price is missing', async () => {
     delete process.env.STRIPE_PRICE_SETUP_ONCE;
     const { service } = setup();

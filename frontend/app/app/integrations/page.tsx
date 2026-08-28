@@ -255,6 +255,53 @@ export default function IntegrationsPage() {
   const facebookStatus = byProvider.get("facebook_lead_ads")
   const facebookWebhookUrl = facebookStatus?.display?.webhookUrl || ""
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const legacyCalendar = params.get("calendar")
+    const scheduling = params.get("scheduling") || (legacyCalendar ? "google" : null)
+    const schedulingStatus = params.get("status") || legacyCalendar
+    const facebook = params.get("facebook")
+    const hasCallback = Boolean(schedulingStatus || facebook)
+    if (!hasCallback) return
+
+    if (scheduling && schedulingStatus) {
+      const definition = schedulingProviders.find((item) => item.path === scheduling)
+      const label = definition?.label || "Scheduling provider"
+      if (schedulingStatus === "choose") {
+        toast({
+          title: `${label} authorization complete`,
+          description: `Choose a ${definition?.resourceLabel || "resource"}, then run the connection test.`,
+        })
+      } else {
+        const code = String(params.get("code") || "OAUTH_FAILED").replace(/[^A-Z0-9_]/gi, "").slice(0, 80)
+        toast({
+          title: `${label} connection failed`,
+          description: code === "OAUTH_DENIED"
+            ? "Authorization was declined or did not complete. Try connecting again."
+            : `The provider could not finish authorization (${code || "OAUTH_FAILED"}). Try connecting again.`,
+          variant: "destructive",
+        })
+      }
+    }
+
+    if (facebook === "success") {
+      toast({
+        title: "Facebook authorization complete",
+        description: "Load your Pages and select the brokerage Page to finish lead delivery setup.",
+      })
+    } else if (facebook === "error") {
+      toast({
+        title: "Facebook connection failed",
+        description: params.get("code") === "OAUTH_DENIED"
+          ? "Authorization was declined or did not complete. Try connecting again."
+          : "Facebook could not finish authorization. Try connecting again.",
+        variant: "destructive",
+      })
+    }
+
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.hash}`)
+  }, [toast])
+
   const load = useCallback(async () => {
     const [items, tenantSettings, me, realtor, zapier, subscriptions, calendar] = await fetchIntegrationData()
     setIntegrations(items)

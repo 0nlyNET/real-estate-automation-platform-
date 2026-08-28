@@ -16,7 +16,7 @@ import {
   IsNull,
   Repository,
 } from "typeorm";
-import { decryptString } from "../../common/crypto-secrets";
+import { decryptString, encryptString } from "../../common/crypto-secrets";
 import { LeadEvent } from "../leads/lead-event.entity";
 import { Lead } from "../leads/lead.entity";
 import { Credential } from "../settings/credential.entity";
@@ -108,7 +108,7 @@ export class LeadIngestionService {
       );
     }
 
-    return this.dataSource.transaction((manager) =>
+    const result = await this.dataSource.transaction((manager) =>
       this.persistIngestion(manager, {
         normalized,
         validationError,
@@ -118,6 +118,36 @@ export class LeadIngestionService {
         payloadMetadata,
       }),
     );
+    await this.markAuthenticatedProviderDelivery(provider, tenantId);
+    return result;
+  }
+
+  private async markAuthenticatedProviderDelivery(
+    provider: LeadProvider,
+    tenantId: string,
+  ) {
+    if (provider !== "realtor") return;
+    const credential = await this.credentialRepository.findOne({
+      where: {
+        provider: "realtor_com",
+        tenant: { id: tenantId } as any,
+      },
+      relations: ["tenant"],
+    });
+    if (!credential?.encryptedValue) return;
+    const config = asRecord(
+      JSON.parse(decryptString(credential.encryptedValue)),
+    );
+    if (!config?.configured) return;
+    credential.encryptedValue = encryptString(
+      JSON.stringify({
+        ...config,
+        connected: true,
+        lastSync: new Date().toISOString(),
+        error: null,
+      }),
+    );
+    await this.credentialRepository.save(credential);
   }
 
   private async persistIngestion(

@@ -146,12 +146,36 @@ export class BillingService {
       let tenant = await this.tenants.findById(params.tenantId);
       if (!tenant) throw new BadRequestException('Tenant not found');
 
-      const recentCheckout =
-        tenant.stripeCheckoutSessionId &&
+      const checkoutMarker = String(tenant.stripeCheckoutSessionId || '');
+      const pendingAttemptId = checkoutMarker.startsWith('creating:')
+        ? checkoutMarker.slice('creating:'.length)
+        : null;
+      const recentCheckout = Boolean(
+        checkoutMarker &&
+        !pendingAttemptId &&
         tenant.stripeCheckoutStartedAt &&
-        Date.now() - tenant.stripeCheckoutStartedAt.getTime() < CHECKOUT_PENDING_MS;
+        Date.now() - tenant.stripeCheckoutStartedAt.getTime() < CHECKOUT_PENDING_MS,
+      );
+      let unresolvedRecentCheckout = recentCheckout;
+      if (checkoutMarker.startsWith('cs_')) {
+        const existingSession = await stripe.checkout.sessions.retrieve(
+          checkoutMarker,
+        );
+        if (existingSession.status === 'open' && existingSession.url) {
+          return { url: existingSession.url };
+        }
+        if (existingSession.status === 'expired') {
+          await this.tenants.updateBilling(tenant.id, {
+            stripeCheckoutSessionId: null,
+            stripeCheckoutStartedAt: null,
+          });
+          unresolvedRecentCheckout = false;
+        } else {
+          unresolvedRecentCheckout = true;
+        }
+      }
       if (
-        recentCheckout ||
+        unresolvedRecentCheckout ||
         (tenant.stripeSubscriptionId &&
           OPEN_SUBSCRIPTION_STATES.has(
             String(tenant.stripeSubscriptionStatus || tenant.status),
@@ -219,42 +243,41 @@ export class BillingService {
       };
       if (setupPriceId) checkoutMetadata.setupPriceId = setupPriceId;
 
-      await this.tenants.updateBilling(tenant.id, {
-        stripeCheckoutSessionId: 'creating',
-        stripeCheckoutStartedAt: new Date(),
-        status: 'incomplete',
-        billingStateUpdatedAt: new Date(),
-      });
-
-      try {
-        const session = await stripe.checkout.sessions.create(
-          {
-            mode: 'subscription',
-            customer: customerId,
-            line_items: lineItems,
-            success_url: params.successUrl,
-            cancel_url: params.cancelUrl,
-            allow_promotion_codes: true,
-            client_reference_id: tenant.id,
-            subscription_data: { metadata: checkoutMetadata },
-            metadata: checkoutMetadata,
-          },
-          { idempotencyKey: `checkout:${tenant.id}:${crypto.randomUUID()}` },
-        );
-        if (!session.url)
-          throw new BadRequestException('Stripe session missing url');
+      const checkoutAttemptId = pendingAttemptId || crypto.randomUUID();
+      if (!pendingAttemptId) {
         await this.tenants.updateBilling(tenant.id, {
-          stripeCheckoutSessionId: session.id,
+          stripeCheckoutSessionId: `creating:${checkoutAttemptId}`,
           stripeCheckoutStartedAt: new Date(),
+          status: 'incomplete',
+          billingStateUpdatedAt: new Date(),
         });
-        return { url: session.url };
-      } catch (error) {
-        await this.tenants.updateBilling(tenant.id, {
-          stripeCheckoutSessionId: null,
-          stripeCheckoutStartedAt: null,
-        });
-        throw error;
       }
+
+      // The attempt ID is persisted before Stripe is called. If the process or
+      // network fails after Stripe accepts the request, the next client retry
+      // uses the same idempotency key and recovers that session instead of
+      // creating a second subscription checkout.
+      const session = await stripe.checkout.sessions.create(
+        {
+          mode: 'subscription',
+          customer: customerId,
+          line_items: lineItems,
+          success_url: params.successUrl,
+          cancel_url: params.cancelUrl,
+          allow_promotion_codes: true,
+          client_reference_id: tenant.id,
+          subscription_data: { metadata: checkoutMetadata },
+          metadata: checkoutMetadata,
+        },
+        { idempotencyKey: `checkout:${tenant.id}:${checkoutAttemptId}` },
+      );
+      if (!session.url)
+        throw new BadRequestException('Stripe session missing url');
+      await this.tenants.updateBilling(tenant.id, {
+        stripeCheckoutSessionId: session.id,
+        stripeCheckoutStartedAt: new Date(),
+      });
+      return { url: session.url };
     });
   }
 

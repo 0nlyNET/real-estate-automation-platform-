@@ -137,4 +137,42 @@ describe('public client applications', () => {
       }),
     );
   });
+
+  it('repairs the application task after a post-conversion retry without creating another workspace', async () => {
+    const application: any = {
+      id: 'application-1',
+      name: 'Jordan Client',
+      email: 'owner@sunset.example.com',
+      status: 'accepted',
+      convertedTenantId: 'tenant-1',
+    };
+    const applications = {
+      findOne: jest.fn().mockResolvedValue(application),
+      save: jest.fn(async (value) => value),
+    };
+    const admin = { createClient: jest.fn() };
+    const operations = {
+      resolveRecoverableTasks: jest.fn().mockResolvedValue(1),
+    };
+    const service = new PublicService(
+      applications as any,
+      {} as any,
+      operations as any,
+      undefined,
+      undefined,
+      admin as any,
+    );
+
+    await expect(
+      service.updateApplication('application-1', { status: 'accepted' }),
+    ).resolves.toMatchObject({ convertedTenantId: 'tenant-1' });
+
+    expect(admin.createClient).not.toHaveBeenCalled();
+    expect(operations.resolveRecoverableTasks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: 'new_application',
+        relatedEntityId: 'application-1',
+      }),
+    );
+  });
 });
