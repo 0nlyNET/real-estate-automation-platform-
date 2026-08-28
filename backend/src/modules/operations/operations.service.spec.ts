@@ -1,3 +1,6 @@
+import { randomUUID } from 'crypto';
+import { DataType, newDb } from 'pg-mem';
+import { OperationsTask } from './operations-task.entity';
 import { OperationsService } from './operations.service';
 
 describe('OperationsService queue ordering and filters', () => {
@@ -56,9 +59,17 @@ describe('OperationsService queue ordering and filters', () => {
         ...value,
       })),
     };
-    const notifications = { createForPlatform: jest.fn().mockResolvedValue([]) };
-    const operators = { requireAssignable: jest.fn().mockResolvedValue({ id: 'staff-1' }) };
-    const service = new OperationsService(repo as any, notifications as any, operators as any);
+    const notifications = {
+      createForPlatform: jest.fn().mockResolvedValue([]),
+    };
+    const operators = {
+      requireAssignable: jest.fn().mockResolvedValue({ id: 'staff-1' }),
+    };
+    const service = new OperationsService(
+      repo as any,
+      notifications as any,
+      operators as any,
+    );
 
     await service.createTask({
       title: 'Review onboarding',
@@ -108,5 +119,97 @@ describe('OperationsService queue ordering and filters', () => {
       evidenceNote: 'Provider reconciliation completed automatically.',
     });
     expect(task.completedAt).toBeInstanceOf(Date);
+  });
+
+  it('builds a bounded exception query without a raw dotted CASE order expression', async () => {
+    const builder: any = {};
+    for (const method of ['addSelect', 'where', 'addOrderBy', 'take']) {
+      builder[method] = jest.fn(() => builder);
+    }
+    builder.orderBy = jest.fn((expression: string) => {
+      if (expression.includes('CASE') && expression.includes('.')) {
+        throw new Error('TypeORM interpreted a raw CASE property as an alias');
+      }
+      return builder;
+    });
+    builder.getMany = jest.fn().mockResolvedValue([]);
+    const repo = { createQueryBuilder: jest.fn(() => builder) };
+    const jobs = { find: jest.fn().mockResolvedValue([]) };
+    const service = new OperationsService(
+      repo as any,
+      undefined,
+      undefined,
+      jobs as any,
+    );
+
+    await expect(service.exceptionSummary()).resolves.toEqual({
+      status: 'HEALTHY',
+      action: 'NO ACTION',
+      exceptions: [],
+    });
+    expect(builder.addSelect).toHaveBeenCalledWith(
+      expect.stringContaining('CASE task.priority'),
+      'priority_rank',
+    );
+    expect(builder.orderBy).toHaveBeenCalledWith('priority_rank', 'DESC');
+    expect(builder.take).toHaveBeenCalledWith(201);
+    expect(jobs.find).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 201 }),
+    );
+  });
+
+  it('executes the repaired exception ordering through a real TypeORM query builder', async () => {
+    const database = newDb();
+    database.public.registerFunction({
+      name: 'current_database',
+      returns: DataType.text,
+      implementation: () => 'operations_test',
+    });
+    database.public.registerFunction({
+      name: 'version',
+      returns: DataType.text,
+      implementation: () => 'PostgreSQL 16.0',
+    });
+    database.public.registerFunction({
+      name: 'uuid_generate_v4',
+      returns: DataType.uuid,
+      impure: true,
+      implementation: randomUUID,
+    });
+    const dataSource = database.adapters.createTypeormDataSource({
+      type: 'postgres',
+      entities: [OperationsTask],
+      synchronize: true,
+    });
+    await dataSource.initialize();
+    try {
+      const repo = dataSource.getRepository(OperationsTask);
+      await repo.save([
+        repo.create({
+          category: 'routine_check',
+          title: 'Routine check',
+          description: 'Routine exception',
+          priority: 'normal',
+          status: 'open',
+        }),
+        repo.create({
+          category: 'provider_outage',
+          title: 'Provider outage',
+          description: 'Critical exception',
+          priority: 'critical',
+          status: 'blocked',
+        }),
+      ]);
+      const service = new OperationsService(repo);
+
+      const result = await service.exceptionSummary();
+
+      expect(result.exceptions.map((item) => item.category)).toEqual([
+        'provider_outage',
+        'routine_check',
+      ]);
+    } finally {
+      await dataSource.destroy();
+    }
   });
 });

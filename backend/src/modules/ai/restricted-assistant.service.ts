@@ -1,7 +1,16 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHash } from 'crypto';
-import { Repository } from 'typeorm';
+import { createHash, randomUUID } from 'crypto';
+import { IsNull, Repository } from 'typeorm';
+import { decryptString, encryptString } from '../../common/crypto-secrets';
 import { hasAtLeastRole, UserRole } from '../../common/rbac';
 import { sanitizeOperationalText } from '../../common/operational-log';
 import { AuditService } from '../audit/audit.service';
@@ -19,6 +28,7 @@ import { AiConfigurationService } from './ai-configuration.service';
 import { AssistantRun } from './assistant-run.entity';
 import {
   RestrictedAssistantAction,
+  RestrictedAssistantHistoryMessage,
   RestrictedAssistantProvider,
 } from './restricted-assistant.provider';
 import { AiUsageService } from './ai-usage.service';
@@ -40,6 +50,12 @@ const CLIENT_MUTATIONS = new Set<string>([
   'pause_automation',
   'resume_automation',
 ]);
+const CLIENT_MEMBER_TOOLS = [
+  'get_readiness',
+  'get_messaging_status',
+  'get_usage',
+  'get_reporting_summary',
+] as const;
 const OPERATIONS_TOOLS = [
   'get_exception_summary',
   'recheck_tenant_readiness',
@@ -54,20 +70,30 @@ const OPERATIONS_MUTATIONS = new Set<string>([
   'retry_webhook_delivery',
   'resolve_recovered_incident',
 ]);
+const OPERATIONS_STAFF_TOOLS = [
+  'get_exception_summary',
+  'recheck_tenant_readiness',
+] as const;
 
 type AssistantActor = {
   id: string;
   tenantId: string;
   email?: string | null;
   role?: string;
+  platformRole?: 'super_admin' | 'staff' | null;
 };
 
 @Injectable()
 export class RestrictedAssistantService {
+  private readonly logger = new Logger(RestrictedAssistantService.name);
+
   constructor(
-    @InjectRepository(AssistantRun) private readonly runs: Repository<AssistantRun>,
-    @InjectRepository(DurableJob) private readonly durableJobs: Repository<DurableJob>,
-    @InjectRepository(OperationsTask) private readonly operationsTasks: Repository<OperationsTask>,
+    @InjectRepository(AssistantRun)
+    private readonly runs: Repository<AssistantRun>,
+    @InjectRepository(DurableJob)
+    private readonly durableJobs: Repository<DurableJob>,
+    @InjectRepository(OperationsTask)
+    private readonly operationsTasks: Repository<OperationsTask>,
     private readonly provider: RestrictedAssistantProvider,
     private readonly limits: LimitsService,
     private readonly usage: AiUsageService,
@@ -82,22 +108,58 @@ export class RestrictedAssistantService {
     private readonly audit: AuditService,
   ) {}
 
-  askClient(actor: AssistantActor, prompt: string) {
-    return this.ask('client', actor, prompt, CLIENT_TOOLS);
+  askClient(actor: AssistantActor, prompt: string, requestId?: string) {
+    const canAdminister = Boolean(
+      actor.role && hasAtLeastRole(actor.role as UserRole, 'admin'),
+    );
+    return this.ask(
+      'client',
+      actor,
+      prompt,
+      canAdminister ? CLIENT_TOOLS : CLIENT_MEMBER_TOOLS,
+      requestId,
+    );
   }
 
-  askOperations(actor: AssistantActor, prompt: string) {
-    return this.ask('operations', actor, prompt, OPERATIONS_TOOLS);
+  askOperations(actor: AssistantActor, prompt: string, requestId?: string) {
+    return this.ask(
+      'operations',
+      actor,
+      prompt,
+      actor.platformRole === 'super_admin'
+        ? OPERATIONS_TOOLS
+        : OPERATIONS_STAFF_TOOLS,
+      requestId,
+    );
+  }
+
+  historyClient(actor: AssistantActor) {
+    return this.listHistory('client', actor);
+  }
+
+  historyOperations(actor: AssistantActor) {
+    return this.listHistory('operations', actor);
+  }
+
+  clientStatus() {
+    return this.provider.configurationStatus();
   }
 
   async confirmClient(actor: AssistantActor, runId: string) {
     if (!actor.role || !hasAtLeastRole(actor.role as UserRole, 'admin')) {
-      throw new ForbiddenException('Administrator permission is required to confirm changes');
+      throw new ForbiddenException(
+        'Administrator permission is required to confirm changes',
+      );
     }
     return this.confirm('client', actor, runId);
   }
 
   confirmOperations(actor: AssistantActor, runId: string) {
+    if (actor.platformRole !== 'super_admin') {
+      throw new ForbiddenException(
+        'Super-administrator permission is required to confirm recovery actions',
+      );
+    }
     return this.confirm('operations', actor, runId);
   }
 
@@ -106,72 +168,156 @@ export class RestrictedAssistantService {
     actor: AssistantActor,
     prompt: string,
     allowedTools: readonly string[],
+    requestedId?: string,
   ) {
-    const run = await this.runs.save(
-      this.runs.create({
+    const requestId = requestedId || randomUUID();
+    const existing = await this.runs.findOne({
+      where: {
         tenantId: actor.tenantId,
         actorId: actor.id,
         assistantType,
-        inputDigest: createHash('sha256').update(prompt).digest('hex'),
-        promptPreview: `[content withheld; ${prompt.length} characters]`,
-        status: 'processing',
-        provider: null,
-        model: null,
-        response: null,
-        requestedActions: [],
-        executedActions: [],
-        blockedActions: [],
-        inputUsage: 0,
-        outputUsage: 0,
-        estimatedCostUsd: null,
-        latencyMs: null,
-        errorCode: null,
-        sanitizedError: null,
-        confirmedAt: null,
-      }),
-    );
-    const reservation = await this.limits.reserveUsage({
-      tenantId: actor.tenantId,
-      metric: 'ai',
-      idempotencyKey: `assistant-run:${run.id}`,
+        requestId,
+      },
     });
-    if (!reservation.ok) {
-      run.status = 'blocked';
-      run.errorCode = reservation.code;
-      run.sanitizedError = reservation.message;
-      await this.runs.save(run);
-      throw new ForbiddenException({ code: reservation.code, message: reservation.message });
-    }
+    if (existing) return this.duplicateRun(existing);
+
+    let promptEncrypted: string;
     try {
-      const generated = await this.provider.generate({ assistantType, prompt, allowedTools });
+      promptEncrypted = encryptString(prompt);
+    } catch {
+      throw new ServiceUnavailableException({
+        code: 'ASSISTANT_HISTORY_NOT_CONFIGURED',
+        message:
+          'Secure assistant history is not configured. Set INTEGRATIONS_ENCRYPTION_KEY in the backend production environment and redeploy.',
+      });
+    }
+    const history = await this.contextHistory(assistantType, actor);
+    let run: AssistantRun;
+    try {
+      run = await this.runs.save(
+        this.runs.create({
+          tenantId: actor.tenantId,
+          actorId: actor.id,
+          assistantType,
+          requestId,
+          promptEncrypted,
+          inputDigest: createHash('sha256').update(prompt).digest('hex'),
+          promptPreview: `[content withheld; ${prompt.length} characters]`,
+          status: 'processing',
+          provider: null,
+          model: null,
+          response: null,
+          requestedActions: [],
+          executedActions: [],
+          blockedActions: [],
+          inputUsage: 0,
+          outputUsage: 0,
+          estimatedCostUsd: null,
+          latencyMs: null,
+          errorCode: null,
+          sanitizedError: null,
+          confirmedAt: null,
+        }),
+      );
+    } catch (error: any) {
+      if (String(error?.code || '') !== '23505') throw error;
+      const duplicate = await this.runs.findOne({
+        where: {
+          tenantId: actor.tenantId,
+          actorId: actor.id,
+          assistantType,
+          requestId,
+        },
+      });
+      if (!duplicate) throw error;
+      return this.duplicateRun(duplicate);
+    }
+
+    try {
+      const reservation = await this.limits.reserveUsage({
+        tenantId: actor.tenantId,
+        metric: 'ai',
+        idempotencyKey: `assistant-request:${actor.id}:${requestId}`,
+      });
+      if (!reservation.ok) {
+        run.status = 'blocked';
+        run.errorCode = reservation.code;
+        run.sanitizedError = reservation.message;
+        await this.runs.save(run);
+        await this.recordAuditSafely(run, actor, 'assistant.request_blocked');
+        throw new ForbiddenException({
+          code: reservation.code,
+          message: reservation.message,
+        });
+      }
+      const generated = await this.provider.generate({
+        assistantType,
+        prompt,
+        allowedTools,
+        history,
+      });
       run.provider = generated.provider;
       run.model = generated.model;
-      run.response = generated.response;
       run.requestedActions = generated.actions;
       run.inputUsage = generated.inputUsage;
       run.outputUsage = generated.outputUsage;
-      run.estimatedCostUsd = this.usage.estimateCost(generated.inputUsage, generated.outputUsage);
       run.latencyMs = generated.latencyMs;
-      const mutations = assistantType === 'client' ? CLIENT_MUTATIONS : OPERATIONS_MUTATIONS;
+      const mutations =
+        assistantType === 'client' ? CLIENT_MUTATIONS : OPERATIONS_MUTATIONS;
       for (const action of generated.actions) {
         if (mutations.has(action.name)) {
-          run.blockedActions.push({ name: action.name, status: 'confirmation_required' });
+          run.blockedActions.push({
+            name: action.name,
+            status: 'confirmation_required',
+          });
           continue;
         }
-        run.executedActions.push(await this.execute(assistantType, actor, action));
+        run.executedActions.push(
+          await this.executeSafely(assistantType, actor, action),
+        );
       }
-      run.status = generated.actions.some((action) => mutations.has(action.name))
+      if (generated.actions.length) {
+        const finalized = await this.provider.finalize({
+          assistantType,
+          prompt,
+          history,
+          plannedResponse: generated.response,
+          actionResults: [
+            ...run.executedActions,
+            ...run.blockedActions,
+          ] as Array<Record<string, unknown>>,
+        });
+        run.response = finalized.response;
+        run.model = finalized.model || run.model;
+        run.inputUsage += finalized.inputUsage;
+        run.outputUsage += finalized.outputUsage;
+        run.latencyMs = (run.latencyMs || 0) + finalized.latencyMs;
+      } else {
+        run.response = generated.response;
+      }
+      run.estimatedCostUsd = this.usage.estimateCost(
+        run.inputUsage,
+        run.outputUsage,
+      );
+      run.status = generated.actions.some((action) =>
+        mutations.has(action.name),
+      )
         ? 'confirmation_required'
         : 'completed';
       await this.runs.save(run);
-      await this.recordAudit(run, actor, 'assistant.request_processed');
+      await this.recordAuditSafely(run, actor, 'assistant.request_processed');
       return this.publicRun(run);
     } catch (error: any) {
+      if (run.status === 'blocked') throw error;
       run.status = 'failed';
-      run.errorCode = String(error?.response?.code || error?.code || 'ASSISTANT_FAILED').slice(0, 80);
-      run.sanitizedError = sanitizeOperationalText(error?.message || error, 1_000);
-      await this.runs.save(run);
-      await this.recordAudit(run, actor, 'assistant.request_failed');
+      run.errorCode = errorCode(error, 'ASSISTANT_FAILED');
+      run.sanitizedError = errorMessage(error);
+      await this.runs.save(run).catch((saveError) => {
+        this.logger.error(
+          `Assistant failure state could not be saved: ${saveError?.message || saveError}`,
+        );
+      });
+      await this.recordAuditSafely(run, actor, 'assistant.request_failed');
       throw error;
     }
   }
@@ -182,39 +328,85 @@ export class RestrictedAssistantService {
     runId: string,
   ) {
     const run = await this.runs.findOne({
-      where: { id: runId, tenantId: actor.tenantId, actorId: actor.id, assistantType },
+      where: {
+        id: runId,
+        tenantId: actor.tenantId,
+        actorId: actor.id,
+        assistantType,
+      },
     });
     if (!run) throw new NotFoundException('Assistant request not found');
     if (run.status !== 'confirmation_required' || run.confirmedAt) {
-      throw new BadRequestException('Assistant request is not awaiting confirmation');
+      throw new BadRequestException(
+        'Assistant request is not awaiting confirmation',
+      );
     }
-    const mutations = assistantType === 'client' ? CLIENT_MUTATIONS : OPERATIONS_MUTATIONS;
-    const pending = (run.requestedActions as unknown as RestrictedAssistantAction[]).filter(
-      (action) => mutations.has(action.name),
+    const mutations =
+      assistantType === 'client' ? CLIENT_MUTATIONS : OPERATIONS_MUTATIONS;
+    const pending = (
+      run.requestedActions as unknown as RestrictedAssistantAction[]
+    ).filter((action) => mutations.has(action.name));
+    const confirmedAt = new Date();
+    const claim = await this.runs.update(
+      {
+        id: run.id,
+        tenantId: actor.tenantId,
+        actorId: actor.id,
+        assistantType,
+        status: 'confirmation_required',
+        confirmedAt: IsNull(),
+      },
+      { status: 'processing', confirmedAt },
     );
-    run.confirmedAt = new Date();
+    if (claim.affected !== 1) {
+      throw new ConflictException({
+        code: 'ASSISTANT_CONFIRMATION_ALREADY_CLAIMED',
+        message:
+          'This assistant action was already confirmed or is being processed.',
+      });
+    }
+    run.confirmedAt = confirmedAt;
     run.status = 'processing';
+    for (let index = 0; index < pending.length; index += 1) {
+      run.executedActions.push({
+        ...(await this.executeSafely(assistantType, actor, pending[index])),
+        confirmedActionIndex: index,
+      });
+      await this.runs.save(run);
+    }
+    run.blockedActions = [];
+    const failed = run.executedActions.some(
+      (result: any) => result.status === 'failed',
+    );
+    run.status = failed ? 'failed' : 'completed';
+    if (failed) {
+      run.errorCode = 'ASSISTANT_ACTION_FAILED';
+      run.sanitizedError =
+        'One or more confirmed actions could not be completed.';
+    }
     await this.runs.save(run);
+    await this.recordAuditSafely(
+      run,
+      actor,
+      failed ? 'assistant.actions_failed' : 'assistant.actions_confirmed',
+    );
+    return this.publicRun(run);
+  }
+
+  private async executeSafely(
+    assistantType: 'client' | 'operations',
+    actor: AssistantActor,
+    action: RestrictedAssistantAction,
+  ) {
     try {
-      for (let index = 0; index < pending.length; index += 1) {
-        run.executedActions.push({
-          ...(await this.execute(assistantType, actor, pending[index])),
-          confirmedActionIndex: index,
-        });
-        await this.runs.save(run);
-      }
-      run.blockedActions = [];
-      run.status = 'completed';
-      await this.runs.save(run);
-      await this.recordAudit(run, actor, 'assistant.actions_confirmed');
-      return this.publicRun(run);
+      return await this.execute(assistantType, actor, action);
     } catch (error: any) {
-      run.status = 'failed';
-      run.errorCode = String(error?.response?.code || error?.code || 'ASSISTANT_ACTION_FAILED').slice(0, 80);
-      run.sanitizedError = sanitizeOperationalText(error?.message || error, 1_000);
-      await this.runs.save(run);
-      await this.recordAudit(run, actor, 'assistant.actions_failed');
-      throw error;
+      return {
+        name: action.name,
+        status: 'failed',
+        errorCode: errorCode(error, 'ASSISTANT_ACTION_FAILED'),
+        message: errorMessage(error),
+      };
     }
   }
 
@@ -224,38 +416,62 @@ export class RestrictedAssistantService {
     action: RestrictedAssistantAction,
   ) {
     const args = parseArguments(action.arguments);
-    const output = assistantType === 'client'
-      ? await this.executeClient(actor, action.name, args)
-      : await this.executeOperations(action.name, args);
+    const output =
+      assistantType === 'client'
+        ? await this.executeClient(actor, action.name, args)
+        : await this.executeOperations(action.name, args);
     return { name: action.name, status: 'executed', output };
   }
 
-  private async executeClient(actor: AssistantActor, name: string, args: Record<string, unknown>) {
-    if (CLIENT_MUTATIONS.has(name) && (!actor.role || !hasAtLeastRole(actor.role as UserRole, 'admin'))) {
-      throw new ForbiddenException('Administrator permission is required for this action');
+  private async executeClient(
+    actor: AssistantActor,
+    name: string,
+    args: Record<string, unknown>,
+  ) {
+    if (
+      CLIENT_MUTATIONS.has(name) &&
+      (!actor.role || !hasAtLeastRole(actor.role as UserRole, 'admin'))
+    ) {
+      throw new ForbiddenException(
+        'Administrator permission is required for this action',
+      );
     }
     if (name === 'get_readiness') {
       const readiness: any = await this.onboarding.readiness(actor.tenantId);
       return {
         ready: readiness.ready,
         lifecycleStatus: readiness.lifecycleStatus,
-        blockers: (readiness.blockers || []).map((item: any) => ({ key: item.key, label: item.label, category: item.category })),
+        blockers: (readiness.blockers || []).map((item: any) => ({
+          key: item.key,
+          label: item.label,
+          category: item.category,
+        })),
       };
     }
     if (name === 'get_messaging_status') {
       const [sms, email] = await Promise.all([
-        this.providerConfig.resolveTwilio(actor.tenantId, { allowTesting: true }),
-        this.providerConfig.resolveSendGrid(actor.tenantId, { allowTesting: true }),
+        this.providerConfig.resolveTwilio(actor.tenantId, {
+          allowTesting: true,
+        }),
+        this.providerConfig.resolveSendGrid(actor.tenantId, {
+          allowTesting: true,
+        }),
       ]);
       return { smsReady: Boolean(sms), emailReady: Boolean(email) };
     }
-    if (name === 'get_usage') return this.limits.tenantUsageReport(actor.tenantId, 30);
+    if (name === 'get_usage')
+      return this.limits.tenantUsageReport(actor.tenantId, 30);
     if (name === 'get_reporting_summary') {
-      return this.stats.overview(actor.tenantId, { userId: actor.id, role: actor.role });
+      return this.stats.overview(actor.tenantId, {
+        userId: actor.id,
+        role: actor.role,
+      });
     }
     if (name === 'retry_setup_reconciliation') {
       if (!actor.role || !hasAtLeastRole(actor.role as UserRole, 'admin')) {
-        throw new ForbiddenException('Administrator permission is required for this action');
+        throw new ForbiddenException(
+          'Administrator permission is required for this action',
+        );
       }
       const readiness: any = await this.onboarding.readiness(actor.tenantId);
       if (readiness.ready) return { queued: false, alreadyReady: true };
@@ -276,16 +492,21 @@ export class RestrictedAssistantService {
       });
     }
     if (name === 'pause_automation') {
-      return this.settings.updateTenantSettings(actor.tenantId, { automationsEnabled: false });
+      return this.settings.updateTenantSettings(actor.tenantId, {
+        automationsEnabled: false,
+      });
     }
     if (name === 'resume_automation') {
-      return this.settings.updateTenantSettings(actor.tenantId, { automationsEnabled: true });
+      return this.settings.updateTenantSettings(actor.tenantId, {
+        automationsEnabled: true,
+      });
     }
     throw new BadRequestException('Client assistant action is not allowlisted');
   }
 
   private async executeOperations(name: string, args: Record<string, unknown>) {
-    if (name === 'get_exception_summary') return this.operations.exceptionSummary();
+    if (name === 'get_exception_summary')
+      return this.operations.exceptionSummary();
     if (name === 'recheck_tenant_readiness') {
       return this.onboarding.readiness(requiredUuid(args.tenantId, 'tenantId'));
     }
@@ -293,7 +514,8 @@ export class RestrictedAssistantService {
       const id = requiredUuid(args.jobId, 'jobId');
       const job = await this.durableJobs.findOne({ where: { id } });
       if (!job) throw new NotFoundException('Durable job not found');
-      if (job.status !== 'failed') throw new BadRequestException('Only failed jobs can be retried');
+      if (job.status !== 'failed')
+        throw new BadRequestException('Only failed jobs can be retried');
       job.status = 'scheduled';
       job.nextRunAt = new Date();
       job.attemptCount = 0;
@@ -317,22 +539,42 @@ export class RestrictedAssistantService {
     }
     if (name === 'resolve_recovered_incident') {
       const taskId = requiredUuid(args.taskId, 'taskId');
-      const evidence = requiredString(args.recoveryEvidence, 'recoveryEvidence', 1_000);
-      if (evidence.length < 12) throw new BadRequestException('Recovery evidence is too short');
-      const task = await this.operationsTasks.findOne({ where: { id: taskId } });
+      const evidence = requiredString(
+        args.recoveryEvidence,
+        'recoveryEvidence',
+        1_000,
+      );
+      if (evidence.length < 12)
+        throw new BadRequestException('Recovery evidence is too short');
+      const task = await this.operationsTasks.findOne({
+        where: { id: taskId },
+      });
       if (!task) throw new NotFoundException('Operations task not found');
       if (task.relatedEntityType === 'durable_job' && task.relatedEntityId) {
-        const job = await this.durableJobs.findOne({ where: { id: task.relatedEntityId } });
+        const job = await this.durableJobs.findOne({
+          where: { id: task.relatedEntityId },
+        });
         if (!job || job.status !== 'completed') {
-          throw new BadRequestException('Related durable job has not recovered');
+          throw new BadRequestException(
+            'Related durable job has not recovered',
+          );
         }
       }
-      return this.operations.updateTask(taskId, { status: 'resolved', evidenceNote: evidence });
+      return this.operations.updateTask(taskId, {
+        status: 'resolved',
+        evidenceNote: evidence,
+      });
     }
-    throw new BadRequestException('Operations assistant action is not allowlisted');
+    throw new BadRequestException(
+      'Operations assistant action is not allowlisted',
+    );
   }
 
-  private recordAudit(run: AssistantRun, actor: AssistantActor, eventType: string) {
+  private recordAudit(
+    run: AssistantRun,
+    actor: AssistantActor,
+    eventType: string,
+  ) {
     return this.audit.record({
       tenantId: run.tenantId,
       actorId: actor.id,
@@ -359,26 +601,138 @@ export class RestrictedAssistantService {
     });
   }
 
+  private async recordAuditSafely(
+    run: AssistantRun,
+    actor: AssistantActor,
+    eventType: string,
+  ) {
+    try {
+      await this.recordAudit(run, actor, eventType);
+    } catch (error: any) {
+      // The run is the source of truth. An unavailable audit sink must be
+      // visible to operators, but must not turn a completed provider/tool flow
+      // into a red error for the user.
+      this.logger.error(
+        `Assistant audit write failed for run ${run.id}: ${error?.message || error}`,
+      );
+    }
+  }
+
+  private duplicateRun(run: AssistantRun) {
+    if (run.status === 'processing') {
+      throw new ConflictException({
+        code: 'ASSISTANT_REQUEST_IN_PROGRESS',
+        message: 'This assistant request is already being processed.',
+      });
+    }
+    return this.publicRun(run);
+  }
+
+  private async contextHistory(
+    assistantType: 'client' | 'operations',
+    actor: AssistantActor,
+  ): Promise<RestrictedAssistantHistoryMessage[]> {
+    const rows = await this.runs.find({
+      where: {
+        tenantId: actor.tenantId,
+        actorId: actor.id,
+        assistantType,
+      },
+      order: { createdAt: 'DESC' },
+      take: 6,
+    });
+    const messages: RestrictedAssistantHistoryMessage[] = [];
+    for (const row of rows.reverse()) {
+      if (!row.promptEncrypted || !row.response || row.status === 'failed')
+        continue;
+      try {
+        messages.push({
+          role: 'user',
+          content: decryptString(row.promptEncrypted).slice(0, 4_000),
+        });
+        messages.push({
+          role: 'assistant',
+          content: row.response.slice(0, 4_000),
+        });
+      } catch (error: any) {
+        this.logger.warn(
+          `Assistant history could not be decrypted for run ${row.id}: ${error?.message || error}`,
+        );
+      }
+    }
+    return messages;
+  }
+
+  private async listHistory(
+    assistantType: 'client' | 'operations',
+    actor: AssistantActor,
+  ) {
+    const rows = await this.runs.find({
+      where: {
+        tenantId: actor.tenantId,
+        actorId: actor.id,
+        assistantType,
+      },
+      order: { createdAt: 'DESC' },
+      take: 20,
+    });
+    const items: Array<{
+      prompt: string;
+      run: Record<string, unknown>;
+    }> = [];
+    for (const row of rows.reverse()) {
+      if (!row.promptEncrypted) continue;
+      try {
+        items.push({
+          prompt: decryptString(row.promptEncrypted).slice(0, 4_000),
+          run: this.publicRun(row),
+        });
+      } catch (error: any) {
+        this.logger.warn(
+          `Assistant history could not be decrypted for run ${row.id}: ${error?.message || error}`,
+        );
+      }
+    }
+    return { items };
+  }
+
   private publicRun(run: AssistantRun) {
     return {
       id: run.id,
+      requestId: run.requestId,
       assistantType: run.assistantType,
       status: run.status,
       provider: run.provider,
       model: run.model,
-      response: run.response,
+      response: run.response || '',
       results: run.executedActions,
-      confirmationRequired: run.status === 'confirmation_required'
-        ? run.requestedActions.filter((item: any) =>
-            (run.assistantType === 'client' ? CLIENT_MUTATIONS : OPERATIONS_MUTATIONS).has(item.name),
-          ).map((item: any) => ({ name: item.name, arguments: safeArguments(item.arguments) }))
-        : [],
+      confirmationRequired:
+        run.status === 'confirmation_required'
+          ? run.requestedActions
+              .filter((item: any) =>
+                (run.assistantType === 'client'
+                  ? CLIENT_MUTATIONS
+                  : OPERATIONS_MUTATIONS
+                ).has(item.name),
+              )
+              .map((item: any) => ({
+                name: item.name,
+                arguments: safeArguments(item.arguments),
+              }))
+          : [],
       usage: {
         inputTokens: run.inputUsage,
         outputTokens: run.outputUsage,
         estimatedCostUsd: run.estimatedCostUsd,
         latencyMs: run.latencyMs,
       },
+      error: run.errorCode
+        ? {
+            code: run.errorCode,
+            message: run.sanitizedError || 'Assistant request failed',
+          }
+        : null,
+      createdAt: run.createdAt,
     };
   }
 }
@@ -386,16 +740,24 @@ export class RestrictedAssistantService {
 function parseArguments(value: string) {
   try {
     const parsed = JSON.parse(value || '{}');
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error();
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object')
+      throw new Error();
     return parsed as Record<string, unknown>;
   } catch {
-    throw new BadRequestException('Assistant action arguments must be a JSON object');
+    throw new BadRequestException(
+      'Assistant action arguments must be a JSON object',
+    );
   }
 }
 
 function safeArguments(value: unknown) {
   const parsed = parseArguments(String(value || '{}'));
-  return Object.fromEntries(Object.entries(parsed).map(([key, item]) => [key, typeof item === 'string' ? item.slice(0, 500) : item]));
+  return Object.fromEntries(
+    Object.entries(parsed).map(([key, item]) => [
+      key,
+      typeof item === 'string' ? item.slice(0, 500) : item,
+    ]),
+  );
 }
 
 function requiredString(value: unknown, label: string, max: number) {
@@ -406,7 +768,11 @@ function requiredString(value: unknown, label: string, max: number) {
 
 function requiredUuid(value: unknown, label: string) {
   const result = requiredString(value, label, 40);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result)) {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      result,
+    )
+  ) {
     throw new BadRequestException(`${label} must be a UUID`);
   }
   return result;
@@ -417,5 +783,24 @@ function objectArgument(value: unknown, label: string) {
     throw new BadRequestException(`${label} must be an object`);
   }
   const entries = Object.entries(value as Record<string, unknown>).slice(0, 14);
-  return Object.fromEntries(entries.map(([key, item]) => [key.slice(0, 30), String(item).slice(0, 160)]));
+  return Object.fromEntries(
+    entries.map(([key, item]) => [
+      key.slice(0, 30),
+      String(item).slice(0, 160),
+    ]),
+  );
+}
+
+function errorCode(error: any, fallback: string) {
+  return String(error?.response?.code || error?.code || fallback).slice(0, 80);
+}
+
+function errorMessage(error: any) {
+  const responseMessage = error?.response?.message;
+  return sanitizeOperationalText(
+    typeof responseMessage === 'string'
+      ? responseMessage
+      : error?.message || error,
+    1_000,
+  );
 }

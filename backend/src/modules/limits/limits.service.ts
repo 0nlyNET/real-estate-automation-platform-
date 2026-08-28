@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { operationalEvent } from '../../common/operational-log';
@@ -335,7 +340,16 @@ export class LimitsService {
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
     );
 
-    const decision = await this.dataSource.transaction(async (manager) => {
+    let decision: LimitCheckResult;
+    try {
+      decision = await this.dataSource.transaction(async (manager) => {
+      // A global usage lock protects the platform counter, but it must never be
+      // allowed to strand a user request behind a stale transaction. Acquire
+      // every lock in one deterministic order and let PostgreSQL fail closed
+      // after a short, explicit timeout.
+      await manager.query("SELECT set_config('lock_timeout', $1, true)", [
+        `${usageLockTimeoutMs()}ms`,
+      ]);
       const reservations = manager.getRepository(UsageReservation);
       const existingReservation = await reservations.findOne({
           where: { idempotencyKey: input.idempotencyKey },
@@ -368,9 +382,12 @@ export class LimitsService {
       }
       const activePolicies = scopes as [UsagePolicy, UsagePolicy];
 
-      for (const policy of activePolicies) {
+      const lockKeys = activePolicies
+        .map((policy) => `usage:${policy.scopeType}:${policy.scopeId}`)
+        .sort();
+      for (const lockKey of lockKeys) {
         await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-          `usage:${policy.scopeType}:${policy.scopeId}`,
+          lockKey,
         ]);
       }
       const lockedReservation = await reservations.findOne({
@@ -460,7 +477,17 @@ export class LimitsService {
         warnings,
         reservationId: reservation?.id,
       } as LimitCheckResult;
-    });
+      });
+    } catch (error: any) {
+      if (String(error?.code || '') === '55P03') {
+        throw new ServiceUnavailableException({
+          code: 'USAGE_RESERVATION_BUSY',
+          message:
+            'Usage safety counters are briefly busy. Please retry this request.',
+        });
+      }
+      throw error;
+    }
 
     if (!decision.ok) {
       await this.pauseAffectedAutomation(input.tenantId, decision);
@@ -721,4 +748,13 @@ export class LimitsService {
       hardCostThresholdUsd: hardCost.toFixed(4),
     };
   }
+}
+
+function usageLockTimeoutMs() {
+  const configured = Number(process.env.USAGE_LOCK_TIMEOUT_MS || 3_000);
+  return Number.isInteger(configured) &&
+    configured >= 250 &&
+    configured <= 10_000
+    ? configured
+    : 3_000;
 }

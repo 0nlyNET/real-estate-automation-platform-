@@ -1,6 +1,12 @@
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Tenant } from '../tenants/tenant.entity';
-import { LimitsService, defaultPlatformUsagePolicy, defaultTenantUsagePolicy, isHardLimitExceeded } from './limits.service';
+import { ServiceUnavailableException } from '@nestjs/common';
+import {
+  LimitsService,
+  defaultPlatformUsagePolicy,
+  defaultTenantUsagePolicy,
+  isHardLimitExceeded,
+} from './limits.service';
 import { UsageBucket } from './usage-bucket.entity';
 import { UsagePolicy } from './usage-policy.entity';
 import { UsageReservation } from './usage-reservation.entity';
@@ -65,7 +71,9 @@ describe('LimitsService hard limits', () => {
     };
     const operations = { createTask: jest.fn().mockResolvedValue({}) };
     const audit = { recordSystemEvent: jest.fn().mockResolvedValue({}) };
-    const notifications = { createForPlatform: jest.fn().mockResolvedValue({}) };
+    const notifications = {
+      createForPlatform: jest.fn().mockResolvedValue({}),
+    };
     const service = new LimitsService(
       dataSource as any,
       {} as any,
@@ -88,6 +96,17 @@ describe('LimitsService hard limits', () => {
       expect.objectContaining({ priority: 'critical' }),
     );
     expect(notifications.createForPlatform).toHaveBeenCalled();
+    expect(usageManager.query.mock.calls[0]).toEqual([
+      "SELECT set_config('lock_timeout', $1, true)",
+      ['3000ms'],
+    ]);
+    const advisoryKeys = usageManager.query.mock.calls
+      .filter(([sql]: [string]) => sql.includes('pg_advisory_xact_lock'))
+      .map(([, values]: [string, string[]]) => values[0]);
+    expect(advisoryKeys).toEqual([
+      'usage:platform:platform',
+      'usage:tenant:tenant-1',
+    ]);
   });
 
   it('rejects silently disabling a tenant policy while ACTIVE', async () => {
@@ -141,5 +160,48 @@ describe('LimitsService hard limits', () => {
       }),
     ).rejects.toThrow('cannot be disabled while tenants are ACTIVE');
     expect(policies.save).not.toHaveBeenCalled();
+  });
+
+  it('fails fast with a retryable error when a usage lock is unavailable', async () => {
+    const dataSource = {
+      transaction: jest.fn(async (callback) =>
+        callback({
+          query: jest.fn().mockRejectedValue(
+            Object.assign(
+              new Error('canceling statement due to lock timeout'),
+              {
+                code: '55P03',
+              },
+            ),
+          ),
+        }),
+      ),
+    };
+    const service = new LimitsService(
+      dataSource as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await expect(
+      service.reserveUsage({
+        tenantId: 'tenant-1',
+        metric: 'ai',
+        idempotencyKey: 'assistant:one',
+      }),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'USAGE_RESERVATION_BUSY',
+      },
+    });
+    await expect(
+      service.reserveUsage({
+        tenantId: 'tenant-1',
+        metric: 'ai',
+        idempotencyKey: 'assistant:two',
+      }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 });

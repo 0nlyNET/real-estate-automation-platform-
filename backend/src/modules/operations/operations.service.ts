@@ -127,25 +127,39 @@ export class OperationsService {
   }
 
   async exceptionSummary() {
+    // TypeORM treats dotted property paths inside a raw ORDER BY expression as
+    // entity aliases. Ordering directly by a raw CASE expression therefore
+    // throws before PostgreSQL is queried. Select the rank under a plain alias.
+    const taskQuery = this.repo
+      .createQueryBuilder('task')
+      .addSelect(
+        "CASE task.priority WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END",
+        'priority_rank',
+      )
+      .where('task.status IN (:...activeStatuses)', {
+        activeStatuses: ['open', 'in_progress', 'blocked'],
+      })
+      .orderBy('priority_rank', 'DESC')
+      .addOrderBy('task.createdAt', 'ASC')
+      .take(201);
     const [tasks, failedJobs] = await Promise.all([
-      this.repo
-        .createQueryBuilder('task')
-        .where('task.status != :resolved', { resolved: 'resolved' })
-        .orderBy("CASE task.priority WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END", 'DESC')
-        .addOrderBy('task.createdAt', 'ASC')
-        .getMany(),
+      taskQuery.getMany(),
       this.jobs
         ? this.jobs.find({
             where: { status: 'failed' },
             order: { updatedAt: 'DESC' },
-            take: 200,
+            take: 201,
           })
         : Promise.resolve([]),
     ]);
     if (!tasks.length && !failedJobs.length) {
       return { status: 'HEALTHY', action: 'NO ACTION', exceptions: [] };
     }
-    const tenantIds = [...new Set(tasks.map((task) => task.tenantId).filter(Boolean))] as string[];
+    const tasksTruncated = tasks.length > 200;
+    const failedJobsTruncated = failedJobs.length > 200;
+    const visibleTasks = tasks.slice(0, 200);
+    const visibleFailedJobs = failedJobs.slice(0, 200);
+    const tenantIds = [...new Set(visibleTasks.map((task) => task.tenantId).filter(Boolean))] as string[];
     const jobs = tenantIds.length && this.jobs
       ? await this.jobs.find({
           where: { tenantId: In(tenantIds) },
@@ -153,7 +167,7 @@ export class OperationsService {
           take: 500,
         })
       : [];
-    const taskExceptions = tasks.map((task) => {
+    const taskExceptions = visibleTasks.map((task) => {
       const attempts = jobs
         .filter((job) => job.tenantId === task.tenantId && job.attemptCount > 0)
         .slice(0, 10)
@@ -180,7 +194,7 @@ export class OperationsService {
         status: task.status,
       };
     });
-    const failedJobExceptions = failedJobs.map((job) => ({
+    const failedJobExceptions = visibleFailedJobs.map((job) => ({
       id: `job:${job.id}`,
       tenantId: job.tenantId,
       severity: 'critical',
@@ -204,6 +218,11 @@ export class OperationsService {
       status: 'ACTION REQUIRED',
       action: 'REVIEW EXCEPTIONS',
       exceptions: [...failedJobExceptions, ...taskExceptions],
+      truncated: tasksTruncated || failedJobsTruncated,
+      returned: {
+        tasks: visibleTasks.length,
+        failedJobs: visibleFailedJobs.length,
+      },
     };
   }
 

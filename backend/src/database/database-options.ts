@@ -22,6 +22,7 @@ import { TurnkeyLaunchOperation1786579200001 } from './migrations/202608130001-t
 import { ManagedCrmAiAutopilot1786665600001 } from './migrations/202608140001-managed-crm-ai-autopilot';
 import { GoogleCalendarReliability1787011200001 } from './migrations/202608180001-google-calendar-reliability';
 import { MultiProviderScheduling1787011200002 } from './migrations/202608180002-multi-provider-scheduling';
+import { AssistantConversationReliability1787875200001 } from './migrations/202608280001-assistant-conversation-reliability';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -45,6 +46,7 @@ const databaseMigrations = [
   ManagedCrmAiAutopilot1786665600001,
   GoogleCalendarReliability1787011200001,
   MultiProviderScheduling1787011200002,
+  AssistantConversationReliability1787875200001,
 ];
 
 function migrationOptions() {
@@ -59,7 +61,6 @@ function migrationOptions() {
     migrationsTransactionMode: "all" as const,
   };
 }
-
 export function buildDatabaseOptions(): DataSourceOptions {
   const url = process.env.DATABASE_URL;
 

@@ -23,6 +23,7 @@ import { TurnkeyLaunchOperation1786579200001 } from "./migrations/202608130001-t
 import { ManagedCrmAiAutopilot1786665600001 } from "./migrations/202608140001-managed-crm-ai-autopilot";
 import { GoogleCalendarReliability1787011200001 } from "./migrations/202608180001-google-calendar-reliability";
 import { MultiProviderScheduling1787011200002 } from './migrations/202608180002-multi-provider-scheduling';
+import { AssistantConversationReliability1787875200001 } from './migrations/202608280001-assistant-conversation-reliability';
 import { Credential } from "../modules/settings/credential.entity";
 import { SequenceStep } from "../modules/sequences/sequence-step.entity";
 
@@ -216,6 +217,7 @@ describe("deployed legacy schema reproduction", () => {
     await new ManagedCrmAiAutopilot1786665600001().up(queryRunner);
     await new GoogleCalendarReliability1787011200001().up(queryRunner);
     await new MultiProviderScheduling1787011200002().up(queryRunner);
+    await new AssistantConversationReliability1787875200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
@@ -343,6 +345,7 @@ describe("deployed legacy schema reproduction", () => {
     await new ManagedCrmAiAutopilot1786665600001().up(queryRunner);
     await new GoogleCalendarReliability1787011200001().up(queryRunner);
     await new MultiProviderScheduling1787011200002().up(queryRunner);
+    await new AssistantConversationReliability1787875200001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
@@ -355,6 +358,7 @@ describe("deployed legacy schema reproduction", () => {
 
     const rollbackRunner = dataSource.createQueryRunner();
     await rollbackRunner.connect();
+    await new AssistantConversationReliability1787875200001().down(rollbackRunner);
     await new MultiProviderScheduling1787011200002().down(rollbackRunner);
     await new GoogleCalendarReliability1787011200001().down(rollbackRunner);
     await new ManagedCrmAiAutopilot1786665600001().down(rollbackRunner);

@@ -57,6 +57,24 @@ function extractErrorMessage(payload: unknown): string {
   return String(payload)
 }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+    readonly retryAfter: string | null,
+  ) {
+    super(message)
+    this.name = "ApiError"
+  }
+}
+
+function extractErrorCode(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null
+  const code = (payload as Record<string, unknown>).code
+  return typeof code === "string" && code.trim() ? code : null
+}
+
 export type ApiRequestInit = Omit<RequestInit, "body"> & {
   body?: BodyInit | Record<string, unknown> | unknown[] | null
 }
@@ -108,7 +126,12 @@ export async function apiFetch<T = any>(
       window.dispatchEvent(new Event("rta:session-expired"))
     }
     const msg = extractErrorMessage(payload)
-    throw new Error(msg)
+    throw new ApiError(
+      msg,
+      res.status,
+      extractErrorCode(payload),
+      res.headers.get("retry-after"),
+    )
   }
 
   return payload as T

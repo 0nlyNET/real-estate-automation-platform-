@@ -1,4 +1,12 @@
-import { Body, Controller, Param, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
 import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -11,6 +19,7 @@ function actor(req: any) {
     tenantId: String(req.user?.tenantId || ''),
     email: req.user?.email || null,
     role: req.user?.role,
+    platformRole: req.user?.platformRole || null,
   };
 }
 
@@ -19,9 +28,19 @@ function actor(req: any) {
 export class ClientAssistantController {
   constructor(private readonly assistant: RestrictedAssistantService) {}
 
+  @Get('status')
+  status() {
+    return this.assistant.clientStatus();
+  }
+
+  @Get('history')
+  history(@Req() req: any) {
+    return this.assistant.historyClient(actor(req));
+  }
+
   @Post()
   ask(@Req() req: any, @Body() body: AskRestrictedAssistantDto) {
-    return this.assistant.askClient(actor(req), body.prompt);
+    return this.assistant.askClient(actor(req), body.prompt, body.requestId);
   }
 
   @Post(':runId/confirm')
@@ -35,9 +54,18 @@ export class ClientAssistantController {
 export class OperationsAssistantController {
   constructor(private readonly assistant: RestrictedAssistantService) {}
 
+  @Get('history')
+  history(@Req() req: any) {
+    return this.assistant.historyOperations(actor(req));
+  }
+
   @Post()
   ask(@Req() req: any, @Body() body: AskRestrictedAssistantDto) {
-    return this.assistant.askOperations(actor(req), body.prompt);
+    return this.assistant.askOperations(
+      actor(req),
+      body.prompt,
+      body.requestId,
+    );
   }
 
   @Post(':runId/confirm')

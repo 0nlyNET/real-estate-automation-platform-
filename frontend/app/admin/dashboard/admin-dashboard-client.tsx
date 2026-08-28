@@ -501,6 +501,17 @@ function messageFor(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback
 }
 
+async function healthCheck<T>(path: string, label: string) {
+  try {
+    return await apiFetch<T>(path, { signal: AbortSignal.timeout(15_000) })
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "TimeoutError") {
+      throw new Error(`${label} did not respond within 15 seconds.`)
+    }
+    throw cause
+  }
+}
+
 function label(value?: string | null) {
   return String(value || "Not set")
     .replaceAll("_", " ")
@@ -662,14 +673,18 @@ export function AdminDashboardClient({
         if (section === "ai") setAiOverview(await apiFetch<AiOverview>("/admin/ai/overview"))
         if (section === "billing") setBilling(await apiFetch<BillingOverview>("/admin/billing-overview"))
         if (section === "health") {
-          const [nextHealth, nextSetup, nextExceptions] = await Promise.all([
-            apiFetch<SystemHealth>("/admin/system-health"),
-            apiFetch<SetupChecker>("/admin/setup-checker"),
-            apiFetch<OwnerExceptions>("/admin/operations/exceptions"),
+          const [healthResult, setupResult, exceptionsResult] = await Promise.allSettled([
+            healthCheck<SystemHealth>("/admin/system-health", "System health"),
+            healthCheck<SetupChecker>("/admin/setup-checker", "Setup checker"),
+            healthCheck<OwnerExceptions>("/admin/operations/exceptions", "Operations exceptions"),
           ])
-          setHealth(nextHealth)
-          setSetupChecker(nextSetup)
-          setOwnerExceptions(nextExceptions)
+          if (healthResult.status === "fulfilled") setHealth(healthResult.value)
+          if (setupResult.status === "fulfilled") setSetupChecker(setupResult.value)
+          if (exceptionsResult.status === "fulfilled") setOwnerExceptions(exceptionsResult.value)
+          const failures = [healthResult, setupResult, exceptionsResult]
+            .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+            .map((result) => messageFor(result.reason, "A health check failed"))
+          if (failures.length) throw new Error([...new Set(failures)].join(" "))
         }
         if (section === "access") setPlatformUsers(await apiFetch<PlatformAccessUser[]>("/admin/platform-access"))
         if (section === "audit") setAuditLogs(await apiFetch<AuditLog[]>("/audit?take=100"))
@@ -3329,6 +3344,10 @@ export function AdminDashboardClient({
                   </div>
                 </div>
               ))
+            ) : sectionErrors.health ? (
+              <p role="alert" className="text-sm text-destructive">
+                Exception status could not be loaded. Use Retry system health above.
+              </p>
             ) : (
               <p className="text-sm text-muted-foreground">Exception status is loading.</p>
             )}
@@ -3359,6 +3378,10 @@ export function AdminDashboardClient({
                   </div>
                 </div>
               ))
+            ) : sectionErrors.health ? (
+              <p role="alert" className="text-sm text-destructive">
+                Setup checks could not be loaded. Use Retry system health above.
+              </p>
             ) : (
               <p className="text-sm text-muted-foreground">Setup checks are loading.</p>
             )}

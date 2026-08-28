@@ -3,11 +3,14 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Update
 @Entity({ name: 'assistant_runs' })
 @Index('IDX_assistant_runs_tenant_type_created', ['tenantId', 'assistantType', 'createdAt'])
 @Index('IDX_assistant_runs_status', ['status', 'createdAt'])
+@Index('UQ_assistant_runs_actor_type_request', ['actorId', 'assistantType', 'requestId'], { unique: true })
 export class AssistantRun {
   @PrimaryGeneratedColumn('uuid') id!: string;
   @Column({ name: 'tenant_id', type: 'uuid' }) tenantId!: string;
   @Column({ name: 'actor_id', type: 'uuid' }) actorId!: string;
   @Column({ name: 'assistant_type', type: 'varchar', length: 30 }) assistantType!: 'client' | 'operations';
+  @Column({ name: 'request_id', type: 'uuid' }) requestId!: string;
+  @Column({ name: 'prompt_encrypted', type: 'text', nullable: true }) promptEncrypted!: string | null;
   @Column({ name: 'input_digest', type: 'varchar', length: 64 }) inputDigest!: string;
   @Column({ name: 'prompt_preview', type: 'varchar', length: 240 }) promptPreview!: string;
   @Column({ type: 'varchar', length: 30 }) status!: 'processing' | 'completed' | 'confirmation_required' | 'blocked' | 'failed';
