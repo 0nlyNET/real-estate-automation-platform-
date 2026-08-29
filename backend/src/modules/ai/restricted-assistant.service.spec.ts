@@ -1,5 +1,15 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { RestrictedAssistantService } from './restricted-assistant.service';
+
+function matchesWhereValue(actual: unknown, expected: any) {
+  if (expected?._type === 'isNull') return actual == null;
+  if (expected?._type === 'in') return expected._value.includes(actual);
+  return actual === expected;
+}
 
 describe('RestrictedAssistantService authorization and confirmation', () => {
   const originalEncryptionKey = process.env.INTEGRATIONS_ENCRYPTION_KEY;
@@ -33,9 +43,7 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
         return (
           rows.find((row) =>
             Object.entries(where).every(([key, value]) => {
-              if (key === 'confirmedAt' && value && typeof value === 'object')
-                return row.confirmedAt == null;
-              return row[key] === value;
+              return matchesWhereValue(row[key], value);
             }),
           ) || null
         );
@@ -51,9 +59,7 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
       update: jest.fn(async (where, patch) => {
         const row = [...stored.values()].find((item) =>
           Object.entries(where).every(([key, value]) => {
-            if (key === 'confirmedAt' && value && typeof value === 'object')
-              return item.confirmedAt == null;
-            return item[key] === value;
+            return matchesWhereValue(item[key], value);
           }),
         );
         if (!row) return { affected: 0 };
@@ -97,6 +103,28 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
     const onboarding = {
       readiness: jest.fn().mockResolvedValue({ ready: true, blockers: [] }),
     };
+    const tenantRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        id: actor.tenantId,
+        name: 'Lakeview Realty',
+        lifecycleStatus: 'ACTIVE',
+      }),
+    };
+    const tenantSettingsRepo = {
+      findOne: jest.fn().mockResolvedValue({ automationsEnabled: true }),
+    };
+    const platformControlsRepo = {
+      findOne: jest.fn().mockResolvedValue({ paused: false }),
+    };
+    const leadRepo = { createQueryBuilder: jest.fn() };
+    const messageRepo = {
+      createQueryBuilder: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
+    };
+    const appointmentRepo = {
+      createQueryBuilder: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
+    };
     const limits = {
       reserveUsage: jest.fn().mockResolvedValue({ ok: true }),
       tenantUsageReport: jest.fn(),
@@ -117,6 +145,12 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
       provisioning as any,
       { retryDelivery: jest.fn() } as any,
       audit as any,
+      tenantRepo as any,
+      tenantSettingsRepo as any,
+      platformControlsRepo as any,
+      leadRepo as any,
+      messageRepo as any,
+      appointmentRepo as any,
     );
     return {
       service,
@@ -129,6 +163,12 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
       operationsTasks,
       provisioning,
       onboarding,
+      tenantRepo,
+      tenantSettingsRepo,
+      platformControlsRepo,
+      leadRepo,
+      messageRepo,
+      appointmentRepo,
     };
   }
 
@@ -166,6 +206,23 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
             status: 'executed',
           }),
         ],
+      }),
+    );
+    expect(provider.generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: {
+          assistantScope: 'authenticated_workspace',
+          authenticatedRole: 'owner',
+          workspace: {
+            name: 'Lakeview Realty',
+            lifecycleStatus: 'ACTIVE',
+          },
+          automation: {
+            workspaceEnabled: true,
+            globalAutomationsPaused: false,
+            platformAiPaused: false,
+          },
+        },
       }),
     );
   });
@@ -235,6 +292,124 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
       results: [],
     });
     expect(provisioning.scheduleTenant).not.toHaveBeenCalled();
+  });
+
+  it('scopes lead context to the authenticated tenant and assigned agent', async () => {
+    const { service, leadRepo, messageRepo, appointmentRepo } = setup([
+      {
+        name: 'get_lead_snapshot',
+        arguments: JSON.stringify({ query: 'Jordan' }),
+      },
+    ]);
+    const query: any = {
+      where: jest.fn(() => query),
+      andWhere: jest.fn(() => query),
+      orderBy: jest.fn(() => query),
+      addOrderBy: jest.fn(() => query),
+      take: jest.fn(() => query),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    leadRepo.createQueryBuilder.mockReturnValue(query);
+
+    await expect(
+      service.askClient(
+        { ...actor, role: 'agent' },
+        'What is happening with Jordan?',
+      ),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      results: [
+        expect.objectContaining({
+          name: 'get_lead_snapshot',
+          output: { matches: [] },
+        }),
+      ],
+    });
+    expect(query.where).toHaveBeenCalledWith('lead.tenantId = :tenantId', {
+      tenantId: actor.tenantId,
+    });
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'lead.assignedToUserId = :actorId',
+      { actorId: actor.id },
+    );
+    expect(messageRepo.find).not.toHaveBeenCalled();
+    expect(appointmentRepo.find).not.toHaveBeenCalled();
+  });
+
+  it('scopes recent conversations and appointments to the assigned agent', async () => {
+    const { service, messageRepo, appointmentRepo } = setup([
+      { name: 'get_recent_conversations', arguments: '{}' },
+      { name: 'get_upcoming_appointments', arguments: '{}' },
+    ]);
+    const latestMessages: any = {
+      select: jest.fn(() => latestMessages),
+      distinctOn: jest.fn(() => latestMessages),
+      leftJoin: jest.fn(() => latestMessages),
+      where: jest.fn(() => latestMessages),
+      andWhere: jest.fn(() => latestMessages),
+      orderBy: jest.fn(() => latestMessages),
+      addOrderBy: jest.fn(() => latestMessages),
+      getQuery: jest.fn().mockReturnValue('SELECT latest_message_id'),
+      getParameters: jest.fn().mockReturnValue({
+        tenantId: actor.tenantId,
+        actorId: actor.id,
+      }),
+    };
+    const conversations: any = {
+      leftJoinAndSelect: jest.fn(() => conversations),
+      where: jest.fn(() => conversations),
+      setParameters: jest.fn(() => conversations),
+      orderBy: jest.fn(() => conversations),
+      take: jest.fn(() => conversations),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    const appointments: any = {
+      leftJoinAndSelect: jest.fn(() => appointments),
+      where: jest.fn(() => appointments),
+      andWhere: jest.fn(() => appointments),
+      orderBy: jest.fn(() => appointments),
+      take: jest.fn(() => appointments),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    messageRepo.createQueryBuilder
+      .mockReturnValueOnce(latestMessages)
+      .mockReturnValueOnce(conversations);
+    appointmentRepo.createQueryBuilder.mockReturnValue(appointments);
+
+    await expect(
+      service.askClient(
+        { ...actor, role: 'agent' },
+        'Show my recent conversations and appointments.',
+      ),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      results: [
+        expect.objectContaining({
+          name: 'get_recent_conversations',
+          output: [],
+        }),
+        expect.objectContaining({
+          name: 'get_upcoming_appointments',
+          output: [],
+        }),
+      ],
+    });
+    expect(latestMessages.where).toHaveBeenCalledWith(
+      'latestLead.tenantId = :tenantId',
+      { tenantId: actor.tenantId },
+    );
+    expect(latestMessages.andWhere).toHaveBeenCalledWith(
+      'latestLead.assignedToUserId = :actorId',
+      { actorId: actor.id },
+    );
+    expect(appointments.where).toHaveBeenCalledWith(
+      'appointment.tenantId = :tenantId',
+      { tenantId: actor.tenantId },
+    );
+    expect(appointments.andWhere).toHaveBeenCalledWith(
+      'lead.assignedToUserId = :actorId',
+      { actorId: actor.id },
+    );
   });
 
   it('does not let another actor or tenant confirm a pending action', async () => {
@@ -363,6 +538,52 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
         idempotencyKey: `assistant-request:${actor.id}:${requestId}`,
       }),
     );
+  });
+
+  it('retries a failed provider run with the same request ID and usage key', async () => {
+    const { service, provider, limits } = setup();
+    const requestId = '00000000-0000-4000-8000-000000000078';
+    provider.generate
+      .mockRejectedValueOnce(new Error('temporary provider failure'))
+      .mockResolvedValueOnce({
+        response: 'The provider recovered.',
+        actions: [],
+        provider: 'openai',
+        model: 'gpt-5.6',
+        inputUsage: 8,
+        outputUsage: 4,
+        latencyMs: 6,
+      });
+
+    await expect(
+      service.askClient(actor, 'Retry this safely.', requestId),
+    ).rejects.toThrow('temporary provider failure');
+    await expect(
+      service.askClient(actor, 'Retry this safely.', requestId),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      response: 'The provider recovered.',
+    });
+
+    expect(provider.generate).toHaveBeenCalledTimes(2);
+    expect(limits.reserveUsage).toHaveBeenCalledTimes(2);
+    expect(limits.reserveUsage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        idempotencyKey: `assistant-request:${actor.id}:${requestId}`,
+      }),
+    );
+  });
+
+  it('rejects a request ID reused with different prompt text', async () => {
+    const { service, provider } = setup();
+    const requestId = '00000000-0000-4000-8000-000000000079';
+    await service.askClient(actor, 'First prompt', requestId);
+
+    await expect(
+      service.askClient(actor, 'Different prompt', requestId),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(provider.generate).toHaveBeenCalledTimes(1);
   });
 
   it('supplies only the same actor and tenant encrypted history to the next turn', async () => {

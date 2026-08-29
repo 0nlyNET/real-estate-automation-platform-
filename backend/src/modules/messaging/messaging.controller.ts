@@ -124,12 +124,14 @@ export class MessagingController {
           leadId,
           messageBody,
           actor,
+          body.requestId,
         )
       : this.inboxSendService.sendSmsToLead(
           tenantId,
           leadId,
           messageBody,
           actor,
+          body.requestId,
         );
   }
 

@@ -107,6 +107,7 @@ type SystemHealth = {
     billing?: { status: string }
     systemEmail?: { status: string }
     retention?: { days: number }
+    workers?: { globalAutomationPaused?: boolean }
   }
 }
 
@@ -351,6 +352,9 @@ type ClientSetup = {
 type AiOverview = {
   platformPaused: boolean
   platformPauseReason?: string | null
+  platformPauseUpdatedAt?: string | null
+  platformPauseUpdatedBy?: string | null
+  globalAutomationsPaused: boolean
   aiEnabledClients: number
   activeAiConversations: number
   humanControlledConversations: number
@@ -1136,10 +1140,10 @@ export function AdminDashboardClient({
     try {
       await apiFetch("/admin/ai/emergency-pause", {
         method: "POST",
-        body: { paused, reason: paused ? "Platform emergency pause activated by the platform owner." : "" },
+        body: { paused, reason: paused ? "Automated lead AI paused by the platform owner." : "" },
       })
       await loadDataSection("ai", true)
-      setNotice(paused ? "All AI activity paused." : "Platform AI pause cleared.")
+      setNotice(paused ? "Automated lead AI paused across all clients." : "Platform AI pause cleared. Existing paused conversations still require review before returning to AI.")
     } catch (cause) {
       setError(messageFor(cause, "Platform AI pause could not be changed"))
     }
@@ -3298,10 +3302,12 @@ export function AdminDashboardClient({
               />
               <HealthTile
                 label="Automation worker"
-                status={aiOverview?.platformPaused ? "Paused" : sectionErrors.ai ? "Unavailable" : "Operational"}
-                healthy={Boolean(aiOverview && !aiOverview.platformPaused)}
+                status={aiOverview?.globalAutomationsPaused ? "Global automations paused" : aiOverview?.platformPaused ? "Lead AI paused" : sectionErrors.ai ? "Unavailable" : "Operational"}
+                healthy={Boolean(aiOverview && !aiOverview.platformPaused && !aiOverview.globalAutomationsPaused)}
                 detail={
-                  aiOverview?.platformPaused
+                  aiOverview?.globalAutomationsPaused
+                    ? "Automated AI, messages, actions, and sequence steps are stopped across client workspaces."
+                    : aiOverview?.platformPaused
                     ? aiOverview.platformPauseReason || "Global AI pause is active"
                     : "Guarded AI response processing"
                 }
@@ -3450,34 +3456,101 @@ export function AdminDashboardClient({
             <TabsTrigger value="staff">Staff</TabsTrigger>
           </TabsList>
           <TabsContent value="automation" className="space-y-5">
+            <Card className={aiOverview?.globalAutomationsPaused ? "border-destructive/50" : ""}>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ShieldAlert className="h-5 w-5" />
+                  Global automations safety switch
+                </CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  Deployment-level emergency control for all automated client work. This is separate from the lead AI
+                  control below.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <StatusBadge
+                    value={
+                      sectionErrors.ai || !aiOverview
+                        ? "Status unavailable"
+                        : aiOverview.globalAutomationsPaused
+                          ? "Paused"
+                          : "Running"
+                    }
+                    tone={aiOverview?.globalAutomationsPaused ? "danger" : aiOverview ? "success" : "warning"}
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    Controlled by the <code>GLOBAL_AUTOMATIONS_DISABLED</code> deployment setting; changing it requires
+                    an environment update and redeploy.
+                  </span>
+                </div>
+                <div className="grid gap-3 text-sm md:grid-cols-2">
+                  <div className="rounded-md border p-3">
+                    <div className="font-medium">What pauses</div>
+                    <p className="mt-1 text-muted-foreground">
+                      Automated AI, outbound messages, automation actions, and sequence steps across every client.
+                      Sequence jobs wait and recheck; an automated message stopped at its final safety check is skipped
+                      and will not send automatically later.
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <div className="font-medium">What continues</div>
+                    <p className="mt-1 text-muted-foreground">
+                      Manual inbox replies, leads, appointments, settings, and stored data remain available, subject to
+                      the usual account, compliance, and provider checks.
+                    </p>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Actor and timestamp are not available because this switch is managed outside the application.
+                </p>
+              </CardContent>
+            </Card>
+
             <Card className={aiOverview?.platformPaused ? "border-destructive/50" : ""}>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Bot className="h-5 w-5" />
-                  Global AI control
+                  Platform AI emergency pause
                 </CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  Stops AI generation and queued AI sends while keeping manual inbox access available.
+                  Global AI control for automated lead conversations only. It does not pause manual inbox replies or
+                  non-AI workspace activity.
                 </p>
               </CardHeader>
-              <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
+              <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="space-y-2">
                   <StatusBadge
                     value={
                       sectionErrors.ai || !aiOverview
                         ? "Status unavailable"
                         : aiOverview.platformPaused
-                          ? "All AI paused"
-                          : "AI available"
+                          ? "Lead AI paused"
+                          : "Lead AI available"
                     }
                     tone={aiOverview?.platformPaused ? "danger" : aiOverview ? "success" : "warning"}
                   />
-                  {aiOverview?.platformPauseReason ? (
-                    <p className="mt-2 text-sm text-muted-foreground">{aiOverview.platformPauseReason}</p>
+                  <p className="max-w-3xl text-sm text-muted-foreground">
+                    Pausing blocks new AI runs and cancels queued AI-authored replies across all clients. Clearing the
+                    pause allows new AI work, but conversations moved to paused handling must be reviewed and returned
+                    to AI individually.
+                  </p>
+                  {aiOverview?.platformPaused ? (
+                    <div className="text-sm text-muted-foreground">
+                      {aiOverview.platformPauseReason ? <p>{aiOverview.platformPauseReason}</p> : null}
+                      <p>
+                        Paused by {aiOverview.platformPauseUpdatedBy || "an unknown platform operator"}
+                        {aiOverview.platformPauseUpdatedAt
+                          ? ` on ${new Date(aiOverview.platformPauseUpdatedAt).toLocaleString()}`
+                          : " at an unavailable time"}
+                        .
+                      </p>
+                    </div>
                   ) : null}
                 </div>
                 {aiOverview && !sectionErrors.ai ? (
                   <Button
+                    className="shrink-0"
                     variant={aiOverview.platformPaused ? "default" : "destructive"}
                     onClick={() =>
                       aiOverview.platformPaused ? void setPlatformAiPause(false) : setConfirmAiPause(true)
@@ -3587,10 +3660,11 @@ export function AdminDashboardClient({
       <AlertDialog open={confirmAiPause} onOpenChange={setConfirmAiPause}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Pause all AI activity?</AlertDialogTitle>
+            <AlertDialogTitle>Pause automated lead AI?</AlertDialogTitle>
             <AlertDialogDescription>
-              This stops AI generation and cancels queued AI replies across every client. Manual messaging, inboxes,
-              leads, and appointments remain available.
+              This blocks new lead-AI runs and cancels queued AI-authored replies across every client. Manual messaging,
+              inboxes, leads, and appointments remain available. Clearing the pause later will not automatically return
+              paused conversations to AI handling.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -3599,7 +3673,7 @@ export function AdminDashboardClient({
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => void setPlatformAiPause(true)}
             >
-              Pause all AI
+              Pause lead AI
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3752,8 +3826,14 @@ function PlatformStatusBanner({
     action = "Review system health"
     onClick = onOpenHealth
     tone = health.dbConnected ? "warning" : "critical"
+  } else if (aiOverview?.globalAutomationsPaused) {
+    title = "Global automations are paused"
+    detail = "Automated AI, messages, actions, and sequence steps are stopped across all client workspaces. Manual work and stored data remain available."
+    action = "Open automation settings"
+    onClick = onOpenSettings
+    tone = "critical"
   } else if (aiOverview?.platformPaused) {
-    title = "Global AI automation is paused"
+    title = "Automated lead AI is paused"
     detail = aiOverview.platformPauseReason || "Automated AI responses are stopped across all clients."
     action = "Open automation settings"
     onClick = onOpenSettings

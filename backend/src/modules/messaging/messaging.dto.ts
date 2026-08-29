@@ -19,6 +19,10 @@ export class SendMessageDto {
   @IsOptional()
   @IsIn(['sms', 'email'])
   channel?: 'sms' | 'email';
+
+  @IsOptional()
+  @IsUUID()
+  requestId?: string;
 }
 
 export class SendBookingLinkDto {

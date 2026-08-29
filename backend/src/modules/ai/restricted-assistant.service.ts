@@ -5,27 +5,34 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomUUID } from 'crypto';
-import { IsNull, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { decryptString, encryptString } from '../../common/crypto-secrets';
 import { hasAtLeastRole, UserRole } from '../../common/rbac';
 import { sanitizeOperationalText } from '../../common/operational-log';
 import { AuditService } from '../audit/audit.service';
 import { CrmEventsService } from '../crm-events/crm-events.service';
+import { Appointment } from '../client-operations/appointment.entity';
 import { DurableJob } from '../durable-jobs/durable-job.entity';
 import { ProviderConfigService } from '../integrations/provider-config.service';
 import { TenantProvisioningService } from '../integrations/tenant-provisioning.service';
 import { LimitsService } from '../limits/limits.service';
+import { Lead } from '../leads/lead.entity';
+import { Message } from '../messaging/message.entity';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { OperationsTask } from '../operations/operations-task.entity';
 import { OperationsService } from '../operations/operations.service';
 import { SettingsService } from '../settings/settings.service';
+import { TenantSettings } from '../settings/tenant-settings.entity';
 import { StatsService } from '../stats/stats.service';
+import { Tenant } from '../tenants/tenant.entity';
 import { AiConfigurationService } from './ai-configuration.service';
 import { AssistantRun } from './assistant-run.entity';
+import { PlatformAiControl } from './platform-ai-control.entity';
 import {
   RestrictedAssistantAction,
   RestrictedAssistantHistoryMessage,
@@ -38,6 +45,10 @@ const CLIENT_TOOLS = [
   'get_messaging_status',
   'get_usage',
   'get_reporting_summary',
+  'get_automation_status',
+  'get_recent_conversations',
+  'get_upcoming_appointments',
+  'get_lead_snapshot',
   'retry_setup_reconciliation',
   'update_business_hours',
   'update_booking_link',
@@ -55,6 +66,10 @@ const CLIENT_MEMBER_TOOLS = [
   'get_messaging_status',
   'get_usage',
   'get_reporting_summary',
+  'get_automation_status',
+  'get_recent_conversations',
+  'get_upcoming_appointments',
+  'get_lead_snapshot',
 ] as const;
 const OPERATIONS_TOOLS = [
   'get_exception_summary',
@@ -106,6 +121,24 @@ export class RestrictedAssistantService {
     private readonly provisioning: TenantProvisioningService,
     private readonly crmEvents: CrmEventsService,
     private readonly audit: AuditService,
+    @Optional()
+    @InjectRepository(Tenant)
+    private readonly tenants?: Repository<Tenant>,
+    @Optional()
+    @InjectRepository(TenantSettings)
+    private readonly tenantSettings?: Repository<TenantSettings>,
+    @Optional()
+    @InjectRepository(PlatformAiControl)
+    private readonly platformControls?: Repository<PlatformAiControl>,
+    @Optional()
+    @InjectRepository(Lead)
+    private readonly leads?: Repository<Lead>,
+    @Optional()
+    @InjectRepository(Message)
+    private readonly messages?: Repository<Message>,
+    @Optional()
+    @InjectRepository(Appointment)
+    private readonly appointments?: Repository<Appointment>,
   ) {}
 
   askClient(actor: AssistantActor, prompt: string, requestId?: string) {
@@ -171,6 +204,7 @@ export class RestrictedAssistantService {
     requestedId?: string,
   ) {
     const requestId = requestedId || randomUUID();
+    const inputDigest = createHash('sha256').update(prompt).digest('hex');
     const existing = await this.runs.findOne({
       where: {
         tenantId: actor.tenantId,
@@ -179,30 +213,25 @@ export class RestrictedAssistantService {
         requestId,
       },
     });
-    if (existing) return this.duplicateRun(existing);
-
-    let promptEncrypted: string;
-    try {
-      promptEncrypted = encryptString(prompt);
-    } catch {
-      throw new ServiceUnavailableException({
-        code: 'ASSISTANT_HISTORY_NOT_CONFIGURED',
-        message:
-          'Secure assistant history is not configured. Set INTEGRATIONS_ENCRYPTION_KEY in the backend production environment and redeploy.',
-      });
-    }
-    const history = await this.contextHistory(assistantType, actor);
     let run: AssistantRun;
-    try {
-      run = await this.runs.save(
-        this.runs.create({
+    if (existing) {
+      if (existing.inputDigest !== inputDigest) {
+        throw new ConflictException({
+          code: 'ASSISTANT_REQUEST_ID_REUSED',
+          message: 'This assistant request ID was already used for different text.',
+        });
+      }
+      if (!this.canRetry(existing)) return this.duplicateRun(existing);
+      const claim = await this.runs.update(
+        {
+          id: existing.id,
           tenantId: actor.tenantId,
           actorId: actor.id,
           assistantType,
-          requestId,
-          promptEncrypted,
-          inputDigest: createHash('sha256').update(prompt).digest('hex'),
-          promptPreview: `[content withheld; ${prompt.length} characters]`,
+          status: In(['failed', 'blocked']),
+          confirmedAt: IsNull(),
+        },
+        {
           status: 'processing',
           provider: null,
           model: null,
@@ -216,22 +245,99 @@ export class RestrictedAssistantService {
           latencyMs: null,
           errorCode: null,
           sanitizedError: null,
-          confirmedAt: null,
-        }),
-      );
-    } catch (error: any) {
-      if (String(error?.code || '') !== '23505') throw error;
-      const duplicate = await this.runs.findOne({
-        where: {
-          tenantId: actor.tenantId,
-          actorId: actor.id,
-          assistantType,
-          requestId,
         },
+      );
+      if (claim.affected !== 1) {
+        const current = await this.runs.findOne({
+          where: {
+            id: existing.id,
+            tenantId: actor.tenantId,
+            actorId: actor.id,
+            assistantType,
+          },
+        });
+        if (!current) throw new NotFoundException('Assistant request not found');
+        return this.duplicateRun(current);
+      }
+      Object.assign(existing, {
+        status: 'processing',
+        provider: null,
+        model: null,
+        response: null,
+        requestedActions: [],
+        executedActions: [],
+        blockedActions: [],
+        inputUsage: 0,
+        outputUsage: 0,
+        estimatedCostUsd: null,
+        latencyMs: null,
+        errorCode: null,
+        sanitizedError: null,
       });
-      if (!duplicate) throw error;
-      return this.duplicateRun(duplicate);
+      run = existing;
+    } else {
+      let promptEncrypted: string;
+      try {
+        promptEncrypted = encryptString(prompt);
+      } catch {
+        throw new ServiceUnavailableException({
+          code: 'ASSISTANT_HISTORY_NOT_CONFIGURED',
+          message:
+            'Secure assistant history is not configured. Set INTEGRATIONS_ENCRYPTION_KEY in the backend production environment and redeploy.',
+        });
+      }
+      try {
+        run = await this.runs.save(
+          this.runs.create({
+            tenantId: actor.tenantId,
+            actorId: actor.id,
+            assistantType,
+            requestId,
+            promptEncrypted,
+            inputDigest,
+            promptPreview: `[content withheld; ${prompt.length} characters]`,
+            status: 'processing',
+            provider: null,
+            model: null,
+            response: null,
+            requestedActions: [],
+            executedActions: [],
+            blockedActions: [],
+            inputUsage: 0,
+            outputUsage: 0,
+            estimatedCostUsd: null,
+            latencyMs: null,
+            errorCode: null,
+            sanitizedError: null,
+            confirmedAt: null,
+          }),
+        );
+      } catch (error: any) {
+        if (String(error?.code || '') !== '23505') throw error;
+        const duplicate = await this.runs.findOne({
+          where: {
+            tenantId: actor.tenantId,
+            actorId: actor.id,
+            assistantType,
+            requestId,
+          },
+        });
+        if (!duplicate) throw error;
+        if (duplicate.inputDigest !== inputDigest) {
+          throw new ConflictException({
+            code: 'ASSISTANT_REQUEST_ID_REUSED',
+            message:
+              'This assistant request ID was already used for different text.',
+          });
+        }
+        return this.duplicateRun(duplicate);
+      }
     }
+
+    const [history, context] = await Promise.all([
+      this.contextHistory(assistantType, actor),
+      this.requestContext(assistantType, actor),
+    ]);
 
     try {
       const reservation = await this.limits.reserveUsage({
@@ -255,6 +361,7 @@ export class RestrictedAssistantService {
         prompt,
         allowedTools,
         history,
+        context,
       });
       run.provider = generated.provider;
       run.model = generated.model;
@@ -281,6 +388,7 @@ export class RestrictedAssistantService {
           assistantType,
           prompt,
           history,
+          context,
           plannedResponse: generated.response,
           actionResults: [
             ...run.executedActions,
@@ -467,6 +575,39 @@ export class RestrictedAssistantService {
         role: actor.role,
       });
     }
+    if (name === 'get_automation_status') {
+      const [settings, control] = await Promise.all([
+        this.tenantSettings?.findOne({ where: { tenantId: actor.tenantId } }),
+        this.platformControls?.findOne({ where: { id: 'global' } }),
+      ]);
+      return {
+        workspaceAutomationsEnabled: settings?.automationsEnabled === true,
+        globalAutomationsPaused:
+          process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true',
+        platformAiPaused: control?.paused === true,
+        platformAiPauseReason: control?.paused ? control.reason || null : null,
+        manualRepliesContinue: true,
+      };
+    }
+    if (name === 'get_recent_conversations') {
+      return this.recentConversations(
+        actor,
+        boundedIntegerArgument(args.limit, 5, 1, 10),
+      );
+    }
+    if (name === 'get_upcoming_appointments') {
+      return this.upcomingAppointments(
+        actor,
+        boundedIntegerArgument(args.days, 30, 1, 90),
+        boundedIntegerArgument(args.limit, 5, 1, 10),
+      );
+    }
+    if (name === 'get_lead_snapshot') {
+      return this.leadSnapshot(
+        actor,
+        requiredString(args.query, 'query', 160),
+      );
+    }
     if (name === 'retry_setup_reconciliation') {
       if (!actor.role || !hasAtLeastRole(actor.role as UserRole, 'admin')) {
         throw new ForbiddenException(
@@ -502,6 +643,168 @@ export class RestrictedAssistantService {
       });
     }
     throw new BadRequestException('Client assistant action is not allowlisted');
+  }
+
+  private async recentConversations(actor: AssistantActor, limit: number) {
+    if (!this.messages) throw assistantContextUnavailable();
+    const latestMessageIds = this.messages
+      .createQueryBuilder('latestMessage')
+      .select('latestMessage.id')
+      .distinctOn(['latestMessage.leadId'])
+      .leftJoin('latestMessage.lead', 'latestLead')
+      .where('latestLead.tenantId = :tenantId', {
+        tenantId: actor.tenantId,
+      })
+      .orderBy('latestMessage.leadId', 'ASC')
+      .addOrderBy('latestMessage.createdAt', 'DESC');
+    if (!this.canSeeAllWorkspaceRecords(actor)) {
+      latestMessageIds.andWhere('latestLead.assignedToUserId = :actorId', {
+        actorId: actor.id,
+      });
+    }
+    const query = this.messages
+      .createQueryBuilder('message')
+      .leftJoinAndSelect('message.lead', 'lead')
+      .where(`message.id IN (${latestMessageIds.getQuery()})`)
+      .setParameters(latestMessageIds.getParameters());
+    const rows = await query
+      .orderBy('message.createdAt', 'DESC')
+      .take(limit)
+      .getMany();
+    return rows.map((message) => ({
+      leadId: message.lead.id,
+      leadName: message.lead.fullName,
+      stage: message.lead.stage,
+      readiness: message.lead.readinessLevel,
+      conversationSummary: message.lead.conversationSummary || null,
+      lastMessage: {
+        channel: message.channel,
+        direction: message.direction,
+        body: assistantMessageBody(message.body),
+        status: message.status,
+        createdAt: message.createdAt,
+      },
+    }));
+  }
+
+  private async upcomingAppointments(
+    actor: AssistantActor,
+    days: number,
+    limit: number,
+  ) {
+    if (!this.appointments) throw assistantContextUnavailable();
+    const now = new Date();
+    const through = new Date(now.getTime() + days * 24 * 60 * 60_000);
+    const query = this.appointments
+      .createQueryBuilder('appointment')
+      .leftJoinAndSelect('appointment.lead', 'lead')
+      .where('appointment.tenantId = :tenantId', {
+        tenantId: actor.tenantId,
+      })
+      .andWhere('appointment.startsAt >= :now', { now })
+      .andWhere('appointment.startsAt <= :through', { through })
+      .andWhere('appointment.status IN (:...statuses)', {
+        statuses: ['scheduled', 'confirmed'],
+      });
+    if (!this.canSeeAllWorkspaceRecords(actor)) {
+      query.andWhere('lead.assignedToUserId = :actorId', {
+        actorId: actor.id,
+      });
+    }
+    const rows = await query
+      .orderBy('appointment.startsAt', 'ASC')
+      .take(limit)
+      .getMany();
+    return rows.map((appointment) => ({
+      appointmentId: appointment.id,
+      leadId: appointment.leadId,
+      leadName: appointment.lead?.fullName || 'Lead',
+      startsAt: appointment.startsAt,
+      endsAt: appointment.endsAt,
+      status: appointment.status,
+      meetingMode: appointment.meetingMode,
+      calendarSource: appointment.calendarSource,
+      syncStatus: appointment.syncStatus,
+    }));
+  }
+
+  private async leadSnapshot(actor: AssistantActor, rawQuery: string) {
+    if (!this.leads || !this.messages || !this.appointments) {
+      throw assistantContextUnavailable();
+    }
+    const search = `%${rawQuery.toLowerCase()}%`;
+    const phoneDigits = rawQuery.replace(/\D/g, '');
+    const query = this.leads
+      .createQueryBuilder('lead')
+      .where('lead.tenantId = :tenantId', { tenantId: actor.tenantId })
+      .andWhere(
+        `(LOWER(lead.fullName) LIKE :search
+          OR LOWER(COALESCE(lead.email, '')) LIKE :search
+          OR (:phoneDigits <> '' AND regexp_replace(COALESCE(lead.phone, ''), '\\D', '', 'g') LIKE :phoneSearch))`,
+        { search, phoneDigits, phoneSearch: `%${phoneDigits}%` },
+      );
+    if (!this.canSeeAllWorkspaceRecords(actor)) {
+      query.andWhere('lead.assignedToUserId = :actorId', {
+        actorId: actor.id,
+      });
+    }
+    const leads = await query
+      .orderBy('lead.lastActivityAt', 'DESC', 'NULLS LAST')
+      .addOrderBy('lead.createdAt', 'DESC')
+      .take(3)
+      .getMany();
+    if (!leads.length) return { matches: [] };
+    const leadIds = leads.map((lead) => lead.id);
+    const [messages, appointments] = await Promise.all([
+      this.messages.find({
+        where: { leadId: In(leadIds) },
+        order: { createdAt: 'DESC' },
+        take: Math.min(leadIds.length * 6, 18),
+      }),
+      this.appointments.find({
+        where: { tenantId: actor.tenantId, leadId: In(leadIds) },
+        order: { startsAt: 'DESC' },
+        take: Math.min(leadIds.length * 3, 9),
+      }),
+    ]);
+    return {
+      matches: leads.map((lead) => ({
+        leadId: lead.id,
+        name: lead.fullName,
+        stage: lead.stage,
+        temperature: lead.temperature,
+        readiness: lead.readinessLevel,
+        communicationStatus: lead.communicationStatus,
+        summary: lead.conversationSummary || null,
+        recommendedNextAction: lead.recommendedNextAction || null,
+        recentMessages: messages
+          .filter((message) => message.leadId === lead.id)
+          .slice(0, 6)
+          .reverse()
+          .map((message) => ({
+            channel: message.channel,
+            direction: message.direction,
+            body: assistantMessageBody(message.body),
+            status: message.status,
+            createdAt: message.createdAt,
+          })),
+        appointments: appointments
+          .filter((appointment) => appointment.leadId === lead.id)
+          .slice(0, 3)
+          .map((appointment) => ({
+            startsAt: appointment.startsAt,
+            endsAt: appointment.endsAt,
+            status: appointment.status,
+            meetingMode: appointment.meetingMode,
+          })),
+      })),
+    };
+  }
+
+  private canSeeAllWorkspaceRecords(actor: AssistantActor) {
+    return Boolean(
+      actor.role && hasAtLeastRole(actor.role as UserRole, 'admin'),
+    );
   }
 
   private async executeOperations(name: string, args: Record<string, unknown>) {
@@ -616,6 +919,49 @@ export class RestrictedAssistantService {
         `Assistant audit write failed for run ${run.id}: ${error?.message || error}`,
       );
     }
+  }
+
+  private canRetry(run: AssistantRun) {
+    if (!['failed', 'blocked'].includes(run.status) || run.confirmedAt) {
+      return false;
+    }
+    const mutations =
+      run.assistantType === 'client' ? CLIENT_MUTATIONS : OPERATIONS_MUTATIONS;
+    return !(run.executedActions || []).some(
+      (result: any) =>
+        result?.status === 'executed' && mutations.has(String(result?.name)),
+    );
+  }
+
+  private async requestContext(
+    assistantType: 'client' | 'operations',
+    actor: AssistantActor,
+  ) {
+    if (assistantType === 'operations') {
+      return {
+        assistantScope: 'platform_operations',
+        authenticatedRole: actor.platformRole || 'staff',
+      };
+    }
+    const [tenant, settings, control] = await Promise.all([
+      this.tenants?.findOne({ where: { id: actor.tenantId } }),
+      this.tenantSettings?.findOne({ where: { tenantId: actor.tenantId } }),
+      this.platformControls?.findOne({ where: { id: 'global' } }),
+    ]);
+    return {
+      assistantScope: 'authenticated_workspace',
+      authenticatedRole: actor.role || 'member',
+      workspace: {
+        name: tenant?.name || 'Client workspace',
+        lifecycleStatus: tenant?.lifecycleStatus || 'unknown',
+      },
+      automation: {
+        workspaceEnabled: settings?.automationsEnabled === true,
+        globalAutomationsPaused:
+          process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true',
+        platformAiPaused: control?.paused === true,
+      },
+    };
   }
 
   private duplicateRun(run: AssistantRun) {
@@ -789,6 +1135,31 @@ function objectArgument(value: unknown, label: string) {
       String(item).slice(0, 160),
     ]),
   );
+}
+
+function boundedIntegerArgument(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
+}
+
+function assistantContextUnavailable() {
+  return new ServiceUnavailableException({
+    code: 'ASSISTANT_CONTEXT_UNAVAILABLE',
+    message:
+      'Workspace context is temporarily unavailable. Retry this request shortly.',
+  });
+}
+
+function assistantMessageBody(value: string) {
+  return String(value || '')
+    .replace(/\n\nUnsubscribe:\s*\{\{unsubscribeUrl\}\}\s*$/i, '')
+    .slice(0, 600);
 }
 
 function errorCode(error: any, fallback: string) {

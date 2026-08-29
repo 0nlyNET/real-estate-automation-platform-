@@ -25,6 +25,16 @@ assert.match(chat, /failedRequest\.requestId/)
 assert.match(chat, /same request ID prevents duplicate actions/)
 assert.match(chat, /AbortSignal\.timeout\(50_000\)/)
 assert.match(chat, /if \(!nextPrompt \|\| busy\) return/)
+assert.match(chat, /pendingRequest/)
+assert.match(chat, /requestOutcomeMayStillComplete/)
+assert.match(chat, /uncertainRequestId/)
+assert.match(chat, /window\.setInterval\(\(\) => void refreshHistory\(\),\s*2_500\)/)
+assert.match(chat, /shouldStickToBottom/)
+assert.match(chat, /scrollIntoView/)
+assert.match(chat, /event\.key === "Enter"/)
+assert.match(chat, /!event\.shiftKey/)
+assert.match(chat, /!event\.nativeEvent\.isComposing/)
+assert.match(chat, /Enter sends · Shift\+Enter adds a new line/)
 
 // Refresh-safe history, provider readiness, verified output, and exact confirmation
 // arguments must all be visible instead of collapsing into a generic red error.
@@ -35,7 +45,7 @@ assert.match(chat, /OPENAI_API_KEY/)
 assert.match(chat, /Run controlled provider test/)
 assert.match(chat, /Verified result details/)
 assert.match(chat, /result\.status === "executed"/)
-assert.match(chat, /entry\.run\.error\.code/)
+assert.match(chat, /Assistant request failed/)
 assert.match(chat, /pretty\(item\.arguments\)/)
 
 // Frontend API errors retain machine-readable backend failure codes.

@@ -19,6 +19,7 @@ import { Message } from '../messaging/message.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SequencesService } from '../sequences/sequences.service';
 import { Tenant } from '../tenants/tenant.entity';
+import { User } from '../users/user.entity';
 import { AiRun } from './ai-run.entity';
 import { AiAuditService } from './ai-audit.service';
 import { BrokerageKnowledge } from './brokerage-knowledge.entity';
@@ -75,6 +76,9 @@ export class AiConversationControlService {
     private readonly aiAudit: AiAuditService,
     private readonly audit: AuditService,
     @Optional() private readonly onboarding?: OnboardingService,
+    @Optional()
+    @InjectRepository(User)
+    private readonly users?: Repository<User>,
   ) {}
 
   async getOrCreateState(
@@ -689,14 +693,23 @@ export class AiConversationControlService {
         }),
       ]);
     const tenantIds = settings.map((row) => row.tenantId);
-    const tenants = tenantIds.length
-      ? await this.tenants.find({ where: { id: In(tenantIds) } })
-      : [];
+    const [tenants, pauseActor] = await Promise.all([
+      tenantIds.length
+        ? this.tenants.find({ where: { id: In(tenantIds) } })
+        : Promise.resolve([]),
+      control.updatedById && this.users
+        ? this.users.findOne({ where: { id: control.updatedById } })
+        : Promise.resolve(null),
+    ]);
     const tenantById = new Map(tenants.map((tenant) => [tenant.id, tenant]));
     const usageByTenant = new Map(usage.map((row) => [row.tenantId, row]));
     return {
       platformPaused: control.paused,
       platformPauseReason: control.reason || null,
+      platformPauseUpdatedAt: control.updatedAt || null,
+      platformPauseUpdatedBy: pauseActor?.email || null,
+      globalAutomationsPaused:
+        process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true',
       aiEnabledClients: settings.filter((row) => row.aiEnabled).length,
       activeAiConversations: active,
       humanControlledConversations: humanControlled,

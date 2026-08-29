@@ -202,6 +202,43 @@ describe('outbound message worker safety', () => {
     expect(messageRepo.find).not.toHaveBeenCalled();
   });
 
+  it('returns user-facing thread content without template markers or raw provider errors', async () => {
+    const tenantId = 'tenant-1';
+    const lead = Object.assign(new Lead(), { id: 'lead-1', tenantId });
+    const message = Object.assign(new Message(), {
+      id: 'message-1',
+      leadId: lead.id,
+      channel: 'email',
+      direction: 'outbound',
+      body: 'Thanks for reaching out.\n\nUnsubscribe: {{unsubscribeUrl}}',
+      status: 'failed',
+      errorCode: 'UNRECOGNIZED_PROVIDER_FAILURE',
+      sanitizedErrorMessage: 'upstream socket secret detail',
+      authorship: 'human',
+      createdAt: new Date('2026-08-29T12:00:00.000Z'),
+      updatedAt: new Date('2026-08-29T12:01:00.000Z'),
+    });
+    const service = buildService({
+      leadRepo: { findOne: jest.fn().mockResolvedValue(lead) },
+      messageRepo: { find: jest.fn().mockResolvedValue([message]) },
+    });
+
+    const result = await service.getThreadMessages(tenantId, lead.id, {
+      userId: 'user-1',
+      role: 'owner',
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        body: 'Thanks for reaching out.',
+        errorMessage:
+          'This message could not be delivered. Review the workspace connection before trying again.',
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain('{{unsubscribeUrl}}');
+    expect(JSON.stringify(result)).not.toContain('socket secret detail');
+  });
+
   it('does not call a provider when the final safety check blocks quiet hours', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-07-25T02:00:00.000Z'));
     const lead = Object.assign(new Lead(), {

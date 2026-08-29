@@ -3,6 +3,7 @@ import {
   Injectable,
   ForbiddenException,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -98,6 +99,7 @@ export class InboxSendService {
     leadId: string,
     body: string,
     actor?: ConversationActor,
+    requestId?: string,
   ) {
     const tenantId = this.requireTenant(tenantIdRaw);
 
@@ -109,6 +111,18 @@ export class InboxSendService {
       relations: ['tenant'],
     });
     if (!lead) throw new ForbiddenException('Lead not found');
+
+    const idempotencyKey = manualRequestKey(
+      'sms',
+      tenantId,
+      lead.id,
+      actor?.userId,
+      requestId,
+    );
+    const existing = await this.messagesRepo.findOne({
+      where: { idempotencyKey, leadId: lead.id },
+    });
+    if (existing) return existingManualResponse(existing, text);
 
     const to = normalizeE164(lead.phone);
     if (!to) throw new ForbiddenException('Lead phone is missing');
@@ -145,11 +159,19 @@ export class InboxSendService {
       !authToken ||
       (!fromNumber && !messagingServiceSid)
     ) {
-      throw new ForbiddenException('Twilio is not connected for this tenant');
+      throw new ConflictException({
+        code: 'SMS_INTEGRATION_DISCONNECTED',
+        message:
+          'SMS is not connected for this workspace. Connect Twilio in Integrations before replying.',
+      });
     }
     const statusCallback = String(process.env.TWILIO_STATUS_CALLBACK_URL || '').trim();
     if (!statusCallback) {
-      throw new ForbiddenException('Twilio delivery status callback is not configured');
+      throw new ServiceUnavailableException({
+        code: 'SMS_DELIVERY_CALLBACK_NOT_CONFIGURED',
+        message:
+          'SMS delivery tracking is not configured yet. A platform administrator must finish the Twilio callback setup.',
+      });
     }
 
     return this.aiControl.runHumanSendExclusive(
@@ -157,6 +179,10 @@ export class InboxSendService {
       lead.id,
       actor,
       async () => {
+        const duplicate = await this.messagesRepo.findOne({
+          where: { idempotencyKey, leadId: lead.id },
+        });
+        if (duplicate) return existingManualResponse(duplicate, text);
         // Create the row while holding the conversation lock so no AI message
         // can pass its final send check concurrently.
         const priorContact = await this.messagesRepo.count({
@@ -168,8 +194,11 @@ export class InboxSendService {
           } as any,
         });
         const identity = String(lead.tenant?.name || 'RealtyTechAI').trim();
+        const alreadyIdentified = text
+          .toLowerCase()
+          .startsWith(`${identity.toLowerCase()}:`);
         const compliantText = priorContact === 0
-          ? `${identity}: ${text}${/\bstop\b/i.test(text) ? '' : ' Reply STOP to opt out.'}`
+          ? `${alreadyIdentified ? '' : `${identity}: `}${text}${/\bstop\b/i.test(text) ? '' : ' Reply STOP to opt out.'}`
           : text;
 
         const msg = new Message() as any;
@@ -183,7 +212,7 @@ export class InboxSendService {
         msg.authorship = 'human';
         msg.communicationType = 'sms';
         msg.requiresBookingLink = false;
-        msg.idempotencyKey = `manual:${tenantId}:${lead.id}:${crypto.randomUUID()}`;
+        msg.idempotencyKey = idempotencyKey;
 
         const saved = await this.messagesRepo.save(msg as any);
         return {
@@ -209,6 +238,7 @@ export class InboxSendService {
     leadId: string,
     body: string,
     actor?: ConversationActor,
+    requestId?: string,
   ) {
     const tenantId = this.requireTenant(tenantIdRaw);
     const text = String(body || '').trim();
@@ -221,6 +251,17 @@ export class InboxSendService {
       relations: ['tenant'],
     });
     if (!lead) throw new ForbiddenException('Lead not found');
+    const idempotencyKey = manualRequestKey(
+      'email',
+      tenantId,
+      lead.id,
+      actor?.userId,
+      requestId,
+    );
+    const existing = await this.messagesRepo.findOne({
+      where: { idempotencyKey, leadId: lead.id },
+    });
+    if (existing) return existingManualResponse(existing, text);
     if (!lead.email) throw new ForbiddenException('Lead email is missing');
     await this.entitlements.assertAllowed(tenantId, 'send_manual_email');
     const consent = await this.compliance.communicationEligibility(
@@ -250,13 +291,21 @@ export class InboxSendService {
       !String(payload?.apiKey || '').trim() ||
       !String(payload?.fromEmail || '').trim()
     ) {
-      throw new ForbiddenException('SendGrid is not connected for this tenant');
+      throw new ConflictException({
+        code: 'EMAIL_INTEGRATION_DISCONNECTED',
+        message:
+          'Email is not connected for this workspace. Connect SendGrid in Integrations before replying.',
+      });
     }
     return this.aiControl.runHumanSendExclusive(
       tenantId,
       lead.id,
       actor,
       async () => {
+        const duplicate = await this.messagesRepo.findOne({
+          where: { idempotencyKey, leadId: lead.id },
+        });
+        if (duplicate) return existingManualResponse(duplicate, text);
         const latestInbound = await this.messagesRepo.findOne({
           where: {
             leadId: lead.id,
@@ -276,7 +325,7 @@ export class InboxSendService {
               latestInbound?.providerMessageId || null,
             status: 'queued',
             attemptCount: 0,
-            idempotencyKey: `manual-email:${tenantId}:${lead.id}:${crypto.randomUUID()}`,
+            idempotencyKey,
             authorship: 'human',
           }),
         );
@@ -296,6 +345,63 @@ export class InboxSendService {
       },
     );
   }
+}
+
+function manualRequestKey(
+  channel: 'sms' | 'email',
+  tenantId: string,
+  leadId: string,
+  userId?: string,
+  requestId?: string,
+) {
+  return [
+    'manual',
+    channel,
+    tenantId,
+    leadId,
+    userId || 'system',
+    requestId || crypto.randomUUID(),
+  ].join(':');
+}
+
+function existingManualResponse(message: Message, requestedBody: string) {
+  const emailBody = `${requestedBody}\n\nUnsubscribe: {{unsubscribeUrl}}`;
+  const smsSuffix = `${requestedBody}${
+    /\bstop\b/i.test(requestedBody) ? '' : ' Reply STOP to opt out.'
+  }`;
+  const sameBody =
+    message.channel === 'email'
+      ? message.body === emailBody
+      : message.body === requestedBody ||
+        message.body === smsSuffix ||
+        message.body.endsWith(`: ${smsSuffix}`);
+  if (message.authorship !== 'human' || !sameBody) {
+    throw new ConflictException({
+      code: 'MESSAGE_REQUEST_ID_REUSED',
+      message: 'This message request ID was already used for different text.',
+    });
+  }
+  return {
+    status: message.status,
+    duplicate: true,
+    message: {
+      id: message.id,
+      leadId: message.leadId,
+      channel: message.channel,
+      direction: message.direction,
+      body:
+        message.channel === 'email'
+          ? message.body.replace(
+              /\n\nUnsubscribe:\s*\{\{unsubscribeUrl\}\}\s*$/i,
+              '',
+            )
+          : message.body,
+      status: message.status,
+      authorship: message.authorship,
+      providerMessageId: message.providerMessageId || null,
+      createdAt: message.createdAt,
+    },
+  };
 }
 
 function replySubject(subject?: string | null) {

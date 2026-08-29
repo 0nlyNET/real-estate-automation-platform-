@@ -213,12 +213,12 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       leadId: message.leadId,
       channel: message.channel,
       direction: message.direction,
-      body: message.body,
+      body: displayMessageBody(message.body),
       subject: message.subject || null,
       status: message.status,
       providerStatus: message.providerStatus || null,
       errorCode: message.errorCode || null,
-      errorMessage: message.sanitizedErrorMessage || null,
+      errorMessage: userFacingDeliveryError(message),
       authorship: message.authorship || 'system',
       aiRunId: message.aiRunId || null,
       approvedAt: message.approvedAt || null,
@@ -794,4 +794,35 @@ function emailMessageIdHeader(providerMessageId: string) {
     .trim()
     .slice(0, 450);
   return `<${value}>`;
+}
+
+function displayMessageBody(body: string) {
+  return String(body || '').replace(
+    /\n\nUnsubscribe:\s*\{\{unsubscribeUrl\}\}\s*$/i,
+    '',
+  );
+}
+
+function userFacingDeliveryError(message: Message) {
+  const code = String(message.errorCode || '');
+  if (!code) return null;
+  if (code === 'PROVIDER_RESULT_UNKNOWN') {
+    return 'Delivery could not be confirmed. It was not retried automatically to prevent a duplicate.';
+  }
+  if (['PROVIDER_SEND_FAILED', 'AI_PROVIDER_SEND_FAILED'].includes(code)) {
+    return `${message.channel === 'sms' ? 'SMS' : 'Email'} delivery failed. Check the workspace integration before retrying.`;
+  }
+  if (code === 'PLATFORM_AI_PAUSED') {
+    return 'Platform AI is paused. Manual replies are still available.';
+  }
+  if (code === 'WORKSPACE_AI_PAUSED') {
+    return 'AI is paused for this workspace. Manual replies are still available.';
+  }
+  if (code === 'GLOBAL_AUTOMATION_PAUSED') {
+    return 'Global automations are paused. Automated delivery will not run.';
+  }
+  if (code === 'PROVIDER_ID_MISSING') {
+    return 'The provider accepted the message, but delivery tracking is incomplete.';
+  }
+  return 'This message could not be delivered. Review the workspace connection before trying again.';
 }

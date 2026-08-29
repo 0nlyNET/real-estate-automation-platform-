@@ -58,12 +58,23 @@ describe('RestrictedAssistantProvider structured allowlist', () => {
         assistantType: 'client',
         prompt: 'Is my setup ready?',
         allowedTools: ['get_readiness'],
+        context: {
+          assistantScope: 'authenticated_workspace',
+          workspace: { name: 'Lakeview Realty' },
+        },
       }),
     ).resolves.toMatchObject({ response: 'Setup is ready.', actions: [] });
     const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
     expect(body).toMatchObject({ store: false, model: expect.any(String) });
     expect(body).not.toHaveProperty('tools');
-    expect(body.instructions).toContain('Allowed actions: get_readiness');
+    expect(body.instructions).toContain('Allowed actions:');
+    expect(body.instructions).toContain(
+      '- get_readiness: Read the current workspace launch/readiness blockers.',
+    );
+    expect(JSON.parse(body.input).authenticatedContext).toEqual({
+      assistantScope: 'authenticated_workspace',
+      workspace: { name: 'Lakeview Realty' },
+    });
   });
 
   it('returns an exact configuration requirement when the provider key is missing', async () => {

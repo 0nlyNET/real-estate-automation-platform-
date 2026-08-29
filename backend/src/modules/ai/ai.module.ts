@@ -14,6 +14,7 @@ import { Message } from '../messaging/message.entity';
 import { SequencesModule } from '../sequences/sequences.module';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Tenant } from '../tenants/tenant.entity';
+import { User } from '../users/user.entity';
 import { AdminAiController } from './admin-ai.controller';
 import { AiAuditService } from './ai-audit.service';
 import { AiConfigurationService } from './ai-configuration.service';
@@ -58,6 +59,7 @@ import { CalendarModule } from '../calendar/calendar.module';
       Credential,
       TenantSettings,
       Tenant,
+      User,
       LeadHandoff,
       Appointment,
       AssistantRun,

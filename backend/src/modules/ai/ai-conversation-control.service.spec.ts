@@ -19,6 +19,17 @@ function updateQuery() {
   return query;
 }
 
+function aggregateQuery(rows: any[] = []) {
+  const query: any = {
+    select: jest.fn(() => query),
+    addSelect: jest.fn(() => query),
+    where: jest.fn(() => query),
+    groupBy: jest.fn(() => query),
+    getRawMany: jest.fn().mockResolvedValue(rows),
+  };
+  return query;
+}
+
 function build() {
   const tenantId = '00000000-0000-4000-8000-000000000001';
   const userId = '00000000-0000-4000-8000-000000000010';
@@ -59,11 +70,13 @@ function build() {
   const repositories = {
     states: {
       findOne: jest.fn().mockResolvedValue(state),
+      count: jest.fn().mockResolvedValue(0),
       save: jest.fn(async (value) => value),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     },
     settings: {
       findOne: jest.fn().mockResolvedValue(settings),
+      find: jest.fn().mockResolvedValue([settings]),
       save: jest.fn(async (value) => value),
     },
     knowledge: { findOne: jest.fn().mockResolvedValue(knowledge) },
@@ -73,6 +86,8 @@ function build() {
     },
     runs: {
       findOne: jest.fn().mockResolvedValue(null),
+      count: jest.fn().mockResolvedValue(0),
+      createQueryBuilder: jest.fn(() => aggregateQuery()),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     },
     messages: {
@@ -96,7 +111,16 @@ function build() {
       save: jest.fn(async (value) => value),
     },
     handoffs: { findOne: jest.fn().mockResolvedValue(null) },
-    tenants: { find: jest.fn().mockResolvedValue([]) },
+    tenants: {
+      find: jest
+        .fn()
+        .mockResolvedValue([{ id: tenantId, name: 'Lakeview Realty' }]),
+    },
+    users: {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: userId, email: 'owner@example.com' }),
+    },
   };
   const dependencies = {
     locks: {
@@ -136,6 +160,8 @@ function build() {
     dependencies.notifications as any,
     dependencies.aiAudit as any,
     dependencies.audit as any,
+    undefined,
+    repositories.users as any,
   );
   return {
     tenantId,
@@ -153,10 +179,15 @@ function build() {
 
 describe('AI conversation ownership', () => {
   const originalKey = process.env.OPENAI_API_KEY;
+  const originalGlobalPause = process.env.GLOBAL_AUTOMATIONS_DISABLED;
 
   afterEach(() => {
     if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = originalKey;
+    if (originalGlobalPause === undefined)
+      delete process.env.GLOBAL_AUTOMATIONS_DISABLED;
+    else
+      process.env.GLOBAL_AUTOMATIONS_DISABLED = originalGlobalPause;
   });
 
   it('Take Over cancels pending AI replies, stops follow-up, and records human control', async () => {
@@ -308,5 +339,23 @@ describe('AI conversation ownership', () => {
       { ownershipStatus: 'ai_handling' },
       expect.objectContaining({ ownershipStatus: 'paused' }),
     );
+  });
+
+  it('reports the distinct deployment pause and platform AI pause actor', async () => {
+    const fixture = build();
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
+    fixture.platform.paused = true;
+    fixture.platform.reason = 'Controlled emergency test';
+    fixture.platform.updatedById = fixture.userId;
+    fixture.platform.updatedAt = new Date('2026-08-29T12:00:00.000Z');
+
+    await expect(fixture.service.platformOverview()).resolves.toMatchObject({
+      platformPaused: true,
+      platformPauseReason: 'Controlled emergency test',
+      platformPauseUpdatedAt: new Date('2026-08-29T12:00:00.000Z'),
+      platformPauseUpdatedBy: 'owner@example.com',
+      globalAutomationsPaused: true,
+      clients: [expect.objectContaining({ tenantName: 'Lakeview Realty' })],
+    });
   });
 });

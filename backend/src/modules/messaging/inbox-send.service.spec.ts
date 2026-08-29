@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { Lead } from '../leads/lead.entity';
 import { Message } from './message.entity';
 import { InboxSendService } from './inbox-send.service';
@@ -23,11 +24,13 @@ describe('manual inbox channel handling', () => {
       findOne: jest.fn().mockResolvedValue(lead),
     };
     const messages = {
-      findOne: jest.fn().mockResolvedValue(
-        Object.assign(new Message(), {
-          subject: 'Austin homes',
-          providerMessageId: 'sendgrid:inbound-123@example.com',
-        }),
+      findOne: jest.fn(async ({ where }: any) =>
+        where.idempotencyKey
+          ? null
+          : Object.assign(new Message(), {
+              subject: 'Austin homes',
+              providerMessageId: 'sendgrid:inbound-123@example.com',
+            }),
       ),
       create: jest.fn((value) => value),
       save: jest.fn(async (value) => ({
@@ -158,14 +161,21 @@ describe('manual inbox channel handling', () => {
       fullName: 'Jordan Lead',
       tenant: { name: 'Lakeview Realty' },
     });
+    let savedMessage: Message | null = null;
     const messages = {
+      findOne: jest.fn(async ({ where }: any) =>
+        savedMessage && where.idempotencyKey === savedMessage.idempotencyKey
+          ? savedMessage
+          : null,
+      ),
       count: jest.fn().mockResolvedValue(0),
-      save: jest.fn(async (value) =>
-        Object.assign(value, {
+      save: jest.fn(async (value) => {
+        savedMessage = Object.assign(value, {
           id: '00000000-0000-4000-8000-000000000020',
           createdAt: new Date(),
-        }),
-      ),
+        });
+        return savedMessage;
+      }),
     };
     const fetchSpy = jest.spyOn(global, 'fetch');
     const service = new InboxSendService(
@@ -190,11 +200,19 @@ describe('manual inbox channel handling', () => {
         ),
       } as any,
     );
+    const actor = {
+      userId: '00000000-0000-4000-8000-000000000030',
+      role: 'agent' as const,
+    };
+    const requestId = '00000000-0000-4000-8000-000000000040';
     await expect(
-      service.sendSmsToLead(tenantId, lead.id, 'Thanks for replying.', {
-        userId: '00000000-0000-4000-8000-000000000030',
-        role: 'agent',
-      }),
+      service.sendSmsToLead(
+        tenantId,
+        lead.id,
+        'Thanks for replying.',
+        actor,
+        requestId,
+      ),
     ).resolves.toMatchObject({
       status: 'queued',
       message: { status: 'queued', channel: 'sms' },
@@ -206,5 +224,27 @@ describe('manual inbox channel handling', () => {
       }),
     );
     expect(fetchSpy).not.toHaveBeenCalled();
+
+    await expect(
+      service.sendSmsToLead(
+        tenantId,
+        lead.id,
+        'Thanks for replying.',
+        actor,
+        requestId,
+      ),
+    ).resolves.toMatchObject({ status: 'queued', duplicate: true });
+    expect(messages.save).toHaveBeenCalledTimes(1);
+
+    await expect(
+      service.sendSmsToLead(
+        tenantId,
+        lead.id,
+        'This is different text.',
+        actor,
+        requestId,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(messages.save).toHaveBeenCalledTimes(1);
   });
 });

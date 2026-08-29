@@ -89,7 +89,7 @@ assert.match(dashboard, /Action required/, "the priority action list must be the
 assert.match(dashboard, /\.slice\(0, 8\)/, "the overview must cap priority work at eight rows")
 assert.match(dashboard, /recentActivity[\s\S]*\.slice\(0, 5\)/, "recent activity must remain compact")
 assert.match(dashboard, /Platform operating normally/, "the overview must show a compact healthy state")
-assert.match(dashboard, /Global AI automation is paused/, "the overview must surface a global automation pause")
+assert.match(dashboard, /Automated lead AI is paused/, "the overview must surface the platform lead-AI pause")
 assert.match(dashboard, /Message delivery is degraded/, "the overview must surface delivery degradation")
 assert.doesNotMatch(
   dashboard,
