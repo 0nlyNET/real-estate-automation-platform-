@@ -84,12 +84,12 @@ export class MessagingController {
     if (!messageBody) throw new BadRequestException('body is required');
     if (messageBody.length > 1600) throw new BadRequestException('body exceeds 1600 characters');
 
+    // Shared Conversations are intentionally replyable by any authenticated
+    // workspace member with tc-or-higher access. The tenant-scoped lookup is
+    // the security boundary; read_only users remain blocked by @RequireRole.
     const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } });
     if (!lead) throw new ForbiddenException('Lead not found');
     const role = req.user?.role as UserRole;
-    if (!['owner', 'admin'].includes(role) && lead.assignedToUserId !== req.user?.sub) {
-      throw new ForbiddenException('Lead is not assigned to this user');
-    }
 
     const channel = body.channel || (lead.phone ? 'sms' : 'email');
     const recipient = channel === 'sms' ? lead.phone : lead.email;
