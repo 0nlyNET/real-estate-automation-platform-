@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { Pause, Play, UserRoundCheck } from "lucide-react"
 import { PageShell } from "@/app/app/_components/PageShell"
@@ -74,6 +74,7 @@ export default function InboxPage() {
   const [busy, setBusy] = useState(false)
   const [scope, setScope] = useState<"shared" | "mine">("shared")
   const [me, setMe] = useState<Me | null>(null)
+  const messageListRef = useRef<HTMLDivElement>(null)
 
   const loadThreads = useCallback(async () => {
     setErr("")
@@ -143,13 +144,20 @@ export default function InboxPage() {
     return () => window.clearInterval(interval)
   }, [activeLeadId, loadConversation])
 
+  useEffect(() => {
+    const node = messageListRef.current
+    if (!node) return
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" })
+  }, [activeLeadId, messages])
+
   const activeThread = threads.find((item) => item.leadId === activeLeadId)
   const currentEnrollment = enrollments.find((item) => item.status === "active") || enrollments.find((item) => item.status === "paused") || enrollments[0]
   const canManageAny = me?.role === "owner" || me?.role === "admin"
-  const canAct = Boolean(activeThread && (canManageAny || activeThread.isAssignedToViewer))
+  const canManageConversation = Boolean(activeThread && (canManageAny || activeThread.isAssignedToViewer))
+  const canReply = Boolean(activeThread && me && me.role !== "read_only")
 
   async function send() {
-    if (!activeLeadId || !draft.trim()) return
+    if (!activeLeadId || !draft.trim() || !canReply) return
     setBusy(true); setErr(""); setNotice("")
     try {
       await apiFetch("/messaging/send", { method: "POST", body: { leadId: activeLeadId, body: draft.trim(), channel: sendChannel } })
@@ -200,9 +208,9 @@ export default function InboxPage() {
         </Card>
 
         <div className="space-y-4">
-          {activeThread ? <Card><CardContent className="p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{activeThread.leadName}</h2><Badge variant="outline">{activeThread.readiness?.replaceAll("_", " ") || "qualifying"}</Badge>{!canAct ? <Badge variant="secondary">Shared read-only</Badge> : null}</div><p className="mt-2 text-sm">{activeThread.conversationSummary || activeThread.temperatureReason || "Qualification is still in progress."}</p>{activeThread.blocker ? <p className="mt-1 text-sm text-muted-foreground">Current blocker: {activeThread.blocker}</p> : null}</div><div className="flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/leads/${activeThread.leadId}`}><UserRoundCheck className="mr-2 h-4 w-4" />Lead details</Link></Button><Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void requestPersonalFollowUp()}><UserRoundCheck className="mr-2 h-4 w-4" />Add to Today</Button>{currentEnrollment ? currentEnrollment.status === "active" ? <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("pause")}><Pause className="mr-2 h-4 w-4" />Pause follow-up</Button> : <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("resume")}><Play className="mr-2 h-4 w-4" />Resume follow-up</Button> : null}</div></div>{activeThread.talkingPoints?.length ? <details className="mt-3 rounded-lg bg-muted p-3 text-sm"><summary className="cursor-pointer font-medium">Suggested talking points</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{activeThread.talkingPoints.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}</CardContent></Card> : null}
+          {activeThread ? <Card><CardContent className="p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{activeThread.leadName}</h2><Badge variant="outline">{activeThread.readiness?.replaceAll("_", " ") || "qualifying"}</Badge>{!canReply ? <Badge variant="secondary">Read only</Badge> : null}</div><p className="mt-2 text-sm">{activeThread.conversationSummary || activeThread.temperatureReason || "Qualification is still in progress."}</p>{activeThread.blocker ? <p className="mt-1 text-sm text-muted-foreground">Current blocker: {activeThread.blocker}</p> : null}</div><div className="flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/leads/${activeThread.leadId}`}><UserRoundCheck className="mr-2 h-4 w-4" />Lead details</Link></Button><Button size="sm" variant="outline" disabled={busy || !canManageConversation} onClick={() => void requestPersonalFollowUp()}><UserRoundCheck className="mr-2 h-4 w-4" />Add to Today</Button>{currentEnrollment ? currentEnrollment.status === "active" ? <Button size="sm" variant="outline" disabled={busy || !canManageConversation} onClick={() => void changeFollowUp("pause")}><Pause className="mr-2 h-4 w-4" />Pause follow-up</Button> : <Button size="sm" variant="outline" disabled={busy || !canManageConversation} onClick={() => void changeFollowUp("resume")}><Play className="mr-2 h-4 w-4" />Resume follow-up</Button> : null}</div></div>{activeThread.talkingPoints?.length ? <details className="mt-3 rounded-lg bg-muted p-3 text-sm"><summary className="cursor-pointer font-medium">Suggested talking points</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{activeThread.talkingPoints.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}</CardContent></Card> : null}
 
-          {activeLeadId && canAct ? (
+          {activeLeadId && canManageConversation ? (
             <AiConversationControls
               leadId={activeLeadId}
               onChanged={() =>
@@ -216,12 +224,12 @@ export default function InboxPage() {
           <Card>
             <CardHeader><CardTitle>Messages</CardTitle></CardHeader>
             <CardContent className="space-y-3">
-              <div className="h-[420px] space-y-2 overflow-y-auto rounded-lg border p-3">
+              <div ref={messageListRef} className="h-[420px] space-y-2 overflow-y-auto rounded-lg border p-3">
                 {messages.map((message) => <div key={message.id} className={`max-w-[88%] rounded-lg px-3 py-2 text-sm ${message.direction === "outbound" ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}><div>{message.body}</div><div className={`mt-1 text-[11px] ${message.direction === "outbound" ? "text-primary-foreground/75" : "text-muted-foreground"}`}>{message.direction === "outbound" ? `${message.authorship === "ai" ? "AI-generated" : message.authorship === "template" ? "Approved automation" : "Human-written"} · ` : ""}{statusLabel(message.status)}{message.providerStatus && message.providerStatus !== message.status ? ` · ${message.providerStatus.replaceAll("_", " ")}` : ""} · {new Date(message.createdAt).toLocaleString()}</div>{message.status === "failed" ? <div className="mt-1 text-xs font-medium">This message did not send. {message.errorMessage || "Try again or contact the lead another way."}</div> : null}{message.status === "blocked" || message.status === "skipped" ? <div className="mt-1 text-xs font-medium">Human review is required before this conversation can continue.</div> : null}</div>)}
                 {!messages.length ? <div className="p-6 text-center text-sm text-muted-foreground">Choose a conversation to see its messages.</div> : null}
               </div>
-              <div className="flex gap-2"><select aria-label="Reply channel" className="h-10 rounded-md border bg-background px-3 text-sm" value={sendChannel} disabled={!canAct} onChange={(event) => setSendChannel(event.target.value as "sms" | "email")}><option value="sms" disabled={!activeThread?.leadPhone}>Text</option><option value="email" disabled={!activeThread?.leadEmail}>Email</option></select><Input value={draft} disabled={!canAct} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder={canAct ? (sendChannel === "email" ? "Write an email reply…" : "Write a text message…") : "Assign this conversation to reply"} aria-label="Message" /><Button disabled={!canAct || !activeLeadId || !draft.trim() || busy || (sendChannel === "sms" ? !activeThread?.leadPhone : !activeThread?.leadEmail)} onClick={() => void send()}>{busy ? "Sending…" : "Send"}</Button></div>
-              <p className="text-xs text-muted-foreground">Manual replies use the selected channel and switch the conversation to human handling.</p>
+              <div className="flex gap-2"><select aria-label="Reply channel" className="h-10 rounded-md border bg-background px-3 text-sm" value={sendChannel} disabled={!canReply} onChange={(event) => setSendChannel(event.target.value as "sms" | "email")}><option value="sms" disabled={!activeThread?.leadPhone}>Text</option><option value="email" disabled={!activeThread?.leadEmail}>Email</option></select><Input value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} placeholder={canReply ? (sendChannel === "email" ? "Write an email reply…" : "Write a text message…") : "Your role is read only"} aria-label="Message" /><Button disabled={!canReply || !activeLeadId || !draft.trim() || busy || (sendChannel === "sms" ? !activeThread?.leadPhone : !activeThread?.leadEmail)} onClick={() => void send()}>{busy ? "Sending…" : "Send"}</Button></div>
+              <p className="text-xs text-muted-foreground">Any workspace member with reply access can respond to shared conversations. Manual replies use the selected channel and switch the conversation to human handling.</p>
             </CardContent>
           </Card>
         </div>
