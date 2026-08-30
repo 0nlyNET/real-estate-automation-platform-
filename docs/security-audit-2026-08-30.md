@@ -9,8 +9,8 @@ Scope: active Next.js frontend, NestJS API, archived admin prototype, PostgreSQL
 Critical vulnerabilities: 0  
 High: 3  
 Medium: 4  
-Low: 9  
-Fixed: 16  
+Low: 10
+Fixed: 17
 Remaining: 6 external configuration/verification gates
 
 The three high findings were: team-member credentials/invitation material returned to the administrator's browser; SSRF through a browser-supplied Web Push endpoint; and a high-severity vulnerable dependency chain in the archived admin prototype. All three are fixed. No confirmed critical or high code vulnerability remains. The six remaining gates require access to production provider dashboards or infrastructure and are not represented as completed.
@@ -92,6 +92,7 @@ Major trust boundaries:
 | L-07 | LOW | Root status exposed service name and process uptime. | Root and public health are now minimal status responses. |
 | L-08 | LOW | Email verification temporarily accepted a legacy plaintext-token database value. | Removed plaintext fallback; only the SHA-256 token hash is queried; expiry/single-use behavior retained. |
 | L-09 | LOW | Compiled frontend advertised `X-Powered-By: Next.js`. | Disabled the framework fingerprint and rechecked the standalone response. |
+| L-10 | LOW | The same-origin Next.js API proxy discarded the API's `Cache-Control: no-store`, allowing Vercel to label API responses `public, max-age=0, must-revalidate`. | The proxy now sets `private, no-store, max-age=0`, `Pragma: no-cache`, and an expired timestamp on every success and error response; source regression and live Vercel response checks cover the boundary. |
 
 ## Complete 1–50 evidence matrix
 
@@ -142,7 +143,7 @@ Major trust boundaries:
 | 43 | Monitoring/alerting | REQUIRES EXTERNAL CONFIGURATION | Code emits structured failures, health/readiness, operations tasks, and usage/cost data, but cannot verify external uptime/log/alert delivery. | Detailed monitor token and setup checker requirement added. | Configure and test Vercel/Railway/provider/AI cost alerts externally. |
 | 44 | Backup/restore plan | REQUIRES EXTERNAL CONFIGURATION | Runbooks and readiness evidence fields exist; no provider dashboard access proved backup schedule, retention, encryption, or restore. | Existing disaster-recovery runbook and activation blockers retained. | Enable PITR/backups and perform isolated restore drill externally. |
 | 45 | Public internal dashboards | FIXED | Active admin pages and operations APIs are protected; no public metrics/queue/DB/docs dashboard. Detailed health was public. | Protected detailed health and minimized public endpoints. | Frontend logged-out redirect, admin JWT/role E2E, route/interface search. |
-| 46 | Missing security headers | FIXED | Frontend had headers; API did not have a central policy. | Added API headers and removed frontend framework fingerprint. | Actual production-like frontend and API responses inspected. |
+| 46 | Missing security headers | FIXED | Frontend had headers; API did not have a central policy, and the frontend proxy dropped the API's no-store policy. | Added API headers, removed frontend framework fingerprint, and explicitly disabled browser/CDN storage on every proxied API response. | Actual local Nest/Next responses and deployed Vercel frontend/API proxy responses inspected. |
 | 47 | Cookie security | PASS | Session cookies are HttpOnly, Secure in production, SameSite=Lax, Path `/`, bounded expiry; primary impersonation cookie is equally protected. | Added Origin defense; no sensitive data placed in cookie beyond signed token. | Cookie source/tests and real login/reset workflow tests. |
 | 48 | Unencrypted sensitive data | REQUIRES EXTERNAL CONFIGURATION | Code uses HTTPS provider endpoints, database TLS for nonlocal URLs, and established AES-GCM credential/token encryption. Provider disk/backups/KMS and public TLS configuration cannot be verified locally. | Enforced production secrets, encryption key shape, and DB TLS config; no custom crypto introduced. | Crypto round-trips/readiness pass; verify provider encryption, certificates, and key rotation externally. |
 | 49 | Tenant isolation | PASS | Tenant context is derived server-side and propagated through API, services, repositories, jobs, AI, communications, calendars, CRM, integrations, and billing. Platform operator cross-tenant access is explicit and separately guarded. | Invitation and AI confirmation fixes close related cross-user/tool boundaries. | Tenant A/B read/write/search/action substitutions across user/team/lead/thread/sequence/integration/AI paths reject; details below. |
@@ -233,6 +234,7 @@ Breaking major upgrades (Nest 12, TypeScript 7, Zod 4, and unrelated UI componen
 | CORS | Exact frontend origin, credentials enabled, explicit method/header allowlist; attacker preflight receives no allow-origin header. |
 | Cookies | HttpOnly; Secure in production; SameSite=Lax; Path `/`; bounded lifetime; signed token only; Origin protection on mutations. |
 | Security headers | Active frontend and API have CSP/HSTS/nosniff/frame/referrer/permissions policies; framework fingerprint disabled. |
+| API response caching | Same-origin API proxy forces `private, no-store, max-age=0`, `Pragma: no-cache`, and expired responses for successes and errors. |
 | Rate limiting | Global plus tighter auth/public/intake/AI/SendGrid routes; actual 429 verified. Multi-instance global enforcement depends on provider/WAF or shared limiter. |
 | TLS | App/provider URLs enforce HTTPS and nonlocal database config enables TLS. Production certificate/provider network state needs external confirmation. |
 | Source maps | No active public maps in built frontend. |
@@ -240,20 +242,23 @@ Breaking major upgrades (Nest 12, TypeScript 7, Zod 4, and unrelated UI componen
 | Audit logs | Mutation interceptor plus explicit auth, admin, AI, billing, provider, messaging, calendar, automation, and lifecycle events; secrets excluded. |
 | Monitoring | Minimal liveness and protected detailed readiness implemented; external monitors/alerts not verified. |
 | Backups | Runbook/readiness gates exist; provider schedule/PITR/restore evidence not verified. |
+| Deployment | Final application tree passed GitHub Actions, deployed successfully to Railway and Vercel, and the canonical Vercel domain passed public, protected-route, header, liveness, and protected-readiness smoke checks. Credentialed provider workflows still require controlled staging identities. |
 
 ## TEST RESULTS
 
-These local results are from the final verification run associated with this report; GitHub Actions provides the PostgreSQL service that is unavailable in the local runner.
+Local results were repeated against the final application tree. GitHub Actions run `33287296549` supplied PostgreSQL and independently exercised the complete repository; Vercel deployment `dpl_22CKgWbdg3DzpC2YPx8F5KMTju14` and Railway reported successful production deployments for the verified application tree.
 
 - Build: backend Nest build PASS; active frontend Next production build PASS (50 routes); archived admin Next build PASS (5 routes).
 - Lint: backend PASS with 0 errors; admin PASS with 0 errors; active frontend PASS with 0 errors and 46 pre-existing warnings.
-- Unit: backend combined Jest suite PASS: 114 of 116 suites passed, 2 PostgreSQL-only suites skipped locally; 566 of 571 tests passed, 5 PostgreSQL-only tests skipped locally; 0 failures.
+- Unit: local backend combined Jest suite PASS: 114 of 116 suites passed, 2 PostgreSQL-only suites skipped locally; 566 of 571 tests passed, 5 PostgreSQL-only tests skipped locally; 0 failures. GitHub PostgreSQL result: 116 of 116 suites and 571 of 571 tests passed.
 - Integration: client operations workflow, messaging-to-AI/email, SendGrid HTTP, admin authentication, and production HTTP boundary PASS locally.
 - E2E: compiled standalone frontend root returned 200 with headers; unauthenticated protected route returned 307 `/login`; backend real HTTP auth/CORS/CSRF/error/rate-limit tests PASS.
 - Security tests: auth/role/IDOR/tenant/JWT/CSRF/CORS/rate/SSRF/SQL/XSS/webhook/billing/AI boundaries PASS; real PostgreSQL-only cases execute in GitHub CI.
 - Dependency scan: six production/full npm audits PASS with 0 vulnerabilities.
 - Secret scan: PASS; 720 nonignored repository files and reachable Git history, no high-confidence secret.
 - Production artifact scan: PASS; 54 active public static files, no source maps or server-secret indicators.
+- GitHub Actions: PASS; security, backend, frontend, and archived-admin jobs all succeeded; backend included both PostgreSQL-only suites; all three package audits reported 0 vulnerabilities.
+- Deployment/smoke: PASS for build/deploy and unauthenticated boundaries; Railway and Vercel succeeded, `www.realtytechai.app` returned 200 with the configured headers, `/app/dashboard` failed closed to login, public liveness returned 200/minimal data, and detailed readiness returned 401 without its monitor token.
 
 ## EXTERNAL ACTIONS I MUST COMPLETE
 
@@ -267,6 +272,6 @@ The following were not and cannot be truthfully completed from repository access
 6. **VERIFY** platform TLS certificates, database transport policy, provider encryption at rest, backup encryption/isolation, secret-manager access policy, and encryption-key rotation/recovery procedures.
 7. **CONFIGURE/VERIFY** each live webhook URL and signing secret/channel token in Stripe, Twilio, SendGrid, Meta, Google, Microsoft, Calendly, and Realtor.com; send provider test events and confirm duplicate delivery is idempotent.
 8. **ENFORCE** GitHub branch protection for `main`, required passing CI checks, restricted write access, Dependabot/security alerts, and repository secret scanning if the organization plan supports it.
-9. **DEPLOY AND SMOKE TEST** the audited `main` commit in production-like staging with automation/providers safely controlled, then run login, client/admin authorization, lead intake, message, calendar, AI confirmation, billing webhook, readiness, and cross-tenant negative cases against that deployed environment.
+9. **COMPLETE CREDENTIALED STAGING UAT** with synthetic Tenant A/B identities and provider test accounts: login, client/admin authorization, lead intake, message, calendar, AI confirmation, billing webhook, and cross-tenant negative cases. The deployed unauthenticated, header, liveness, and protected-readiness smoke checks are complete; real credentials or outbound actions were intentionally not used during this audit.
 
 No credential rotation is specifically required by a discovered exposure in this audit. Continue normal scheduled rotation and immediately rotate any provider credential if an external dashboard/history scan finds evidence unavailable to this repository audit.

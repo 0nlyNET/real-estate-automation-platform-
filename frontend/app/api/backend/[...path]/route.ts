@@ -34,6 +34,12 @@ async function forward(
     const value = upstream.headers.get(name)
     if (value) responseHeaders.set(name, value)
   }
+  // API responses can contain tenant, authentication, billing, or provider
+  // state. Never let a browser, CDN, or shared proxy retain them, including
+  // errors and unauthenticated responses.
+  responseHeaders.set("cache-control", "private, no-store, max-age=0")
+  responseHeaders.set("pragma", "no-cache")
+  responseHeaders.set("expires", "0")
   const getSetCookie = (upstream.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie
   const cookies = getSetCookie ? getSetCookie.call(upstream.headers) : []
   for (const cookie of cookies) responseHeaders.append("set-cookie", cookie)

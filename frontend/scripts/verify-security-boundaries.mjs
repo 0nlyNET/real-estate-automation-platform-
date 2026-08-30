@@ -46,6 +46,13 @@ for (const payload of payloads) {
 const proxySource = await readFile(path.join("app", "api", "backend", "[...path]", "route.ts"), "utf8")
 assert.match(proxySource, /"origin"/, "The same-origin API proxy must forward Origin for backend CSRF enforcement")
 assert.match(proxySource, /redirect:\s*"manual"/, "The API proxy must not automatically follow backend redirects")
+assert.match(
+  proxySource,
+  /responseHeaders\.set\("cache-control", "private, no-store, max-age=0"\)/,
+  "The API proxy must prevent browser and shared-cache storage of tenant responses",
+)
+assert.match(proxySource, /responseHeaders\.set\("pragma", "no-cache"\)/)
+assert.match(proxySource, /responseHeaders\.set\("expires", "0"\)/)
 
 console.log(
   `Frontend security verification passed: ${sourceFiles.length} source files checked, React escaped 3 XSS payloads, and proxy controls are present.`,
