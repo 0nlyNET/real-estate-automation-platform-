@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: real_estate
+      POSTGRES_USER: ${LOCAL_DB_USER:-realtytechai}
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:?Set LOCAL_DB_PASSWORD in a root .env file}
+      POSTGRES_DB: ${LOCAL_DB_NAME:-real_estate}
     ports:
-      - "55432:5432"
+      - "127.0.0.1:${LOCAL_DB_PORT:-55432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d real_estate"]
+      test: ["CMD-SHELL", "pg_isready -U ${LOCAL_DB_USER:-realtytechai} -d ${LOCAL_DB_NAME:-real_estate}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -24,7 +24,11 @@ services:
     environment:
       NODE_ENV: development
       PORT: 4000
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/real_estate
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${LOCAL_DB_USER:-realtytechai}
+      DB_PASSWORD: ${LOCAL_DB_PASSWORD:?Set LOCAL_DB_PASSWORD in a root .env file}
+      DB_NAME: ${LOCAL_DB_NAME:-real_estate}
       TYPEORM_SYNC: ${TYPEORM_SYNC:-false}
       RUN_MIGRATIONS: "true"
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in a root .env file}
@@ -50,6 +54,7 @@ services:
       CALENDLY_WEBHOOK_URL: ${CALENDLY_WEBHOOK_URL:-}
       GLOBAL_AUTOMATIONS_DISABLED: ${GLOBAL_AUTOMATIONS_DISABLED:-false}
       BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-0}
+      HEALTH_CHECK_TOKEN: ${HEALTH_CHECK_TOKEN:-}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
       SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL:-}
       SENDGRID_FROM_NAME: ${SENDGRID_FROM_NAME:-RealtyTechAI}

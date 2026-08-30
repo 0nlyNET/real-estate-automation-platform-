@@ -22,7 +22,7 @@ import { ComplianceService } from '../compliance/compliance.service';
 import { hasAtLeastRole, UserRole } from '../../common/rbac';
 import { EntitlementService } from '../entitlements/entitlement.service';
 import { OperationsService } from '../operations/operations.service';
-import { operationalEvent } from '../../common/operational-log';
+import { operationalEvent, sanitizeOperationalText } from '../../common/operational-log';
 
 const CLAIM_LIMIT = 25;
 const LEASE_SECONDS = 120;
@@ -165,7 +165,9 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
         }),
       );
     } catch (error: any) {
-      this.logger.warn(`Lead ${lead.id} was not enrolled: ${error?.message ?? error}`);
+      this.logger.warn(
+        `Lead ${lead.id} was not enrolled: ${sanitizeOperationalText(error?.message ?? error)}`,
+      );
       await this.logLeadEvent(lead, 'automation_blocked', {
         reason: error?.response?.reasons || error?.message || 'Not entitled',
       });
@@ -787,7 +789,9 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
         this.leadEventRepository.create({ leadId: lead.id, lead, eventType, metadata } as any),
       );
     } catch (error: any) {
-      this.logger.error(`Could not record ${eventType} for lead ${lead.id}: ${error?.message ?? error}`);
+      this.logger.error(
+        `Could not record ${eventType} for lead ${lead.id}: ${sanitizeOperationalText(error?.message ?? error)}`,
+      );
     }
   }
 }

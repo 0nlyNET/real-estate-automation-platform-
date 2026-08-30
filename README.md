@@ -46,7 +46,7 @@ Requirements: Docker with Compose.
    docker compose up --build
    ```
 
-3. Open `http://localhost:3000`. API liveness is `http://localhost:4000/health/live`; full readiness is `http://localhost:4000/health/readiness`.
+3. Open `http://localhost:3000`. API liveness is `http://localhost:4000/health/live`; full readiness is `http://localhost:4000/health/readiness` (in production, send `x-health-check-token: <HEALTH_CHECK_TOKEN>`).
 
 To create the first verified owner, add `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` to the root `.env`, then run `docker compose exec backend npm run seed`. Add the same email to `PLATFORM_ADMIN_EMAILS` only if that account should manage every tenant.
 
@@ -101,7 +101,7 @@ See `backend/.env.example` and `frontend/.env.example`. At minimum, configure:
 - one VAPID key pair (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT`) for admin phone alerts
 - `OPERATIONAL_RETENTION_DAYS=90` unless a reviewed 30–365 day policy is required
 
-Production startup validates critical security/database configuration, and `/health/readiness` checks the database, schema, pending migrations, system email, billing configuration, worker mode, encryption, and legacy plaintext credential count without exposing secrets. Terminate HTTPS at the hosting platform, restrict database access, run migrations as a release step, and configure backups, logs, alerts, and secret rotation before handling customer data.
+Production startup validates critical security/database configuration. The protected `/health/readiness` endpoint checks the database, schema, pending migrations, system email, billing configuration, worker mode, encryption, and legacy plaintext credential count; production monitors must send the `HEALTH_CHECK_TOKEN` in the `x-health-check-token` header. Terminate HTTPS at the hosting platform, restrict database access, run migrations with a separate release credential where available, and configure backups, logs, alerts, and secret rotation before handling customer data.
 
 Before accepting a pilot payment, complete:
 

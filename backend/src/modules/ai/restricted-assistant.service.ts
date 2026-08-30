@@ -56,6 +56,7 @@ const CLIENT_TOOLS = [
   'resume_automation',
 ] as const;
 const CLIENT_MUTATIONS = new Set<string>([
+  'retry_setup_reconciliation',
   'update_business_hours',
   'update_booking_link',
   'pause_automation',
@@ -422,7 +423,7 @@ export class RestrictedAssistantService {
       run.sanitizedError = errorMessage(error);
       await this.runs.save(run).catch((saveError) => {
         this.logger.error(
-          `Assistant failure state could not be saved: ${saveError?.message || saveError}`,
+          `Assistant failure state could not be saved: ${sanitizeOperationalText(saveError?.message || saveError)}`,
         );
       });
       await this.recordAuditSafely(run, actor, 'assistant.request_failed');
@@ -916,7 +917,7 @@ export class RestrictedAssistantService {
       // visible to operators, but must not turn a completed provider/tool flow
       // into a red error for the user.
       this.logger.error(
-        `Assistant audit write failed for run ${run.id}: ${error?.message || error}`,
+        `Assistant audit write failed for run ${run.id}: ${sanitizeOperationalText(error?.message || error)}`,
       );
     }
   }
@@ -1002,7 +1003,7 @@ export class RestrictedAssistantService {
         });
       } catch (error: any) {
         this.logger.warn(
-          `Assistant history could not be decrypted for run ${row.id}: ${error?.message || error}`,
+          `Assistant history could not be decrypted for run ${row.id}: ${sanitizeOperationalText(error?.message || error)}`,
         );
       }
     }
@@ -1035,7 +1036,7 @@ export class RestrictedAssistantService {
         });
       } catch (error: any) {
         this.logger.warn(
-          `Assistant history could not be decrypted for run ${row.id}: ${error?.message || error}`,
+          `Assistant history could not be decrypted for run ${row.id}: ${sanitizeOperationalText(error?.message || error)}`,
         );
       }
     }

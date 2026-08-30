@@ -1,11 +1,10 @@
-import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsOptional, IsUUID } from 'class-validator';
 import { UserRole } from '../../common/rbac';
 
 export class CreateTeamUserDto {
   @IsEmail() email!: string;
   @IsOptional() @IsIn(['admin', 'agent', 'tc', 'read_only']) role?: UserRole;
   @IsOptional() @IsUUID() teamId?: string | null;
-  @IsOptional() @IsString() @MinLength(12) tempPassword?: string;
 }
 
 export class UpdateUserRoleDto {

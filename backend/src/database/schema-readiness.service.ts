@@ -5,6 +5,7 @@ import {
   inspectDatabaseSchema,
   SchemaReadinessReport,
 } from "./schema-readiness";
+import { operationalEvent } from '../common/operational-log';
 
 @Injectable()
 export class SchemaReadinessService implements OnApplicationBootstrap {
@@ -49,8 +50,9 @@ export class SchemaReadinessService implements OnApplicationBootstrap {
       );
     } catch (error: any) {
       this.logger.error(
-        `Database schema inspection failed: ${error?.message || error}`,
-        error?.stack,
+        operationalEvent('database_schema_inspection_failed', {
+          error: error?.message || error,
+        }),
       );
     }
   }

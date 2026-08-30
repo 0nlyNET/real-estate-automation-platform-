@@ -56,6 +56,37 @@ const NOTIFICATION_CATEGORIES = new Set<NotificationCategory>([
 const NOTIFICATION_SEVERITIES = new Set<NotificationSeverity>([
   'info', 'success', 'warning', 'critical',
 ]);
+const WEB_PUSH_HOST_SUFFIXES = [
+  'fcm.googleapis.com',
+  'push.services.mozilla.com',
+  'updates.push.services.mozilla.com',
+  'notify.windows.com',
+  'push.apple.com',
+];
+
+export function assertSafePushEndpoint(value: string) {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(value);
+  } catch {
+    throw new BadRequestException('Invalid push subscription endpoint');
+  }
+  const hostname = endpoint.hostname.toLowerCase();
+  const allowed = WEB_PUSH_HOST_SUFFIXES.some(
+    (suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`),
+  );
+  if (
+    endpoint.protocol !== 'https:' ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.port ||
+    !allowed
+  ) {
+    throw new BadRequestException('Push subscription endpoint is not trusted');
+  }
+  endpoint.hash = '';
+  return endpoint.toString();
+}
 
 @Injectable()
 export class NotificationsService {
@@ -399,14 +430,8 @@ export class NotificationsService {
     if (!this.pushConfigured) {
       throw new BadRequestException('Device push is not configured');
     }
-    let endpoint: URL;
-    try {
-      endpoint = new URL(input.endpoint);
-    } catch {
-      throw new BadRequestException('Invalid push subscription endpoint');
-    }
+    const endpoint = assertSafePushEndpoint(input.endpoint);
     if (
-      endpoint.protocol !== 'https:' ||
       typeof input.keys.p256dh !== 'string' ||
       typeof input.keys.auth !== 'string' ||
       !input.keys.p256dh ||
@@ -417,12 +442,12 @@ export class NotificationsService {
       throw new BadRequestException('Push subscription is incomplete');
     }
     const existing = await this.subscriptions.findOne({
-      where: { endpoint: input.endpoint },
+      where: { endpoint },
     });
     if (existing && existing.recipientUserId !== recipientUserId) {
       throw new BadRequestException('Push subscription belongs to another user');
     }
-    const row = existing || this.subscriptions.create({ endpoint: input.endpoint });
+    const row = existing || this.subscriptions.create({ endpoint });
     row.recipientUserId = recipientUserId;
     row.p256dhKey = input.keys.p256dh;
     row.authKey = input.keys.auth;

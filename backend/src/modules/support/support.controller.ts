@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SupportService } from './support.service';
 import { AccountRequestDto, CreateSupportTicketDto, UpdateSupportTicketDto } from './support.dto';
@@ -11,8 +11,14 @@ export class SupportController {
 
   @UseGuards(JwtAuthGuard, PlatformOperatorGuard)
   @Get('admin/tickets')
-  listTickets(@Query('status') status?: any) {
-    return this.support.listTickets(status);
+  listTickets(@Query('status') status?: string) {
+    if (
+      status &&
+      !['open', 'acknowledged', 'resolved', 'closed'].includes(status)
+    ) {
+      throw new BadRequestException('Invalid support ticket status');
+    }
+    return this.support.listTickets(status as any);
   }
 
   @UseGuards(JwtAuthGuard, PlatformOperatorGuard)

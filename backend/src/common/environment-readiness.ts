@@ -6,6 +6,7 @@ const REQUIRED_PRODUCTION_VALUES = [
   'PLATFORM_ADMIN_EMAILS',
   'GLOBAL_AUTOMATIONS_DISABLED',
   'BILLING_GRACE_DAYS',
+  'HEALTH_CHECK_TOKEN',
   'TWILIO_WEBHOOK_URL',
   'TWILIO_STATUS_CALLBACK_URL',
   'SENDGRID_SENDING_DOMAIN',
@@ -141,6 +142,12 @@ function productionPlatformIssues(
   const graceDays = Number(process.env.BILLING_GRACE_DAYS);
   if (!Number.isInteger(graceDays) || graceDays < 0 || graceDays > 14) {
     issues.push('BILLING_GRACE_DAYS must be an integer from 0 through 14');
+  }
+  if (
+    requiredValues.includes('HEALTH_CHECK_TOKEN') &&
+    String(process.env.HEALTH_CHECK_TOKEN || '').length < 32
+  ) {
+    issues.push('HEALTH_CHECK_TOKEN must contain at least 32 characters');
   }
   return issues;
 }

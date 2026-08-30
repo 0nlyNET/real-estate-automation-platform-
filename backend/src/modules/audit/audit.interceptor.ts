@@ -16,6 +16,7 @@ import {
   of,
 } from 'rxjs';
 import { AuditService } from './audit.service';
+import { operationalEvent } from '../../common/operational-log';
 
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const OPERATIONAL_PATHS = new Set(['/presence/heartbeat']);
@@ -91,7 +92,11 @@ export class AuditInterceptor implements NestInterceptor {
           }),
         ).pipe(
           catchError((error) => {
-            this.logger.error(`Audit write failed: ${error?.message || error}`);
+            this.logger.error(
+              operationalEvent('audit_write_failed', {
+                error: error?.message || error,
+              }),
+            );
             return of(null);
           }),
           map(() => notification),

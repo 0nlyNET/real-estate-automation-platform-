@@ -33,7 +33,9 @@ export class DurableJobsService implements OnModuleInit, OnModuleDestroy {
     // in PostgreSQL and can be claimed by another instance after a restart.
     this.timer = setInterval(
       () => void this.runDue().catch((error) =>
-        this.logger.error(`Durable job worker failed: ${error?.message || error}`)),
+        this.logger.error(
+          `Durable job worker failed: ${sanitizeOperationalText(error?.message || error)}`,
+        )),
       5_000,
     );
     this.timer.unref();

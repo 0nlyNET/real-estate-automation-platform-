@@ -7,6 +7,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
 import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -39,11 +40,13 @@ export class ClientAssistantController {
   }
 
   @Post()
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   ask(@Req() req: any, @Body() body: AskRestrictedAssistantDto) {
     return this.assistant.askClient(actor(req), body.prompt, body.requestId);
   }
 
   @Post(':runId/confirm')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   confirm(@Req() req: any, @Param('runId') runId: string) {
     return this.assistant.confirmClient(actor(req), runId);
   }
@@ -60,6 +63,7 @@ export class OperationsAssistantController {
   }
 
   @Post()
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   ask(@Req() req: any, @Body() body: AskRestrictedAssistantDto) {
     return this.assistant.askOperations(
       actor(req),
@@ -69,6 +73,7 @@ export class OperationsAssistantController {
   }
 
   @Post(':runId/confirm')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseGuards(PlatformAdminGuard)
   confirm(@Req() req: any, @Param('runId') runId: string) {
     return this.assistant.confirmOperations(actor(req), runId);

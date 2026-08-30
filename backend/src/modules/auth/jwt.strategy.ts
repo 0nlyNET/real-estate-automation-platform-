@@ -5,6 +5,7 @@ import { isPlatformAdminEmail, requireJwtSecret, resolvePlatformRole } from '../
 import { UsersService } from '../users/users.service';
 import type { Request } from 'express';
 import { readCookie, SESSION_COOKIE } from './session-cookie';
+import { JWT_VERIFY_OPTIONS } from './auth-token';
 
 type JwtPayload = {
   sub?: string;
@@ -26,6 +27,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       ]),
       ignoreExpiration: false,
       secretOrKey: requireJwtSecret(),
+      ...JWT_VERIFY_OPTIONS,
     });
   }
 

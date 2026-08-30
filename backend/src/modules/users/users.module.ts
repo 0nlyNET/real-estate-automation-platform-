@@ -7,16 +7,18 @@ import { CommonModule } from '../../common/common.module';
 import { TenantsModule } from '../tenants/tenants.module';
 import { Team } from '../teams/team.entity';
 import { MailModule } from '../../mail/mail.module';
+import { AccountInvitation } from '../auth/account-invitation.entity';
+import { TeamInvitationsService } from './team-invitations.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, Team]),
+    TypeOrmModule.forFeature([User, Team, AccountInvitation]),
     CommonModule,
     TenantsModule,
     MailModule,
   ],
   controllers: [UsersController],
-  providers: [UsersService],
+  providers: [UsersService, TeamInvitationsService],
   exports: [UsersService, TypeOrmModule],
 })
 export class UsersModule {}

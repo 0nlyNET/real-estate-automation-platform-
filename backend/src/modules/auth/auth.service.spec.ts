@@ -210,7 +210,7 @@ describe('AuthService single-use invitations', () => {
       ...((overrides.invitation as object) || {}),
     };
     const invitationQuery: any = {
-      setLock: jest.fn().mockReturnThis(), leftJoinAndSelect: jest.fn().mockReturnThis(),
+      setLock: jest.fn().mockReturnThis(), innerJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(), getOne: jest.fn(async () => invitation),
     };
     const revokeQuery: any = {

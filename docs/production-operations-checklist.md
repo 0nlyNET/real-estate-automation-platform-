@@ -6,7 +6,7 @@ Never paste secrets, access tokens, message bodies containing personal data, or 
 
 ## Every business day during the pilot
 
-- [ ] `GET <api-origin>/health/readiness` returns HTTP 200 `status: ready`; investigate database, schema, pending migrations, production config, system email, billing, worker, or plaintext-credential failure before allowing new work.
+- [ ] `GET <api-origin>/health/readiness` with `x-health-check-token: <HEALTH_CHECK_TOKEN>` returns HTTP 200 `status: ready`; investigate database, schema, pending migrations, production config, system email, billing, worker, or plaintext-credential failure before allowing new work.
 - [ ] Admin → Operations has no unowned critical/high-priority application, integration, messaging, payment, support, cancellation, deletion, compliance, or onboarding task.
 - [ ] Stripe Workbench has no unreviewed webhook failure and local `stripe_webhook_events` failed rows are reconciled.
 - [ ] Twilio Messaging Logs delivery errors reconcile to local Failed messages and operations tasks.

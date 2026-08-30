@@ -49,7 +49,10 @@ describe('admin notifications', () => {
     const subscriptions = {
       count: jest.fn().mockResolvedValue(0),
       find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => ({ ...value })),
       save: jest.fn(async (value) => value),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
     const preference = {
       recipientUserId: 'user-owner', inAppEnabled: true, pushEnabled: true,
@@ -161,6 +164,50 @@ describe('admin notifications', () => {
     expect(subscription).toMatchObject({ active: false, failureCount: 1 });
     expect(subscription.revokedAt).toBeInstanceOf(Date);
     expect(subscriptions.save).toHaveBeenCalledWith(subscription);
+  });
+
+  it('rejects internal and unapproved push endpoints before they can be fetched', async () => {
+    process.env.VAPID_SUBJECT = 'mailto:security@example.com';
+    process.env.VAPID_PUBLIC_KEY =
+      'BPPG2fcmvRLzseMe58txhiEzWtGSc-L4PLyKlp6N2Y2OfZYPNmFECkQt0Tq_jXxihaEY8ayQPcX8kO7xYE4ocDw';
+    process.env.VAPID_PRIVATE_KEY =
+      '2b7tEAwUK1yGvPXSGJvhJmE79TEGjCIi74D6DHASlE0';
+    const { service, subscriptions } = setup();
+    const keys = { p256dh: 'public-key', auth: 'auth-key' };
+
+    for (const endpoint of [
+      'https://127.0.0.1/admin',
+      'https://169.254.169.254/latest/meta-data',
+      'https://internal.service.local/push',
+      'https://attacker.example/push',
+      'https://fcm.googleapis.com.evil.example/push',
+    ]) {
+      await expect(
+        service.registerSubscription('user-owner', { endpoint, keys }),
+      ).rejects.toBeInstanceOf(Error);
+    }
+    expect(subscriptions.save).not.toHaveBeenCalled();
+  });
+
+  it('accepts a canonical endpoint from an approved Web Push provider', async () => {
+    process.env.VAPID_SUBJECT = 'mailto:security@example.com';
+    process.env.VAPID_PUBLIC_KEY =
+      'BPPG2fcmvRLzseMe58txhiEzWtGSc-L4PLyKlp6N2Y2OfZYPNmFECkQt0Tq_jXxihaEY8ayQPcX8kO7xYE4ocDw';
+    process.env.VAPID_PRIVATE_KEY =
+      '2b7tEAwUK1yGvPXSGJvhJmE79TEGjCIi74D6DHASlE0';
+    const { service, subscriptions } = setup();
+    await expect(
+      service.registerSubscription('user-owner', {
+        endpoint: 'https://fcm.googleapis.com/fcm/send/device-id#fragment',
+        keys: { p256dh: 'public-key', auth: 'auth-key' },
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(subscriptions.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: 'https://fcm.googleapis.com/fcm/send/device-id',
+        recipientUserId: 'user-owner',
+      }),
+    );
   });
 
   it('scopes notification reads and applies category, severity, and read filters', async () => {

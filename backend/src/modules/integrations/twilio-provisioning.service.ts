@@ -290,7 +290,9 @@ export class TwilioProvisioningService {
       row.leaseOwner = null;
       row.leaseExpiresAt = null;
       await this.resources.save(row);
-      this.logger.error(`Twilio tenant provisioning failed for ${tenantId}: ${row.lastError}`);
+      this.logger.error(
+        `Twilio tenant provisioning failed for ${tenantId}: ${sanitizeOperationalText(row.lastError)}`,
+      );
       throw error;
     }
   }

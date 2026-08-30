@@ -32,6 +32,16 @@ describe("database migration startup policy", () => {
     process.env.NODE_ENV = "production";
     process.env.RUN_MIGRATIONS = "false";
 
-    expect(buildDatabaseOptions().migrationsRun).toBe(false);
+    expect(
+      buildDatabaseOptions('postgres://postgres:postgres@localhost:5432/app')
+        .migrationsRun,
+    ).toBe(false);
+  });
+
+  it('never falls back to default database credentials in production', () => {
+    process.env.NODE_ENV = 'production';
+    expect(() => buildDatabaseOptions('')).toThrow(
+      'DATABASE_URL is required in production',
+    );
   });
 });

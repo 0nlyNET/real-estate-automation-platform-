@@ -5,6 +5,7 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  IsUUID,
 } from 'class-validator';
 
 export class CreateSupportTicketDto {
@@ -28,7 +29,7 @@ export class UpdateSupportTicketDto {
   @IsOptional() @IsIn(['open', 'acknowledged', 'resolved', 'closed'])
   status?: 'open' | 'acknowledged' | 'resolved' | 'closed';
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsUUID()
   assignedOperatorId?: string | null;
 
   @IsOptional() @IsDateString()

@@ -10,6 +10,7 @@ import { Team } from '../teams/team.entity';
 import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { AuthController } from './auth.controller';
+import { AccountInvitation } from './account-invitation.entity';
 import { PasswordResetToken } from './password-reset-token.entity';
 import { AuthService } from './auth.service';
 
@@ -22,9 +23,11 @@ describePostgres('password recovery over HTTP and real PostgreSQL', () => {
   const tenantId = randomUUID();
   const userId = randomUUID();
   const verificationUserId = randomUUID();
+  const invitedUserId = randomUUID();
   const email = 'reset-owner@example.test';
   const verificationEmail = 'verify-owner@example.test';
   const verificationToken = 'verification-token-'.padEnd(64, 'a');
+  const invitationToken = 'invitation-token-'.padEnd(64, 'b');
   let pool: any;
   let dataSource: DataSource;
   let app: INestApplication;
@@ -71,6 +74,18 @@ describePostgres('password recovery over HTTP and real PostgreSQL', () => {
         "expires_at" timestamptz NOT NULL,
         "used_at" timestamptz
       );
+      CREATE TABLE "${schema}"."account_invitations" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        "created_at" timestamptz NOT NULL DEFAULT now(),
+        "updated_at" timestamptz NOT NULL DEFAULT now(),
+        "tenant_id" uuid NOT NULL REFERENCES "${schema}"."tenants"("id") ON DELETE CASCADE,
+        "user_id" uuid NOT NULL REFERENCES "${schema}"."users"("id") ON DELETE CASCADE,
+        "token_hash" varchar(64) NOT NULL UNIQUE,
+        "expires_at" timestamptz NOT NULL,
+        "used_at" timestamptz,
+        "revoked_at" timestamptz,
+        "sent_at" timestamptz
+      );
     `);
     await pool.query(
       `INSERT INTO "${schema}"."tenants" ("id") VALUES ($1)`,
@@ -107,6 +122,38 @@ describePostgres('password recovery over HTTP and real PostgreSQL', () => {
         welcomeEmailSentAt: null,
         lastLoginAt: null,
         platformRole: null,
+      }),
+    );
+    await userRepository.save(
+      userRepository.create({
+        id: invitedUserId,
+        tenantId,
+        email: 'invited-user@example.test',
+        passwordHash: null,
+        role: 'agent',
+        teamId: null,
+        isEmailVerified: false,
+        emailVerifyToken: null,
+        emailVerifyTokenExpiresAt: null,
+        isActive: true,
+        sessionVersion: 0,
+        mustChangePassword: false,
+        passwordChangedAt: null,
+        welcomeEmailSentAt: null,
+        lastLoginAt: null,
+        platformRole: null,
+      }),
+    );
+    const invitationRepository = dataSource.getRepository(AccountInvitation);
+    await invitationRepository.save(
+      invitationRepository.create({
+        tenantId,
+        userId: invitedUserId,
+        tokenHash: createHash('sha256').update(invitationToken).digest('hex'),
+        expiresAt: new Date(Date.now() + 5 * 60_000),
+        usedAt: null,
+        revokedAt: null,
+        sentAt: new Date(),
       }),
     );
     await userRepository.save(
@@ -204,6 +251,39 @@ describePostgres('password recovery over HTTP and real PostgreSQL', () => {
       emailVerifyToken: null,
       welcome_email_sent_at: expect.any(Date),
     });
+  }, 30_000);
+
+  it('accepts an invitation once under a PostgreSQL row lock', async () => {
+    const accepted = await request(app.getHttpServer())
+      .post('/auth/accept-invitation')
+      .send({ token: invitationToken, password: 'Invited-password-123' })
+      .expect(200);
+    expect(accepted.body).toEqual({
+      user: expect.objectContaining({ id: invitedUserId, tenantId }),
+    });
+    expect(accepted.body).not.toHaveProperty('invitationToken');
+
+    await request(app.getHttpServer())
+      .post('/auth/accept-invitation')
+      .send({ token: invitationToken, password: 'Different-password-123' })
+      .expect(400);
+
+    const rows = await dataSource.query(
+      `SELECT u."passwordHash", u."isEmailVerified", u.session_version, i.used_at
+       FROM "${schema}"."users" u
+       JOIN "${schema}"."account_invitations" i ON i.user_id = u.id
+       WHERE u.id = $1`,
+      [invitedUserId],
+    );
+    expect(rows[0]).toEqual({
+      passwordHash: expect.any(String),
+      isEmailVerified: true,
+      session_version: 1,
+      used_at: expect.any(Date),
+    });
+    expect(
+      await bcrypt.compare('Invited-password-123', rows[0].passwordHash),
+    ).toBe(true);
   }, 30_000);
 
   it('delivers, invalidates, consumes once, changes credentials, and preserves enumeration resistance', async () => {

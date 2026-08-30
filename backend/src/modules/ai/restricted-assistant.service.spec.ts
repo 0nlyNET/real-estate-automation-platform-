@@ -245,7 +245,7 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
     });
   });
 
-  it('can automatically queue an idempotent setup reconciliation for its own tenant', async () => {
+  it('requires explicit confirmation before queuing setup reconciliation for its own tenant', async () => {
     const { service, provisioning, onboarding } = setup([
       {
         name: 'retry_setup_reconciliation',
@@ -256,9 +256,16 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
       ready: false,
       blockers: [{ key: 'provider' }],
     });
-    await expect(
-      service.askClient(actor, 'Safely retry my incomplete setup'),
-    ).resolves.toMatchObject({
+    const pending = await service.askClient(
+      actor,
+      'Safely retry my incomplete setup',
+    );
+    expect(pending).toMatchObject({
+      status: 'confirmation_required',
+      confirmationRequired: [{ name: 'retry_setup_reconciliation' }],
+    });
+    expect(provisioning.scheduleTenant).not.toHaveBeenCalled();
+    await expect(service.confirmClient(actor, pending.id)).resolves.toMatchObject({
       status: 'completed',
       results: [
         expect.objectContaining({
@@ -334,6 +341,32 @@ describe('RestrictedAssistantService authorization and confirmation', () => {
     );
     expect(messageRepo.find).not.toHaveBeenCalled();
     expect(appointmentRepo.find).not.toHaveBeenCalled();
+  });
+
+  it('binds a SQL-injection search payload as data instead of query text', async () => {
+    const injection = "x%' OR 1=1; DROP TABLE leads; --";
+    const { service, leadRepo } = setup([
+      {
+        name: 'get_lead_snapshot',
+        arguments: JSON.stringify({ query: injection }),
+      },
+    ]);
+    const query: any = {
+      where: jest.fn(() => query),
+      andWhere: jest.fn(() => query),
+      orderBy: jest.fn(() => query),
+      addOrderBy: jest.fn(() => query),
+      take: jest.fn(() => query),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    leadRepo.createQueryBuilder.mockReturnValue(query);
+
+    await service.askClient(actor, 'Find this exact lead');
+
+    const [sql, parameters] = query.andWhere.mock.calls[0];
+    expect(sql).toContain('LIKE :search');
+    expect(sql).not.toContain(injection);
+    expect(parameters.search).toBe(`%${injection.toLowerCase()}%`);
   });
 
   it('scopes recent conversations and appointments to the assigned agent', async () => {

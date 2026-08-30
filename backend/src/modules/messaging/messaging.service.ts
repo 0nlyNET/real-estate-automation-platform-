@@ -20,7 +20,7 @@ import { ComplianceService } from '../compliance/compliance.service';
 import { sendSendGridEmail, sendTwilioSms } from '../../common/providers';
 import { UserRole } from '../../common/rbac';
 import { OperationsService } from '../operations/operations.service';
-import { operationalEvent } from '../../common/operational-log';
+import { operationalEvent, sanitizeOperationalText } from '../../common/operational-log';
 import { ClientOperationsService } from '../client-operations/client-operations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AiConversationControlService } from '../ai/ai-conversation-control.service';
@@ -749,7 +749,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         this.leadEventRepository.create({ lead, leadId: lead.id, eventType, metadata } as any),
       );
     } catch (error: any) {
-      this.logger.error(`Could not record ${eventType}: ${error?.message ?? error}`);
+      this.logger.error(
+        `Could not record ${eventType}: ${sanitizeOperationalText(error?.message ?? error)}`,
+      );
     }
   }
 }

@@ -12,6 +12,7 @@ import {
   Res,
   UseInterceptors,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { WebhooksService } from './webhooks.service';
@@ -52,6 +53,7 @@ export class WebhooksController {
 
   @Post('sendgrid/oauth/token')
   @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
   sendGridOauthToken(
@@ -62,6 +64,7 @@ export class WebhooksController {
   }
 
   @Post('sendgrid/inbound')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @UseInterceptors(
     AnyFilesInterceptor({
       limits: {
@@ -99,6 +102,7 @@ export class WebhooksController {
 
   @Post('sendgrid/events')
   @HttpCode(200)
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
   async sendGridEvents(
     @Body() body: unknown,
     @Headers('authorization') authorization?: string,

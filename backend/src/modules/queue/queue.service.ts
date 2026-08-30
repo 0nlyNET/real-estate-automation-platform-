@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { operationalEvent } from '../../common/operational-log';
 
 @Injectable()
 export class QueueService {
@@ -11,7 +12,14 @@ export class QueueService {
    */
   async enqueue(jobName: string, payload: unknown): Promise<void> {
     this.logger.warn(
-      `[NO-OP QUEUE] enqueue called: ${jobName} payload=${JSON.stringify(payload)}`,
+      operationalEvent('unavailable_queue_enqueue_requested', {
+        jobName,
+        payloadType: Array.isArray(payload) ? 'array' : typeof payload,
+        payloadKeys:
+          payload && typeof payload === 'object' && !Array.isArray(payload)
+            ? Object.keys(payload as Record<string, unknown>).slice(0, 25)
+            : [],
+      }),
     );
     return;
   }

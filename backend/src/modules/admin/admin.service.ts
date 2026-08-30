@@ -32,6 +32,7 @@ import {
   platformStaffEmails,
   resolvePlatformRole,
 } from '../../common/env';
+import { operationalEvent } from '../../common/operational-log';
 
 @Injectable()
 export class AdminService {
@@ -236,9 +237,11 @@ export class AdminService {
       }
     } catch (error: unknown) {
       this.logger.warn(
-        `Client created but invitation email was not delivered: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        operationalEvent('client_invitation_delivery_failed', {
+          tenantId: created.tenant.id,
+          userId: created.owner.id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
       );
       await this.operations?.createTask({
         tenantId: created.tenant.id,

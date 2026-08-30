@@ -16,7 +16,8 @@ export function sanitizeOperationalText(value: unknown, limit = 1_000) {
 }
 
 function sanitizeValue(key: string, value: unknown): unknown {
-  if (SENSITIVE_FIELD.test(key)) return '[redacted]';
+  const normalizedKey = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2');
+  if (SENSITIVE_FIELD.test(normalizedKey)) return '[redacted]';
   if (typeof value === 'string') return sanitizeOperationalText(value);
   if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value))

@@ -16,9 +16,7 @@ describe('UsersService email verification', () => {
     });
     const repo = {
       findOne: jest.fn(async ({ where }: any) =>
-        where.some((candidate: any) => candidate.emailVerifyToken === tokenHash)
-          ? user
-          : null,
+        where.emailVerifyToken === tokenHash ? user : null,
       ),
       save: jest.fn(async (value) => value),
     };
@@ -32,10 +30,11 @@ describe('UsersService email verification', () => {
   });
 
   it('rejects an expired verification token without activating the user', async () => {
+    const rawToken = 'expired-token';
     const user = Object.assign(new User(), {
       id: 'user-1',
       isEmailVerified: false,
-      emailVerifyToken: 'legacy-token',
+      emailVerifyToken: crypto.createHash('sha256').update(rawToken).digest('hex'),
       emailVerifyTokenExpiresAt: new Date(Date.now() - 1),
     });
     const repo = {
@@ -44,7 +43,7 @@ describe('UsersService email verification', () => {
     };
     const service = new UsersService(repo as any, {} as any);
 
-    await expect(service.verifyEmail('legacy-token')).rejects.toBeInstanceOf(
+    await expect(service.verifyEmail(rawToken)).rejects.toBeInstanceOf(
       BadRequestException,
     );
     expect(user.isEmailVerified).toBe(false);

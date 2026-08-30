@@ -33,6 +33,7 @@ describe('production configuration contract', () => {
       PLATFORM_ADMIN_EMAILS: 'operator@example.com',
       GLOBAL_AUTOMATIONS_DISABLED: 'true',
       BILLING_GRACE_DAYS: '0',
+      HEALTH_CHECK_TOKEN: 'h'.repeat(32),
       TWILIO_WEBHOOK_URL: 'https://api.example.com/webhooks/twilio/inbound',
       TWILIO_STATUS_CALLBACK_URL: 'https://api.example.com/webhooks/twilio/status',
       SENDGRID_SENDING_DOMAIN: 'send.example.com',

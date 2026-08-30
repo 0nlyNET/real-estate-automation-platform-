@@ -99,6 +99,12 @@ export class AuthService {
 
     user.lastLoginAt = new Date();
     await this.usersService.save(user);
+    await this.recordSecurityEvent({
+      tenantId: user.tenantId,
+      eventType: 'account.login_succeeded',
+      resourceId: user.id,
+      afterState: { rememberMe, sessionVersion: user.sessionVersion },
+    });
 
     return {
       accessToken: this.signForUser(user, rememberMe),
@@ -126,7 +132,10 @@ export class AuthService {
         .getRepository(AccountInvitation)
         .createQueryBuilder('invitation')
         .setLock('pessimistic_write')
-        .leftJoinAndSelect('invitation.user', 'user')
+        // An invitation without its required user relation is invalid. An
+        // INNER JOIN also keeps PostgreSQL's FOR UPDATE lock away from the
+        // nullable side of an outer join, which PostgreSQL rejects.
+        .innerJoinAndSelect('invitation.user', 'user')
         .where('invitation.token_hash = :tokenHash', { tokenHash })
         .getOne();
       if (!invitation || !invitation.user) {
@@ -328,6 +337,7 @@ export class AuthService {
     const frontend = process.env.FRONTEND_URL || 'http://localhost:3000';
     const resetLink = `${frontend.replace(/\/+$/, '')}/reset-password?token=${rawToken}`;
 
+    let deliveryAccepted = false;
     try {
       await this.mail.sendEmail({
         to: user.email,
@@ -341,6 +351,7 @@ export class AuthService {
             <p style="margin:0;font-size:12px;color:#6b7280">If the button does not work, paste this link into your browser: ${resetLink}</p>
           </div>`,
       });
+      deliveryAccepted = true;
     } catch (error: unknown) {
       // Do not reveal whether an account exists through a different status or
       // response body. Invalidate the undelivered token and create an operator
@@ -372,6 +383,13 @@ export class AuthService {
         }),
       );
     }
+
+    await this.recordSecurityEvent({
+      tenantId: user.tenantId,
+      eventType: 'account.password_reset_requested',
+      resourceId: user.id,
+      afterState: { deliveryAccepted, expiresAt },
+    });
 
     return {
       ok: true,
@@ -486,6 +504,12 @@ export class AuthService {
     user.passwordChangedAt = new Date();
     user.sessionVersion += 1;
     await this.usersService.save(user);
+    await this.recordSecurityEvent({
+      tenantId: user.tenantId,
+      eventType: 'account.temporary_password_changed',
+      resourceId: user.id,
+      afterState: { sessionVersion: user.sessionVersion },
+    });
     return { ok: true, message: 'Password changed. You can now sign in.' };
   }
 
@@ -507,6 +531,31 @@ export class AuthService {
       isPlatformAdmin: isPlatformAdminEmail(user.email),
       platformRole: resolvePlatformRole(user.email, user.platformRole),
     };
+  }
+
+  private async recordSecurityEvent(input: {
+    tenantId: string;
+    eventType: string;
+    resourceId: string;
+    afterState?: Record<string, unknown>;
+  }) {
+    try {
+      await this.audit?.recordSystemEvent({
+        tenantId: input.tenantId,
+        eventType: input.eventType,
+        resourceType: 'user',
+        resourceId: input.resourceId,
+        afterState: input.afterState,
+      });
+    } catch (error: unknown) {
+      this.logger.error(
+        operationalEvent('security_audit_write_failed', {
+          tenantId: input.tenantId,
+          eventType: input.eventType,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
   }
 }
 

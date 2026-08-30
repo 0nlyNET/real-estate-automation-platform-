@@ -13,6 +13,7 @@ import { UsersModule } from '../users/users.module';
 import { MailModule } from '../../mail/mail.module';
 import { requireJwtSecret } from '../../common/env';
 import { AuditModule } from '../audit/audit.module';
+import { JWT_SIGN_OPTIONS } from './auth-token';
 
 @Module({
   imports: [
@@ -22,7 +23,10 @@ import { AuditModule } from '../audit/audit.module';
     TypeOrmModule.forFeature([PasswordResetToken, AccountInvitation]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
-      useFactory: () => ({ secret: requireJwtSecret(), signOptions: { expiresIn: '12h' } }),
+      useFactory: () => ({
+        secret: requireJwtSecret(),
+        signOptions: JWT_SIGN_OPTIONS,
+      }),
     }),
   ],
   controllers: [AuthController],

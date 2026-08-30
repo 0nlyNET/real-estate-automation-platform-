@@ -29,6 +29,9 @@ import {
   SetPlatformStaffDto,
   SuspendClientServicesDto,
   UsagePolicyDto,
+  ControlledTestRunDto,
+  RequestOffboardingDto,
+  SetTwilioComplianceDto,
 } from './admin.dto';
 import { AuditService } from '../audit/audit.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
@@ -167,7 +170,7 @@ export class AdminController {
   runControlledTesting(
     @Param('tenantId') tenantId: string,
     @Req() req: any,
-    @Body() body: { smsRecipient?: string; emailRecipient?: string },
+    @Body() body: ControlledTestRunDto,
   ) {
     if (!this.testing) throw new BadRequestException('Testing service unavailable');
     return this.testing.start(tenantId, req.user.sub, body);
@@ -190,7 +193,7 @@ export class AdminController {
   requestOffboarding(
     @Param('tenantId') tenantId: string,
     @Req() req: any,
-    @Body() body: { reason: string; retentionDays?: number },
+    @Body() body: RequestOffboardingDto,
   ) {
     if (!this.offboarding) throw new BadRequestException('Offboarding service unavailable');
     return this.offboarding.request({
@@ -342,6 +345,7 @@ export class AdminController {
       ],
       monitoring: [
         item('External uptime monitor', configured('EXTERNAL_UPTIME_MONITOR_URL'), 'Create an external monitor for /health/live and /health/ready, then record its URL.'),
+        item('Protected detailed health check', String(process.env.HEALTH_CHECK_TOKEN || '').length >= 32, 'Generate a 32+ character HEALTH_CHECK_TOKEN and configure the detailed monitor to send it as x-health-check-token.'),
       ],
       legal: [
         item('Qualified legal review', recentEvidence('LEGAL_DOCUMENTS_REVIEWED_AT', 365), 'Have qualified counsel review the live terms, privacy, acceptable use, cancellation, messaging consent, and retention documents; then record the review date.'),
@@ -576,16 +580,8 @@ export class AdminController {
   @UseGuards(PlatformAdminGuard)
   async setTwilioCompliance(
     @Param('tenantId') tenantId: string,
-    @Body() body: {
-      status: 'not_started' | 'pending' | 'approved' | 'blocked';
-      customerProfileSid?: string;
-      brandSid?: string;
-      campaignSid?: string;
-    },
+    @Body() body: SetTwilioComplianceDto,
   ) {
-    if (!['not_started', 'pending', 'approved', 'blocked'].includes(body.status)) {
-      throw new BadRequestException('Invalid Twilio compliance status');
-    }
     if (!this.twilioProvisioning) {
       throw new BadRequestException('Twilio provisioning service unavailable');
     }

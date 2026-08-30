@@ -61,8 +61,8 @@ function migrationOptions() {
     migrationsTransactionMode: "all" as const,
   };
 }
-export function buildDatabaseOptions(): DataSourceOptions {
-  const url = process.env.DATABASE_URL;
+export function buildDatabaseOptions(databaseUrl = process.env.DATABASE_URL): DataSourceOptions {
+  const url = databaseUrl;
 
   if (url) {
     const isLocal = url.includes("localhost") || url.includes("127.0.0.1");
@@ -76,6 +76,10 @@ export function buildDatabaseOptions(): DataSourceOptions {
       ssl: buildDatabaseSslConfig(!isLocal),
       ...migrationOptions(),
     };
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('DATABASE_URL is required in production');
   }
 
   return {

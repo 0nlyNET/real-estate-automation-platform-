@@ -6,11 +6,18 @@ import { randomUUID } from 'crypto';
 import { AppModule } from './app.module';
 import { assertProductionEnvironment } from './common/environment-readiness';
 import { operationalEvent } from './common/operational-log';
+import {
+  apiSecurityHeaders,
+  cookieCsrfProtection,
+} from './common/http-security';
 
 async function bootstrap() {
   assertProductionEnvironment();
   const app = await NestFactory.create(AppModule, { rawBody: true });
   const httpLogger = new Logger('HttpRequest');
+
+  app.use(apiSecurityHeaders);
+  app.use(cookieCsrfProtection);
 
   app.use((request: express.Request, response: express.Response, next: express.NextFunction) => {
     const supplied = String(request.header('x-request-id') || '');
@@ -40,13 +47,25 @@ async function bootstrap() {
   app.use(express.text({ type: 'text/plain', limit: '256kb' }));
 
   app.useGlobalPipes(
-    new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: false }),
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
   );
 
   const frontend = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
   app.enableCors({
     origin: [frontend],
     credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Authorization',
+      'Content-Type',
+      'Idempotency-Key',
+      'X-Request-Id',
+    ],
+    maxAge: 600,
   });
 
   const port = Number(process.env.PORT || 4000);

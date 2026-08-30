@@ -2,6 +2,7 @@ import {
   IsBoolean,
   IsEmail,
   IsInt,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -9,6 +10,7 @@ import {
   Length,
   Max,
   Min,
+  Matches,
 } from 'class-validator';
 
 export class CreateClientDto {
@@ -88,4 +90,50 @@ export class UsagePolicyDto {
 
   @IsBoolean()
   enabled!: boolean;
+}
+
+export class ControlledTestRunDto {
+  @IsOptional()
+  @IsString()
+  @Length(7, 40)
+  smsRecipient?: string;
+
+  @IsOptional()
+  @IsEmail()
+  emailRecipient?: string;
+}
+
+export class RequestOffboardingDto {
+  @IsString()
+  @Length(3, 2000)
+  reason!: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(7)
+  @Max(365)
+  retentionDays?: number;
+}
+
+export class SetTwilioComplianceDto {
+  @IsIn(['not_started', 'pending', 'approved', 'blocked'])
+  status!: 'not_started' | 'pending' | 'approved' | 'blocked';
+
+  @IsOptional()
+  @IsString()
+  @Length(3, 100)
+  @Matches(/^[A-Za-z0-9_-]+$/)
+  customerProfileSid?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(3, 100)
+  @Matches(/^[A-Za-z0-9_-]+$/)
+  brandSid?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(3, 100)
+  @Matches(/^[A-Za-z0-9_-]+$/)
+  campaignSid?: string;
 }

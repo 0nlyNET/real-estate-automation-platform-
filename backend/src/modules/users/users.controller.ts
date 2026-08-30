@@ -3,7 +3,6 @@ import {
   Body,
   Controller,
   Get,
-  Logger,
   Param,
   Patch,
   Post,
@@ -25,22 +24,15 @@ import {
   UpdateUserRoleDto,
   UpdateUserTeamDto,
 } from './users.dto';
-import * as crypto from 'crypto';
-import { MailService } from '../../mail/mail.service';
-
-function randomTempPassword() {
-  return `Temp-${crypto.randomBytes(18).toString('base64url')}`;
-}
+import { TeamInvitationsService } from './team-invitations.service';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('users')
 export class UsersController {
-  private readonly logger = new Logger(UsersController.name);
-
   constructor(
     private readonly users: UsersService,
     private readonly tenants: TenantsService,
-    private readonly mail: MailService,
+    private readonly invitations: TeamInvitationsService,
   ) {}
 
   @Get()
@@ -83,42 +75,12 @@ export class UsersController {
     const email = (body?.email || '').toString();
     const role = (body?.role || 'agent') as UserRole;
     const teamId = body?.teamId ? String(body.teamId) : null;
-    const tempPassword = body?.tempPassword
-      ? String(body.tempPassword)
-      : randomTempPassword();
-
-    const { user, verifyToken } = await this.users.createTeamUser({
+    return this.invitations.create({
       tenant,
       email,
-      tempPassword,
       role,
       teamId,
     });
-
-    const frontend = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const verifyLink = `${frontend.replace(/\/+$/, '')}/verify-email?token=${verifyToken}`;
-    let verificationEmailSent = false;
-    try {
-      await this.mail.sendVerificationEmail({ to: user.email, verifyLink });
-      verificationEmailSent = true;
-    } catch (error: unknown) {
-      this.logger.warn(
-        `Team user created but verification email was not delivered: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-
-    return {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      teamId: user.teamId,
-      isActive: user.isActive,
-      tempPassword,
-      verifyLink,
-      verificationEmailSent,
-    };
   }
 
   @UseGuards(ServiceAccessGuard)

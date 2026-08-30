@@ -4,10 +4,6 @@ import { Controller, Get } from '@nestjs/common';
 export class AppController {
   @Get()
   root() {
-    return {
-      status: 'ok',
-      service: 'real-estate-automation-platform',
-      uptime: process.uptime(),
-    };
+    return { status: 'ok' };
   }
 }

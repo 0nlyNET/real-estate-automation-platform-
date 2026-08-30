@@ -250,7 +250,7 @@ SALES_INBOX_EMAIL=realtytechai@gmail.com
 
 ```bash
 curl -fsS <api-origin>/health/live
-curl -fsS <api-origin>/health/readiness
+curl -fsS -H "x-health-check-token: $HEALTH_CHECK_TOKEN" <api-origin>/health/readiness
 ```
 
 Then verify in a private browser: login, owner dashboard, Staff restrictions, public application persistence, lead update, client creation, manual/automatic verification handoff, guided intake, a provider test, a Stripe test checkout/webhook, notification read state, and one real phone push.

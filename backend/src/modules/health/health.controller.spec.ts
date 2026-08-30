@@ -19,6 +19,7 @@ describe('HealthController readiness', () => {
       BILLING_GRACE_DAYS: '0',
       TYPEORM_SYNC: 'false',
       JWT_SECRET: 'x'.repeat(32),
+      HEALTH_CHECK_TOKEN: 'h'.repeat(32),
       INTEGRATIONS_ENCRYPTION_KEY: Buffer.alloc(32, 8).toString('base64'),
     });
     for (const name of [
@@ -49,7 +50,10 @@ describe('HealthController readiness', () => {
     configuredRuntime();
     const response = { status: jest.fn() };
 
-    const report = await controller().readiness(response as never);
+    const report = await controller().readiness(
+      process.env.HEALTH_CHECK_TOKEN,
+      response as never,
+    );
 
     expect(response.status).not.toHaveBeenCalled();
     expect(report).toMatchObject({
@@ -66,12 +70,30 @@ describe('HealthController readiness', () => {
     delete process.env.DATABASE_URL;
     const response = { status: jest.fn() };
 
-    const report = await controller().readiness(response as never);
+    const report = await controller().readiness(
+      process.env.HEALTH_CHECK_TOKEN,
+      response as never,
+    );
 
     expect(response.status).toHaveBeenCalledWith(503);
     expect(report).toMatchObject({
       status: 'not_ready',
       configuration: { runtime: { status: 'down' } },
+    });
+  });
+
+  it('does not disclose detailed production health without the monitor token', async () => {
+    configuredRuntime();
+    await expect(
+      controller().readiness(undefined, { status: jest.fn() } as never),
+    ).rejects.toThrow('Detailed health check is protected');
+  });
+
+  it('keeps the public health endpoint minimal', () => {
+    configuredRuntime();
+    expect(controller().check()).toEqual({
+      status: 'up',
+      process: { status: 'up' },
     });
   });
 });

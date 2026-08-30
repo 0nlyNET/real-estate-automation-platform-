@@ -1,5 +1,12 @@
-import { Controller, Get, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Headers,
+  Res,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
+import { timingSafeEqual } from 'crypto';
 import type { Response } from 'express';
 import { DataSource } from 'typeorm';
 import { environmentReadiness } from '../../common/environment-readiness';
@@ -18,18 +25,16 @@ export class HealthController {
   }
 
   @Get()
-  async check(@Res({ passthrough: true }) response: Response) {
-    try {
-      await this.dataSource.query('SELECT 1');
-      return { status: 'up', process: { status: 'up' }, database: { status: 'up' } };
-    } catch {
-      response.status(503);
-      return { status: 'down', process: { status: 'up' }, database: { status: 'down' } };
-    }
+  check() {
+    return this.live();
   }
 
   @Get(['readiness', 'ready'])
-  async readiness(@Res({ passthrough: true }) response: Response) {
+  async readiness(
+    @Headers('x-health-check-token') suppliedToken: string | undefined,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    this.assertDetailedHealthAccess(suppliedToken);
     const configuration = environmentReadiness();
     let database: Record<string, unknown> = { status: 'down' };
     let schema: Record<string, unknown> = { status: 'unknown' };
@@ -103,5 +108,21 @@ export class HealthController {
       credentialStorage,
       durableWorkers,
     };
+  }
+
+  private assertDetailedHealthAccess(suppliedToken?: string) {
+    if (process.env.NODE_ENV !== 'production') return;
+    const expected = Buffer.from(
+      String(process.env.HEALTH_CHECK_TOKEN || ''),
+      'utf8',
+    );
+    const supplied = Buffer.from(String(suppliedToken || ''), 'utf8');
+    if (
+      expected.length < 32 ||
+      supplied.length !== expected.length ||
+      !timingSafeEqual(supplied, expected)
+    ) {
+      throw new UnauthorizedException('Detailed health check is protected');
+    }
   }
 }

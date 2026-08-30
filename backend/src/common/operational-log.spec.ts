@@ -6,6 +6,8 @@ describe('operational logging redaction', () => {
       tenantId: 'tenant-a',
       authorization: 'Bearer bearer-secret',
       apiKey: 'SG.provider-secret',
+      accessToken: 'opaque-provider-value',
+      clientSecret: 'opaque-client-value',
       error:
         'password=plain-secret Authorization: Bearer another-secret sk_live_abc123',
     });
@@ -14,6 +16,8 @@ describe('operational logging redaction', () => {
     expect(output).toContain('tenant-a');
     expect(output).not.toContain('bearer-secret');
     expect(output).not.toContain('provider-secret');
+    expect(output).not.toContain('opaque-provider-value');
+    expect(output).not.toContain('opaque-client-value');
     expect(output).not.toContain('plain-secret');
     expect(output).not.toContain('another-secret');
     expect(output).not.toContain('sk_live_abc123');
