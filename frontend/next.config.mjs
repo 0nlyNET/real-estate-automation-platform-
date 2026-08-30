@@ -1,4 +1,5 @@
 const isProduction = process.env.NODE_ENV === "production"
+const isVercelBuild = process.env.VERCEL === "1"
 
 const contentSecurityPolicy = [
   "default-src 'self'",
@@ -17,7 +18,10 @@ const contentSecurityPolicy = [
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: "standalone",
+  // Vercel packages Next.js through its build adapter. Standalone output is
+  // reserved for self-hosted/Docker builds so the platform adapter does not
+  // race Next's standalone file-tracing output during onBuildComplete.
+  ...(isVercelBuild ? {} : { output: "standalone" }),
   poweredByHeader: false,
   async headers() {
     return [
