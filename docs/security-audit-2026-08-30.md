@@ -246,7 +246,7 @@ Breaking major upgrades (Nest 12, TypeScript 7, Zod 4, and unrelated UI componen
 
 ## TEST RESULTS
 
-Local results were repeated against the final application tree. GitHub Actions run `33287296549` supplied PostgreSQL and independently exercised the complete repository; Vercel deployment `dpl_22CKgWbdg3DzpC2YPx8F5KMTju14` and Railway reported successful production deployments for the verified application tree.
+Local results were repeated against the final application tree. GitHub Actions run `33287525848` supplied PostgreSQL and independently exercised the complete repository; Vercel deployment `dpl_GRyBnjLj3vFwkrfN7KH8HrXhTFNv` and Railway reported successful production deployments for the verified application tree.
 
 - Build: backend Nest build PASS; active frontend Next production build PASS (50 routes); archived admin Next build PASS (5 routes).
 - Lint: backend PASS with 0 errors; admin PASS with 0 errors; active frontend PASS with 0 errors and 46 pre-existing warnings.
