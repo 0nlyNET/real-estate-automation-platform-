@@ -1,7 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const frontendStatic = join(process.cwd(), 'frontend', '.next', 'static');
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const frontendStatic = join(repositoryRoot, 'frontend', '.next', 'static');
 if (!existsSync(frontendStatic)) {
   throw new Error('frontend/.next/static is missing; build the production frontend first');
 }
