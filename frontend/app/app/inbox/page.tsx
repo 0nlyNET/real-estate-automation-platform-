@@ -38,11 +38,27 @@ type Msg = {
   channel: "sms" | "email"
   body: string
   createdAt: string
+  updatedAt?: string
   status: "created" | "queued" | "sending" | "provider_accepted" | "sent" | "delivered" | "failed" | "received" | "draft" | "skipped" | "blocked" | "canceled" | "pending" | "scheduled"
   providerStatus?: string | null
   errorCode?: string | null
   errorMessage?: string | null
   authorship?: "ai" | "human" | "template" | "system"
+}
+
+type ThreadPage = {
+  items: ThreadRow[]
+  hasMore: boolean
+  take: number
+  skip: number
+}
+
+type MessagePage = {
+  items: Msg[]
+  hasOlder: boolean
+  nextBefore: string | null
+  nextChanges: string
+  hasMoreChanges: boolean
 }
 
 type Enrollment = { id: string; status: "active" | "paused" | "stopped" | "completed"; sequence?: { name: string } | null }
@@ -103,6 +119,15 @@ function sendErrorMessage(cause: unknown, channel: "sms" | "email") {
     : `${channel === "sms" ? "Text" : "Email"} could not be queued.`
 }
 
+function mergeMessages(current: Msg[], incoming: Msg[]) {
+  const byId = new Map(current.map((message) => [message.id, message]))
+  for (const message of incoming) byId.set(message.id, message)
+  return [...byId.values()].sort((left, right) => {
+    const time = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    return time || left.id.localeCompare(right.id)
+  })
+}
+
 export default function InboxPage() {
   const [loading, setLoading] = useState(true)
   const [threadError, setThreadError] = useState("")
@@ -110,10 +135,14 @@ export default function InboxPage() {
   const [actionError, setActionError] = useState("")
   const [notice, setNotice] = useState("")
   const [threads, setThreads] = useState<ThreadRow[]>([])
+  const [threadTake, setThreadTake] = useState(50)
+  const [hasMoreThreads, setHasMoreThreads] = useState(false)
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Msg[]>([])
   const [enrollments, setEnrollments] = useState<Enrollment[]>([])
   const [loadedLeadId, setLoadedLeadId] = useState<string | null>(null)
+  const [hasOlderMessages, setHasOlderMessages] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [sendChannel, setSendChannel] = useState<"sms" | "email">("sms")
   const [busy, setBusy] = useState(false)
@@ -126,6 +155,14 @@ export default function InboxPage() {
   const shouldStickToBottom = useRef(true)
   const channelLeadRef = useRef<string | null>(null)
   const requestedLeadIdConsumed = useRef(false)
+  const threadRefreshInFlight = useRef<string | null>(null)
+  const threadRequestVersion = useRef(0)
+  const conversationRequestsInFlight = useRef(new Set<string>())
+  const messageCursors = useRef<{
+    leadId: string | null
+    before: string | null
+    changes: string | null
+  }>({ leadId: null, before: null, changes: null })
   const draft = activeLeadId ? drafts[activeLeadId] || "" : ""
   const setDraft = useCallback(
     (value: string) => {
@@ -136,10 +173,18 @@ export default function InboxPage() {
   )
 
   const loadThreads = useCallback(async () => {
+    const requestKey = `${scope}:${threadTake}`
+    if (threadRefreshInFlight.current === requestKey) return
+    threadRefreshInFlight.current = requestKey
+    const requestVersion = ++threadRequestVersion.current
     try {
-      const rows = await apiFetch<ThreadRow[]>(`/messaging/threads?scope=${scope}&take=100`)
-      const items = Array.isArray(rows) ? rows : []
+      const page = await apiFetch<ThreadPage>(
+        `/messaging/threads?scope=${scope}&take=${threadTake}&skip=0&includeMeta=1`,
+      )
+      if (requestVersion !== threadRequestVersion.current) return
+      const items = Array.isArray(page?.items) ? page.items : []
       setThreads(items)
+      setHasMoreThreads(Boolean(page?.hasMore))
       const requested = requestedLeadIdConsumed.current
         ? null
         : new URLSearchParams(window.location.search).get("leadId")
@@ -156,11 +201,15 @@ export default function InboxPage() {
       })
       setThreadError("")
     } catch (cause) {
+      if (requestVersion !== threadRequestVersion.current) return
       setThreadError(cause instanceof Error ? cause.message : "Conversations could not be loaded")
     } finally {
-      setLoading(false)
+      if (threadRefreshInFlight.current === requestKey) {
+        threadRefreshInFlight.current = null
+      }
+      if (requestVersion === threadRequestVersion.current) setLoading(false)
     }
-  }, [scope])
+  }, [scope, threadTake])
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadThreads(), 0)
@@ -178,31 +227,73 @@ export default function InboxPage() {
   }, [activeLeadId])
 
   useEffect(() => {
-    const interval = window.setInterval(() => void loadThreads(), 10_000)
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadThreads()
+    }, 20_000)
     return () => window.clearInterval(interval)
   }, [loadThreads])
 
-  const loadConversation = useCallback(async (leadId: string) => {
+  const loadConversation = useCallback(async (
+    leadId: string,
+    mode: "initial" | "poll" | "older" = "initial",
+  ) => {
+    if (conversationRequestsInFlight.current.has(leadId)) return
+    if (mode === "poll" && (
+      messageCursors.current.leadId !== leadId ||
+      !messageCursors.current.changes
+    )) return
+    if (mode === "older" && (
+      messageCursors.current.leadId !== leadId ||
+      !messageCursors.current.before
+    )) return
+    conversationRequestsInFlight.current.add(leadId)
+    if (mode === "older") setLoadingOlder(true)
     try {
-      const [messageRows, enrollmentRows] = await Promise.all([
-        apiFetch<Msg[]>(`/messaging/threads/${leadId}`),
-        apiFetch<Enrollment[]>(`/leads/${leadId}/enrollments`),
+      const query = new URLSearchParams({ includeMeta: "1", take: mode === "poll" ? "100" : "50" })
+      if (mode === "poll" && messageCursors.current.changes) {
+        query.set("changedAfter", messageCursors.current.changes)
+      }
+      if (mode === "older" && messageCursors.current.before) {
+        query.set("before", messageCursors.current.before)
+      }
+      const [messagePage, enrollmentRows] = await Promise.all([
+        apiFetch<MessagePage>(`/messaging/threads/${leadId}?${query.toString()}`),
+        mode === "initial"
+          ? apiFetch<Enrollment[]>(`/leads/${leadId}/enrollments`)
+          : Promise.resolve(null),
       ])
       if (activeLeadIdRef.current !== leadId) return
-      setMessages(Array.isArray(messageRows) ? messageRows : [])
-      const latest = Array.isArray(messageRows)
+      const messageRows = Array.isArray(messagePage?.items) ? messagePage.items : []
+      setMessages((current) => mode === "initial" ? messageRows : mergeMessages(current, messageRows))
+      const latest = messageRows.length
         ? messageRows[messageRows.length - 1]
         : null
-      if (channelLeadRef.current !== leadId) {
+      if (mode === "initial" && channelLeadRef.current !== leadId) {
         channelLeadRef.current = leadId
         setSendChannel(latest?.channel || "sms")
       }
-      setEnrollments(Array.isArray(enrollmentRows) ? enrollmentRows : [])
+      if (enrollmentRows) setEnrollments(Array.isArray(enrollmentRows) ? enrollmentRows : [])
+      if (mode !== "poll") {
+        setHasOlderMessages(Boolean(messagePage?.hasOlder))
+        messageCursors.current = {
+          leadId,
+          before: messagePage?.nextBefore || null,
+          changes:
+            mode === "initial"
+              ? messagePage?.nextChanges || null
+              : messageCursors.current.changes,
+        }
+      } else if (messagePage?.nextChanges) {
+        messageCursors.current.changes = messagePage.nextChanges
+      }
       setLoadedLeadId(leadId)
       setConversationError("")
     } catch (cause) {
       if (activeLeadIdRef.current !== leadId) return
       setConversationError(cause instanceof Error ? cause.message : "The conversation could not be loaded")
+    } finally {
+      conversationRequestsInFlight.current.delete(leadId)
+      if (mode === "older") setLoadingOlder(false)
     }
   }, [])
 
@@ -216,9 +307,12 @@ export default function InboxPage() {
         setMessages([])
         setEnrollments([])
         setLoadedLeadId(null)
+        setHasOlderMessages(false)
+        messageCursors.current = { leadId: null, before: null, changes: null }
         return
       }
-      void loadConversation(activeLeadId)
+      messageCursors.current = { leadId: activeLeadId, before: null, changes: null }
+      void loadConversation(activeLeadId, "initial")
     }, 0)
     return () => window.clearTimeout(timer)
   }, [activeLeadId, loadConversation])
@@ -231,8 +325,12 @@ export default function InboxPage() {
   useEffect(() => {
     if (!activeLeadId) return
     const interval = window.setInterval(
-      () => void loadConversation(activeLeadId),
-      7_500,
+      () => {
+        if (document.visibilityState === "visible") {
+          void loadConversation(activeLeadId, "poll")
+        }
+      },
+      8_000,
     )
     return () => window.clearInterval(interval)
   }, [activeLeadId, loadConversation])
@@ -306,13 +404,27 @@ export default function InboxPage() {
     }
   }
 
+  async function loadOlderMessages() {
+    if (!activeLeadId || !hasOlderMessages || loadingOlder) return
+    const viewport = messageViewportRef.current
+    const previousHeight = viewport?.scrollHeight || 0
+    shouldStickToBottom.current = false
+    await loadConversation(activeLeadId, "older")
+    window.requestAnimationFrame(() => {
+      const nextViewport = messageViewportRef.current
+      if (nextViewport) {
+        nextViewport.scrollTop += nextViewport.scrollHeight - previousHeight
+      }
+    })
+  }
+
   async function changeFollowUp(action: "pause" | "resume") {
     if (!activeLeadId || !currentEnrollment) return
     setBusy(true); setActionError("")
     try {
       await apiFetch(`/leads/${activeLeadId}/enrollments/${currentEnrollment.id}/${action}`, { method: "POST" })
       setNotice(action === "pause" ? "Automatic follow-up paused." : "Automatic follow-up resumed.")
-      await loadConversation(activeLeadId)
+      await loadConversation(activeLeadId, "initial")
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "Follow-up could not be changed")
     } finally { setBusy(false) }
@@ -335,11 +447,12 @@ export default function InboxPage() {
       {notice ? <div role="status" className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-300">{notice}</div> : null}
       <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
         <Card>
-          <CardHeader><CardTitle>People</CardTitle><div className="flex gap-2"><Button size="sm" variant={scope === "shared" ? "default" : "outline"} onClick={() => setScope("shared")}>Shared</Button><Button size="sm" variant={scope === "mine" ? "default" : "outline"} onClick={() => setScope("mine")}>Assigned to me</Button></div></CardHeader>
+          <CardHeader><CardTitle>People</CardTitle><div className="flex gap-2"><Button size="sm" variant={scope === "shared" ? "default" : "outline"} onClick={() => { setThreadTake(50); setScope("shared") }}>Shared</Button><Button size="sm" variant={scope === "mine" ? "default" : "outline"} onClick={() => { setThreadTake(50); setScope("mine") }}>Assigned to me</Button></div></CardHeader>
           <CardContent className="p-0">
             {loading ? <div className="p-4 text-sm text-muted-foreground">Loading conversations…</div> : null}
             <div className="max-h-[680px] divide-y overflow-y-auto">
               {threads.map((thread) => <button key={thread.leadId} type="button" onClick={() => { activeLeadIdRef.current = thread.leadId; channelLeadRef.current = thread.leadId; setActiveLeadId(thread.leadId); setSendChannel(thread.channel === "email" && thread.leadEmail ? "email" : thread.leadPhone ? "sms" : "email") }} className={`w-full p-4 text-left hover:bg-muted/60 ${activeLeadId === thread.leadId ? "bg-muted" : ""}`}><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{thread.leadName || "Lead"}</span>{thread.temperature ? <Badge variant={thread.temperature === "hot" ? "destructive" : "secondary"}>{thread.temperature}</Badge> : null}</div><div className="mt-1 truncate text-xs text-muted-foreground">{thread.lastMessageBody || "No message"}</div>{thread.status ? <div className="mt-1 text-[11px] text-muted-foreground">{statusLabel(thread.status)}</div> : null}</button>)}
+              {hasMoreThreads ? <div className="p-3"><Button type="button" size="sm" variant="outline" className="w-full" onClick={() => setThreadTake((current) => Math.min(current + 50, 200))}>Load more conversations</Button></div> : null}
               {!loading && !threads.length ? <div className="p-8 text-center text-sm text-muted-foreground">No conversations yet.</div> : null}
             </div>
           </CardContent>
@@ -352,7 +465,7 @@ export default function InboxPage() {
             <AiConversationControls
               leadId={activeLeadId}
               onChanged={() =>
-                Promise.all([loadConversation(activeLeadId), loadThreads()]).then(
+                Promise.all([loadConversation(activeLeadId, "initial"), loadThreads()]).then(
                   () => undefined,
                 )
               }
@@ -372,6 +485,13 @@ export default function InboxPage() {
                     viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96
                 }}
               >
+                {hasOlderMessages ? (
+                  <div className="pb-2 text-center">
+                    <Button type="button" size="sm" variant="outline" disabled={loadingOlder} onClick={() => void loadOlderMessages()}>
+                      {loadingOlder ? "Loading…" : "Load earlier messages"}
+                    </Button>
+                  </div>
+                ) : null}
                 {visibleMessages.map((message) => (
                   <div
                     key={message.id}

@@ -5,7 +5,6 @@ import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Badge } from "@/components/ui/badge"
 import { apiFetch } from "@/lib/api"
 import { Inbox, ArrowRight } from "lucide-react"
 
@@ -15,8 +14,7 @@ type Thread = {
   leadEmail: string | null
   leadPhone: string | null
   lastMessageAt: string | null
-  lastMessagePreview: string | null
-  unreadCount: number
+  lastMessageBody: string | null
 }
 
 function nameFor(t: Thread) {
@@ -88,18 +86,15 @@ export function DashboardInboxPreview() {
             {threads.map((t) => (
               <Link
                 key={t.leadId}
-                href="/app/inbox"
+                href={`/app/inbox?leadId=${encodeURIComponent(t.leadId)}`}
                 className="block rounded-lg border border-border/60 bg-background/40 p-3 transition hover:border-border"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{nameFor(t)}</div>
                     <div className="truncate text-xs text-muted-foreground">
-                      {t.lastMessagePreview || "No messages"}
+                      {t.lastMessageBody || "No messages"}
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {t.unreadCount ? <Badge>{t.unreadCount}</Badge> : null}
                   </div>
                 </div>
               </Link>

@@ -42,32 +42,51 @@ export class MessagingController {
     @Query('scope') scope?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('includeMeta') includeMeta?: string,
   ) {
     const tenantId = req.user?.tenantId;
     if (!tenantId) throw new ForbiddenException('Missing tenant');
 
     return this.messagingService.listThreads(
       tenantId,
-      take ? parseInt(take, 10) : 50,
-      skip ? parseInt(skip, 10) : 0,
+      parsePageInteger(take, 'take', 50, 1, 200),
+      parsePageInteger(skip, 'skip', 0, 0, 100_000),
       {
         userId: req.user?.sub,
         role: req.user?.role as UserRole,
         scope: scope === 'mine' ? 'mine' : 'shared',
       },
+      includeMeta === '1' || includeMeta === 'true',
     );
   }
 
   @Get('threads/:leadId')
-  async getThreadMessages(@Req() req: any, @Param('leadId') leadId: string) {
+  async getThreadMessages(
+    @Req() req: any,
+    @Param('leadId') leadId: string,
+    @Query('take') take?: string,
+    @Query('before') before?: string,
+    @Query('changedAfter') changedAfter?: string,
+    @Query('includeMeta') includeMeta?: string,
+  ) {
     const tenantId = req.user?.tenantId;
     if (!tenantId) throw new ForbiddenException('Missing tenant');
     if (!leadId?.trim()) throw new BadRequestException('leadId is required');
 
-    return this.messagingService.getThreadMessages(tenantId, leadId.trim(), {
-      userId: req.user?.sub,
-      role: req.user?.role as UserRole,
-    });
+    return this.messagingService.getThreadMessages(
+      tenantId,
+      leadId.trim(),
+      {
+        userId: req.user?.sub,
+        role: req.user?.role as UserRole,
+      },
+      {
+        includeMeta: includeMeta === '1' || includeMeta === 'true',
+        take: parsePageInteger(take, 'take', 50, 1, 200),
+        before: before?.trim() || undefined,
+        changedAfter: changedAfter?.trim() || undefined,
+      },
+    );
   }
 
   @Post('send')
@@ -158,5 +177,24 @@ export class MessagingController {
       },
     );
   }
+}
 
+function parsePageInteger(
+  raw: string | undefined,
+  field: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  if (raw === undefined || raw === '') return fallback;
+  if (!/^\d+$/.test(raw)) {
+    throw new BadRequestException(`${field} must be an integer`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new BadRequestException(
+      `${field} must be between ${minimum} and ${maximum}`,
+    );
+  }
+  return value;
 }

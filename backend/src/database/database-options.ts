@@ -23,6 +23,7 @@ import { ManagedCrmAiAutopilot1786665600001 } from './migrations/202608140001-ma
 import { GoogleCalendarReliability1787011200001 } from './migrations/202608180001-google-calendar-reliability';
 import { MultiProviderScheduling1787011200002 } from './migrations/202608180002-multi-provider-scheduling';
 import { AssistantConversationReliability1787875200001 } from './migrations/202608280001-assistant-conversation-reliability';
+import { ConversationInboxPagination1788220800001 } from './migrations/202609010001-conversation-inbox-pagination';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -47,6 +48,7 @@ const databaseMigrations = [
   GoogleCalendarReliability1787011200001,
   MultiProviderScheduling1787011200002,
   AssistantConversationReliability1787875200001,
+  ConversationInboxPagination1788220800001,
 ];
 
 function migrationOptions() {

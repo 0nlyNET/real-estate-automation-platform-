@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -152,26 +153,40 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     take = 50,
     skip = 0,
     ctx?: { userId?: string; role?: UserRole; scope?: 'shared' | 'mine' },
+    includeMeta = false,
   ) {
     const tenantId = this.requireTenant(tenantIdRaw);
+    const pageSize = Math.min(
+      Math.max(Number.isFinite(take) ? take : 50, 1),
+      200,
+    );
+    const pageOffset = Math.max(Number.isFinite(skip) ? skip : 0, 0);
     const assignedOnly = ctx?.scope === 'mine' && Boolean(ctx.userId);
     const rows = await this.messageRepository
       .createQueryBuilder('message')
       .leftJoinAndSelect('message.lead', 'lead')
       .where('lead.tenantId = :tenantId', { tenantId })
+      .andWhere(assignedOnly ? 'lead.assignedToUserId = :userId' : '1=1', {
+        userId: ctx?.userId,
+      })
       .andWhere(
-        assignedOnly
-          ? 'lead.assignedToUserId = :userId'
-          : '1=1',
-        { userId: ctx?.userId },
+        `NOT EXISTS (
+        SELECT 1
+        FROM messages newer
+        WHERE newer."leadId" = message."leadId"
+          AND (
+            newer.created_at > message.created_at
+            OR (newer.created_at = message.created_at AND newer.id > message.id)
+          )
+      )`,
       )
-      .distinctOn(['lead.id'])
-      .orderBy('lead.id', 'ASC')
-      .addOrderBy('message.createdAt', 'DESC')
-      .take(Math.min(Math.max(take, 1), 200))
-      .skip(Math.max(skip, 0))
+      .orderBy('message.createdAt', 'DESC')
+      .addOrderBy('message.id', 'DESC')
+      .take(pageSize + 1)
+      .skip(pageOffset)
       .getMany();
-    return rows.map((message) => ({
+    const hasMore = rows.length > pageSize;
+    const items = rows.slice(0, pageSize).map((message) => ({
       leadId: message.lead?.id || null,
       leadName: message.lead?.fullName || null,
       leadEmail: message.lead?.email || null,
@@ -181,7 +196,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         Boolean(ctx?.userId) && message.lead?.assignedToUserId === ctx?.userId,
       lastMessageId: message.id,
       lastMessageAt: message.createdAt,
-      lastMessageBody: message.body,
+      lastMessageBody: displayMessageBody(message.body),
       channel: message.channel,
       direction: message.direction,
       status: message.status,
@@ -194,38 +209,110 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       conversationSummary: message.lead?.conversationSummary || null,
       talkingPoints: message.lead?.recommendedTalkingPoints || [],
     }));
+    return includeMeta
+      ? { items, hasMore, take: pageSize, skip: pageOffset }
+      : items;
   }
 
   async getThreadMessages(
     tenantIdRaw: string,
     leadId: string,
     _ctx?: { userId?: string; role?: UserRole },
+    options?: {
+      includeMeta?: boolean;
+      take?: number;
+      before?: string;
+      changedAfter?: string;
+    },
   ) {
     const tenantId = this.requireTenant(tenantIdRaw);
     const lead = await this.leadRepository.findOne({ where: { id: leadId, tenantId } });
     if (!lead) throw new ForbiddenException('Lead not found');
+
+    if (options?.includeMeta) {
+      return this.getThreadMessagePage(leadId, options);
+    }
+
     const messages = await this.messageRepository.find({
       where: { leadId },
-      order: { createdAt: 'ASC' },
+      order: { createdAt: 'ASC', id: 'ASC' },
     });
-    return messages.map((message) => ({
-      id: message.id,
-      leadId: message.leadId,
-      channel: message.channel,
-      direction: message.direction,
-      body: displayMessageBody(message.body),
-      subject: message.subject || null,
-      status: message.status,
-      providerStatus: message.providerStatus || null,
-      errorCode: message.errorCode || null,
-      errorMessage: userFacingDeliveryError(message),
-      authorship: message.authorship || 'system',
-      aiRunId: message.aiRunId || null,
-      approvedAt: message.approvedAt || null,
-      editedAt: message.editedAt || null,
-      createdAt: message.createdAt,
-      updatedAt: message.updatedAt,
-    }));
+    return messages.map(toThreadMessage);
+  }
+
+  private async getThreadMessagePage(
+    leadId: string,
+    options: {
+      take?: number;
+      before?: string;
+      changedAfter?: string;
+    },
+  ) {
+    const pageStartedAt = new Date();
+    const take = Math.min(
+      Math.max(Number.isFinite(options.take) ? Number(options.take) : 50, 1),
+      200,
+    );
+    const query = this.messageRepository
+      .createQueryBuilder('message')
+      .where('message.leadId = :leadId', { leadId });
+
+    if (options.changedAfter) {
+      const cursor = parseMessageCursor(options.changedAfter, 'changedAfter');
+      const rows = await query
+        .andWhere(
+          '(message.updatedAt > :changedAt OR (message.updatedAt = :changedAt AND message.id > :changedId))',
+          { changedAt: cursor.at, changedId: cursor.id },
+        )
+        .orderBy('message.updatedAt', 'ASC')
+        .addOrderBy('message.id', 'ASC')
+        .take(take + 1)
+        .getMany();
+      const hasMoreChanges = rows.length > take;
+      const selected = rows.slice(0, take);
+      const lastChanged = selected[selected.length - 1];
+      return {
+        items: selected.map(toThreadMessage).sort(compareThreadMessages),
+        hasOlder: false,
+        nextBefore: null,
+        nextChanges: lastChanged
+          ? encodeMessageCursor(lastChanged.updatedAt, lastChanged.id)
+          : options.changedAfter,
+        hasMoreChanges,
+      };
+    }
+
+    if (options.before) {
+      const cursor = parseMessageCursor(options.before, 'before');
+      query.andWhere(
+        '(message.createdAt < :beforeAt OR (message.createdAt = :beforeAt AND message.id < :beforeId))',
+        { beforeAt: cursor.at, beforeId: cursor.id },
+      );
+    }
+    const rows = await query
+      .orderBy('message.createdAt', 'DESC')
+      .addOrderBy('message.id', 'DESC')
+      .take(take + 1)
+      .getMany();
+    const hasOlder = rows.length > take;
+    const selected = rows.slice(0, take);
+    const oldest = selected[selected.length - 1];
+    return {
+      items: selected.map(toThreadMessage).reverse(),
+      hasOlder,
+      nextBefore:
+        hasOlder && oldest
+          ? encodeMessageCursor(oldest.createdAt, oldest.id)
+          : null,
+      // Start the incremental watermark before the page query. This closes the
+      // query/response race: updates committed during the read are replayed and
+      // de-duplicated by message id instead of being skipped.
+      nextChanges: encodeMessageCursor(
+        pageStartedAt,
+        '00000000-0000-0000-0000-000000000000',
+      ),
+      hasMoreChanges: false,
+    };
   }
 
   /**
@@ -803,6 +890,62 @@ function displayMessageBody(body: string) {
     /\n\nUnsubscribe:\s*\{\{unsubscribeUrl\}\}\s*$/i,
     '',
   );
+}
+
+function toThreadMessage(message: Message) {
+  return {
+    id: message.id,
+    leadId: message.leadId,
+    channel: message.channel,
+    direction: message.direction,
+    body: displayMessageBody(message.body),
+    subject: message.subject || null,
+    status: message.status,
+    providerStatus: message.providerStatus || null,
+    errorCode: message.errorCode || null,
+    errorMessage: userFacingDeliveryError(message),
+    authorship: message.authorship || 'system',
+    aiRunId: message.aiRunId || null,
+    approvedAt: message.approvedAt || null,
+    editedAt: message.editedAt || null,
+    createdAt: message.createdAt,
+    updatedAt: message.updatedAt,
+  };
+}
+
+function compareThreadMessages(
+  left: ReturnType<typeof toThreadMessage>,
+  right: ReturnType<typeof toThreadMessage>,
+) {
+  const time =
+    new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+  return time || left.id.localeCompare(right.id);
+}
+
+function encodeMessageCursor(at: Date, id: string) {
+  return Buffer.from(
+    JSON.stringify({ at: at.toISOString(), id }),
+    'utf8',
+  ).toString('base64url');
+}
+
+function parseMessageCursor(value: string, field: string) {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+    const at = new Date(parsed?.at);
+    const id = String(parsed?.id || '');
+    if (
+      Number.isNaN(at.getTime()) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        id,
+      )
+    ) {
+      throw new Error('invalid cursor');
+    }
+    return { at, id };
+  } catch {
+    throw new BadRequestException(`${field} cursor is invalid`);
+  }
 }
 
 function userFacingDeliveryError(message: Message) {

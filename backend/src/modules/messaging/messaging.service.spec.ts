@@ -239,6 +239,189 @@ describe('outbound message worker safety', () => {
     expect(JSON.stringify(result)).not.toContain('socket secret detail');
   });
 
+  it('paginates conversations by the newest message instead of lead id', async () => {
+    const tenantId = '00000000-0000-4000-8000-000000000001';
+    const query = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([
+        Object.assign(new Message(), {
+          id: '00000000-0000-4000-8000-000000000103',
+          leadId: '00000000-0000-4000-8000-000000000203',
+          lead: Object.assign(new Lead(), {
+            id: '00000000-0000-4000-8000-000000000203',
+            tenantId,
+            fullName: 'Newest Lead',
+          }),
+          body: 'Newest message',
+          channel: 'sms',
+          direction: 'inbound',
+          status: 'received',
+          createdAt: new Date('2026-09-01T12:03:00.000Z'),
+        }),
+        Object.assign(new Message(), {
+          id: '00000000-0000-4000-8000-000000000102',
+          leadId: '00000000-0000-4000-8000-000000000202',
+          lead: Object.assign(new Lead(), {
+            id: '00000000-0000-4000-8000-000000000202',
+            tenantId,
+            fullName: 'Second Lead',
+          }),
+          body: 'Second message',
+          channel: 'email',
+          direction: 'outbound',
+          status: 'delivered',
+          createdAt: new Date('2026-09-01T12:02:00.000Z'),
+        }),
+        Object.assign(new Message(), {
+          id: '00000000-0000-4000-8000-000000000101',
+          leadId: '00000000-0000-4000-8000-000000000201',
+          lead: Object.assign(new Lead(), {
+            id: '00000000-0000-4000-8000-000000000201',
+            tenantId,
+            fullName: 'Older Lead',
+          }),
+          body: 'Older message',
+          channel: 'sms',
+          direction: 'inbound',
+          status: 'received',
+          createdAt: new Date('2026-09-01T12:01:00.000Z'),
+        }),
+      ]),
+    };
+    const service = buildService({
+      messageRepo: { createQueryBuilder: jest.fn().mockReturnValue(query) },
+    });
+
+    const result = (await service.listThreads(
+      tenantId,
+      2,
+      0,
+      { userId: 'user-1', role: 'owner', scope: 'shared' },
+      true,
+    )) as any;
+
+    expect(result).toMatchObject({ hasMore: true, take: 2, skip: 0 });
+    expect(result.items.map((item: any) => item.leadName)).toEqual([
+      'Newest Lead',
+      'Second Lead',
+    ]);
+    expect(query.andWhere.mock.calls[1][0]).toContain('NOT EXISTS');
+    expect(query.orderBy).toHaveBeenCalledWith('message.createdAt', 'DESC');
+    expect(query.addOrderBy).toHaveBeenCalledWith('message.id', 'DESC');
+    expect(query.take).toHaveBeenCalledWith(3);
+  });
+
+  it('loads bounded chronological pages and then only changed messages', async () => {
+    const tenantId = '00000000-0000-4000-8000-000000000001';
+    const lead = Object.assign(new Lead(), {
+      id: '00000000-0000-4000-8000-000000000200',
+      tenantId,
+    });
+    const message = (id: string, minute: number, status = 'received') =>
+      Object.assign(new Message(), {
+        id,
+        leadId: lead.id,
+        channel: 'sms',
+        direction: status === 'received' ? 'inbound' : 'outbound',
+        body: `Message ${minute}`,
+        status,
+        authorship: 'human',
+        createdAt: new Date(`2026-09-01T12:0${minute}:00.000Z`),
+        updatedAt: new Date(`2026-09-01T12:1${minute}:00.000Z`),
+      });
+    const newest = message('00000000-0000-4000-8000-000000000103', 3);
+    const middle = message('00000000-0000-4000-8000-000000000102', 2);
+    const oldest = message('00000000-0000-4000-8000-000000000101', 1);
+    const delivered = message(
+      '00000000-0000-4000-8000-000000000104',
+      4,
+      'delivered',
+    );
+    const query = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest
+        .fn()
+        .mockResolvedValueOnce([newest, middle, oldest])
+        .mockResolvedValueOnce([delivered]),
+    };
+    const service = buildService({
+      leadRepo: { findOne: jest.fn().mockResolvedValue(lead) },
+      messageRepo: { createQueryBuilder: jest.fn().mockReturnValue(query) },
+    });
+
+    const initial = (await service.getThreadMessages(
+      tenantId,
+      lead.id,
+      { userId: 'user-1', role: 'owner' },
+      { includeMeta: true, take: 2 },
+    )) as any;
+    expect(initial).toMatchObject({ hasOlder: true, hasMoreChanges: false });
+    expect(initial.items.map((item: any) => item.id)).toEqual([
+      middle.id,
+      newest.id,
+    ]);
+    expect(initial.nextBefore).toEqual(expect.any(String));
+    expect(initial.nextChanges).toEqual(expect.any(String));
+    expect(
+      JSON.parse(Buffer.from(initial.nextChanges, 'base64url').toString('utf8')),
+    ).toMatchObject({ id: '00000000-0000-0000-0000-000000000000' });
+    expect(query.take).toHaveBeenNthCalledWith(1, 3);
+
+    const changes = (await service.getThreadMessages(
+      tenantId,
+      lead.id,
+      { userId: 'user-1', role: 'owner' },
+      { includeMeta: true, take: 100, changedAfter: initial.nextChanges },
+    )) as any;
+    expect(changes.items).toEqual([
+      expect.objectContaining({ id: delivered.id, status: 'delivered' }),
+    ]);
+    expect(query.andWhere.mock.calls.at(-1)?.[0]).toContain(
+      'message.updatedAt > :changedAt',
+    );
+    expect(query.take).toHaveBeenNthCalledWith(2, 101);
+  });
+
+  it('rejects malformed conversation cursors before querying message rows', async () => {
+    const tenantId = '00000000-0000-4000-8000-000000000001';
+    const lead = Object.assign(new Lead(), {
+      id: '00000000-0000-4000-8000-000000000200',
+      tenantId,
+    });
+    const query = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn(),
+    };
+    const service = buildService({
+      leadRepo: { findOne: jest.fn().mockResolvedValue(lead) },
+      messageRepo: { createQueryBuilder: jest.fn().mockReturnValue(query) },
+    });
+
+    await expect(
+      service.getThreadMessages(
+        tenantId,
+        lead.id,
+        { userId: 'user-1', role: 'owner' },
+        { includeMeta: true, before: 'not-a-cursor' },
+      ),
+    ).rejects.toThrow('before cursor is invalid');
+    expect(query.getMany).not.toHaveBeenCalled();
+  });
+
   it('does not call a provider when the final safety check blocks quiet hours', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-07-25T02:00:00.000Z'));
     const lead = Object.assign(new Lead(), {
