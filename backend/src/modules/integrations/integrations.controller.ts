@@ -90,18 +90,14 @@ export class IntegrationsController {
     );
   }
 
-  /**
-   * Facebook Lead Ads OAuth: return the URL the frontend should redirect the user to.
-   * We keep this simple and stable:
-   * - state = tenantId
-   * - redirect_uri = {backend}/integrations/facebook/callback
-   */
+  /** Facebook Lead Ads OAuth with an opaque, single-use server-side state. */
   @Get("facebook/connect")
   @UseGuards(JwtAuthGuard, RolesGuard)
   @RequireRole("admin")
   async facebookConnect(@Req() req: any) {
     const result = await this.integrationsService.facebookOAuthStart(
       req.user?.tenantId,
+      req.user?.sub,
     );
     return { ok: true, ...result };
   }

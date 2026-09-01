@@ -21,7 +21,10 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Throttle({
+    default: { limit: 10, ttl: 60_000 },
+    account: { limit: 10, ttl: 60_000 },
+  })
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) response: Response) {
     const rememberMe = dto.rememberMe === true;
     const result = await this.auth.login(dto.email, dto.password, rememberMe);
@@ -82,7 +85,10 @@ export class AuthController {
 
   @Post('change-temporary-password')
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Throttle({
+    default: { limit: 5, ttl: 60_000 },
+    account: { limit: 5, ttl: 60_000 },
+  })
   changeTemporaryPassword(@Body() dto: ChangeTemporaryPasswordDto) {
     return this.auth.changeTemporaryPassword(
       dto.email,
@@ -100,7 +106,10 @@ export class AuthController {
 
   @Post('forgot-password')
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Throttle({
+    default: { limit: 5, ttl: 60_000 },
+    account: { limit: 5, ttl: 60_000 },
+  })
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
     return await this.auth.requestPasswordReset(dto.email);
   }

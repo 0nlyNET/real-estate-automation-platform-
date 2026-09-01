@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, Optional } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { DataSource, Repository } from "typeorm";
 import { TenantMessagingResource } from './tenant-messaging-resource.entity';
 import { TenantEmailIdentity } from './tenant-email-identity.entity';
 import { Credential } from "../settings/credential.entity";
@@ -9,6 +9,7 @@ import { normalizePhoneE164 } from "../../common/phone";
 import { OperationsService } from "../operations/operations.service";
 import { operationalEvent } from "../../common/operational-log";
 import { NotificationsService } from "../notifications/notifications.service";
+import { CalendarOAuthState } from '../calendar/calendar-oauth-state.entity';
 
 export type IntegrationProvider = "twilio" | "sendgrid" | "facebook_lead_ads";
 export type IntegrationStatus =
@@ -132,6 +133,10 @@ export class IntegrationsService {
     @Optional()
     @InjectRepository(TenantEmailIdentity)
     private readonly emailIdentities?: Repository<TenantEmailIdentity>,
+    @Optional()
+    @InjectRepository(CalendarOAuthState)
+    private readonly oauthStates?: Repository<CalendarOAuthState>,
+    @Optional() private readonly dataSource?: DataSource,
   ) {}
 
   private async getRow(
@@ -669,7 +674,7 @@ export class IntegrationsService {
   }
 
   // OAuth start: returns URL for frontend to redirect the user to Facebook consent screen
-  async facebookOAuthStart(tenantId: string) {
+  async facebookOAuthStart(tenantId: string, userId: string) {
     const appId = (process.env.FACEBOOK_APP_ID || "").trim();
     const redirectUrl = (process.env.FACEBOOK_REDIRECT_URL || "").trim();
 
@@ -679,17 +684,24 @@ export class IntegrationsService {
       );
     }
 
-    const nonce = crypto.randomBytes(16).toString("hex");
-    const state = `${tenantId}.${nonce}`;
-
-    // Save pending state so callback can validate it
-    const existing =
-      (await this.getPayload(tenantId, "facebook_lead_ads")) || {};
-    await this.upsertEncrypted(tenantId, "facebook_lead_ads", {
-      ...existing,
-      pendingState: state,
-      pendingStateAt: nowIso(),
-    });
+    if (!tenantId || !userId || !this.oauthStates) {
+      throw new BadRequestException('Facebook OAuth state storage is unavailable');
+    }
+    const state = crypto.randomBytes(32).toString('base64url');
+    await this.oauthStates.save(
+      this.oauthStates.create({
+        stateHash: crypto.createHash('sha256').update(state).digest('hex'),
+        tenantId,
+        userId,
+        provider: 'facebook',
+        // The shared OAuth-state table also carries PKCE verifiers for calendar
+        // providers. Facebook state needs no verifier, but the encrypted marker
+        // preserves the table's non-null and at-rest-protection contract.
+        codeVerifierEncrypted: encryptJson({ provider: 'facebook' }),
+        expiresAt: new Date(Date.now() + 10 * 60_000),
+        consumedAt: null,
+      }),
+    );
 
     const scopes = [
       "pages_show_list",
@@ -720,6 +732,7 @@ export class IntegrationsService {
     code: string,
     state: string,
   ): Promise<{ ok: boolean; error?: string }> {
+    let tenantId: string | null = null;
     try {
       const appId = (process.env.FACEBOOK_APP_ID || "").trim();
       const appSecret = (process.env.FACEBOOK_APP_SECRET || "").trim();
@@ -733,35 +746,36 @@ export class IntegrationsService {
         };
       }
 
-      if (!code || !state || !state.includes(".")) {
+      if (!code || !state) {
         return { ok: false, error: "Invalid Facebook callback payload" };
       }
-
-      const tenantId = state.split(".")[0];
-
-      const existing = await this.getPayload(tenantId, "facebook_lead_ads");
-      const pendingAt = existing?.pendingStateAt
-        ? new Date(existing.pendingStateAt).getTime()
-        : 0;
-      if (
-        !existing?.pendingState ||
-        existing.pendingState !== state ||
-        Date.now() - pendingAt > 10 * 60 * 1000
-      ) {
+      const claimedState = await this.consumeFacebookOAuthState(state);
+      if (!claimedState) {
         return {
           ok: false,
           error: "Facebook state mismatch. Please retry connect.",
         };
       }
+      tenantId = claimedState.tenantId;
+      const existing = await this.getPayload(tenantId, "facebook_lead_ads");
 
-      const tokenUrl =
-        `${facebookGraphBase()}/oauth/access_token` +
-        `?client_id=${encodeURIComponent(appId)}` +
-        `&redirect_uri=${encodeURIComponent(redirectUrl)}` +
-        `&client_secret=${encodeURIComponent(appSecret)}` +
-        `&code=${encodeURIComponent(code)}`;
-
-      const r = await fetch(tokenUrl, { method: "GET" });
+      const tokenUrl = `${facebookGraphBase()}/oauth/access_token`;
+      const tokenBody = new URLSearchParams({
+        client_id: appId,
+        redirect_uri: redirectUrl,
+        client_secret: appSecret,
+        code,
+      });
+      // Keep the app secret out of URLs, access logs, redirects, and exception
+      // strings. Reject redirects so provider responses cannot turn the token
+      // exchange into a credential-forwarding request.
+      const r = await fetch(tokenUrl, {
+        method: "POST",
+        redirect: 'error',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: tokenBody,
+        signal: AbortSignal.timeout(10_000),
+      });
       if (!r.ok) {
         const t = await r.text().catch(() => "");
         const msg = t || `Facebook token exchange failed (${r.status})`;
@@ -789,8 +803,6 @@ export class IntegrationsService {
           existing?.verifyToken || crypto.randomBytes(16).toString("hex"),
         lastSync: nowIso(),
         error: null,
-        pendingState: null,
-        pendingStateAt: null,
       });
 
       return { ok: true };
@@ -798,12 +810,35 @@ export class IntegrationsService {
       const msg = e?.message
         ? String(e.message)
         : "Facebook token exchange failed";
-      // Try to derive tenantId from state
-      const tenantId = state?.includes(".") ? state.split(".")[0] : null;
       if (tenantId)
         await this.recordFailure(tenantId, "facebook_lead_ads", msg);
       return { ok: false, error: msg };
     }
+  }
+
+  private async consumeFacebookOAuthState(rawState: string) {
+    if (!this.dataSource) return null;
+    const stateHash = crypto
+      .createHash('sha256')
+      .update(String(rawState || ''))
+      .digest('hex');
+    return this.dataSource.transaction(async (manager) => {
+      const repository = manager.getRepository(CalendarOAuthState);
+      const row = await repository
+        .createQueryBuilder('state')
+        .setLock('pessimistic_write')
+        .where(
+          'state.stateHash = :stateHash AND state.provider = :provider',
+          { stateHash, provider: 'facebook' },
+        )
+        .getOne();
+      if (!row || row.consumedAt || row.expiresAt.getTime() <= Date.now()) {
+        return null;
+      }
+      row.consumedAt = new Date();
+      await repository.save(row);
+      return row;
+    });
   }
 
   async listFacebookPages(tenantId: string) {

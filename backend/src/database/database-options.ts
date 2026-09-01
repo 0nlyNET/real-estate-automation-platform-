@@ -24,6 +24,7 @@ import { GoogleCalendarReliability1787011200001 } from './migrations/20260818000
 import { MultiProviderScheduling1787011200002 } from './migrations/202608180002-multi-provider-scheduling';
 import { AssistantConversationReliability1787875200001 } from './migrations/202608280001-assistant-conversation-reliability';
 import { ConversationInboxPagination1788220800001 } from './migrations/202609010001-conversation-inbox-pagination';
+import { FacebookOauthStateHardening1788220800002 } from './migrations/202609010002-facebook-oauth-state-hardening';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -49,6 +50,7 @@ const databaseMigrations = [
   MultiProviderScheduling1787011200002,
   AssistantConversationReliability1787875200001,
   ConversationInboxPagination1788220800001,
+  FacebookOauthStateHardening1788220800002,
 ];
 
 function migrationOptions() {

@@ -18,7 +18,7 @@ describe('UsersService email verification', () => {
       findOne: jest.fn(async ({ where }: any) =>
         where.emailVerifyToken === tokenHash ? user : null,
       ),
-      save: jest.fn(async (value) => value),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
     const service = new UsersService(repo as any, {} as any);
 
@@ -26,7 +26,14 @@ describe('UsersService email verification', () => {
     expect(user.isEmailVerified).toBe(true);
     expect(user.emailVerifyToken).toBeNull();
     expect(user.emailVerifyTokenExpiresAt).toBeNull();
-    expect(repo.save).toHaveBeenCalledWith(user);
+    expect(repo.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: user.id, emailVerifyToken: tokenHash }),
+      {
+        isEmailVerified: true,
+        emailVerifyToken: null,
+        emailVerifyTokenExpiresAt: null,
+      },
+    );
   });
 
   it('rejects an expired verification token without activating the user', async () => {
@@ -39,7 +46,7 @@ describe('UsersService email verification', () => {
     });
     const repo = {
       findOne: jest.fn().mockResolvedValue(user),
-      save: jest.fn(),
+      update: jest.fn(),
     };
     const service = new UsersService(repo as any, {} as any);
 
@@ -47,6 +54,44 @@ describe('UsersService email verification', () => {
       BadRequestException,
     );
     expect(user.isEmailVerified).toBe(false);
-    expect(repo.save).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a concurrent replay when another request already claimed the token', async () => {
+    const rawToken = 'verification-token-replayed';
+    const user = Object.assign(new User(), {
+      id: 'user-1',
+      isEmailVerified: false,
+      emailVerifyToken: crypto.createHash('sha256').update(rawToken).digest('hex'),
+      emailVerifyTokenExpiresAt: new Date(Date.now() + 60_000),
+    });
+    const repo = {
+      findOne: jest.fn().mockResolvedValue(user),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
+    const service = new UsersService(repo as any, {} as any);
+
+    await expect(service.verifyEmail(rawToken)).rejects.toThrow(
+      'Token already used or expired',
+    );
+    expect(user.isEmailVerified).toBe(false);
+  });
+
+  it('rejects legacy verification material without an expiration', async () => {
+    const rawToken = 'verification-token-without-expiry';
+    const user = Object.assign(new User(), {
+      id: 'user-1',
+      isEmailVerified: false,
+      emailVerifyToken: crypto.createHash('sha256').update(rawToken).digest('hex'),
+      emailVerifyTokenExpiresAt: null,
+    });
+    const repo = {
+      findOne: jest.fn().mockResolvedValue(user),
+      update: jest.fn(),
+    };
+    const service = new UsersService(repo as any, {} as any);
+
+    await expect(service.verifyEmail(rawToken)).rejects.toThrow('Token expired');
+    expect(repo.update).not.toHaveBeenCalled();
   });
 });

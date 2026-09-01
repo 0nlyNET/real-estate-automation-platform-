@@ -89,6 +89,15 @@ describe('HealthController readiness', () => {
     ).rejects.toThrow('Detailed health check is protected');
   });
 
+  it('does not expose detailed health from a staging-style development runtime', async () => {
+    configuredRuntime();
+    process.env.NODE_ENV = 'development';
+
+    await expect(
+      controller().readiness(undefined, { status: jest.fn() } as never),
+    ).rejects.toThrow('Detailed health check is protected');
+  });
+
   it('keeps the public health endpoint minimal', () => {
     configuredRuntime();
     expect(controller().check()).toEqual({

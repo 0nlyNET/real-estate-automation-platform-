@@ -74,6 +74,38 @@ describe('AuthService session and account-recovery controls', () => {
     expect(jwt.sign).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['unknown account', null],
+    [
+      'inactive account',
+      {
+        id: 'user-1',
+        email: 'owner@example.com',
+        passwordHash: '$2b$12$qECVKC8cgsnjVXVOnjM7GO/vHMiNHmFADqgpWndauJPpPoZ3R4OZG',
+        isActive: false,
+        isEmailVerified: true,
+      },
+    ],
+    [
+      'unverified account',
+      {
+        id: 'user-1',
+        email: 'owner@example.com',
+        passwordHash: '$2b$12$qECVKC8cgsnjVXVOnjM7GO/vHMiNHmFADqgpWndauJPpPoZ3R4OZG',
+        isActive: true,
+        isEmailVerified: false,
+      },
+    ],
+  ])('returns the same generic failure for an %s', async (_label, user) => {
+    const { service } = setup(user);
+    await expect(
+      service.login('owner@example.com', 'attacker-password'),
+    ).rejects.toMatchObject({
+      status: 401,
+      response: expect.objectContaining({ message: 'Invalid credentials' }),
+    });
+  });
+
   it('requires the old temporary credential, changes it, and revokes prior sessions', async () => {
     const user = {
       id: 'user-1',
@@ -143,6 +175,21 @@ describe('AuthService session and account-recovery controls', () => {
       /https:\/\/app\.example\.test\/reset-password\?token=[a-f0-9]{64}/,
     );
     expect(email.text).not.toContain(saved.tokenHash);
+  });
+
+  it('never returns a reset token or link from a development HTTP response', async () => {
+    process.env.NODE_ENV = 'development';
+    const user = { id: 'user-1', email: 'owner@example.test' };
+    const { service } = setup(user);
+
+    const result = await service.requestPasswordReset(user.email);
+
+    expect(result).toEqual({
+      ok: true,
+      message: 'If that email exists, a reset link has been created.',
+    });
+    expect(result).not.toHaveProperty('resetLink');
+    expect(JSON.stringify(result)).not.toMatch(/[a-f0-9]{64}/);
   });
 
   it('does not disclose an account when the email provider rejects the reset message', async () => {

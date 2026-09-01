@@ -48,6 +48,17 @@ assert.match(proxySource, /"origin"/, "The same-origin API proxy must forward Or
 assert.match(proxySource, /redirect:\s*"manual"/, "The API proxy must not automatically follow backend redirects")
 assert.match(
   proxySource,
+  /MAX_PROXY_BODY_BYTES\s*=\s*2_000_000/,
+  "The API proxy must cap buffered request bodies",
+)
+assert.ok(
+  !proxySource.includes("request.arrayBuffer()"),
+  "The API proxy must not buffer an unbounded request body",
+)
+assert.match(proxySource, /total\s*>\s*MAX_PROXY_BODY_BYTES/)
+assert.match(proxySource, /status:\s*413/)
+assert.match(
+  proxySource,
   /responseHeaders\.set\("cache-control", "private, no-store, max-age=0"\)/,
   "The API proxy must prevent browser and shared-cache storage of tenant responses",
 )

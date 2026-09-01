@@ -17,6 +17,10 @@ import { operationalEvent } from '../../common/operational-log';
 
 const STANDARD_SESSION_EXPIRES_IN = '12h' as const;
 const REMEMBERED_SESSION_EXPIRES_IN = '30d' as const;
+// A real bcrypt hash keeps unknown-account and known-account login work on the
+// same expensive verification path without embedding a usable credential.
+const INVALID_LOGIN_PASSWORD_HASH =
+  '$2b$12$qECVKC8cgsnjVXVOnjM7GO/vHMiNHmFADqgpWndauJPpPoZ3R4OZG';
 
 @Injectable()
 export class AuthService {
@@ -73,20 +77,19 @@ export class AuthService {
   async login(email: string, password: string, rememberMe = false) {
     const user = await this.usersService.findByEmail(email);
 
-    if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
-    if (!user.passwordHash) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
-    if (!user.isActive || !user.isEmailVerified) {
-      throw new UnauthorizedException('Account is inactive or email is unverified');
-    }
-
-    const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) {
+    const valid = await bcrypt.compare(
+      password,
+      user?.passwordHash || INVALID_LOGIN_PASSWORD_HASH,
+    );
+    // Do not reveal whether an account exists, is disabled, is unverified, or
+    // has no password. State-specific responses enable account enumeration.
+    if (
+      !user ||
+      !user.passwordHash ||
+      !valid ||
+      !user.isActive ||
+      !user.isEmailVerified
+    ) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -394,7 +397,6 @@ export class AuthService {
     return {
       ok: true,
       message: 'If that email exists, a reset link has been created.',
-      ...(process.env.NODE_ENV === 'production' ? {} : { resetLink }),
     };
   }
 

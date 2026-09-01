@@ -111,7 +111,10 @@ export class HealthController {
   }
 
   private assertDetailedHealthAccess(suppliedToken?: string) {
-    if (process.env.NODE_ENV !== 'production') return;
+    // Staging and development deployments can contain real connection and
+    // schema metadata too. Only the isolated test runtime may bypass the
+    // monitor credential; /health/live remains the intentionally public probe.
+    if (process.env.NODE_ENV === 'test') return;
     const expected = Buffer.from(
       String(process.env.HEALTH_CHECK_TOKEN || ''),
       'utf8',

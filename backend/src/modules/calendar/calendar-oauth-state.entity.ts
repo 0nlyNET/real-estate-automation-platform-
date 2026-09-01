@@ -4,7 +4,7 @@ import { BaseEntity } from '../../common/base.entity';
 @Entity({ name: 'calendar_oauth_states' })
 @Check(
   'CK_calendar_oauth_state_provider',
-  '"provider" IN (\'google\', \'microsoft\', \'calendly\')',
+  '"provider" IN (\'google\', \'microsoft\', \'calendly\', \'facebook\')',
 )
 export class CalendarOAuthState extends BaseEntity {
   @Index('UQ_calendar_oauth_state_hash', { unique: true })
@@ -18,7 +18,7 @@ export class CalendarOAuthState extends BaseEntity {
   userId!: string;
 
   @Column({ type: 'varchar', length: 30, default: 'google' })
-  provider!: 'google' | 'microsoft' | 'calendly';
+  provider!: 'google' | 'microsoft' | 'calendly' | 'facebook';
 
   @Column({ name: 'code_verifier_enc', type: 'text' })
   codeVerifierEncrypted!: string;

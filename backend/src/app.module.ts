@@ -44,6 +44,10 @@ import { OffboardingModule } from './modules/offboarding/offboarding.module';
 import { CrmEventsModule } from './modules/crm-events/crm-events.module';
 import { CrmIntegrationsModule } from './modules/crm-integrations/crm-integrations.module';
 import { CalendarModule } from './modules/calendar/calendar.module';
+import {
+  accountSecurityThrottleTracker,
+  directIpThrottleTracker,
+} from './common/security-throttle';
 
 @Module({
   imports: [
@@ -51,7 +55,31 @@ import { CalendarModule } from './modules/calendar/calendar.module';
       isGlobal: true,
       envFilePath: ["backend/.env", ".env"],
     }),
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
+    ThrottlerModule.forRoot([
+      {
+        name: 'default',
+        ttl: 60_000,
+        limit: 120,
+        getTracker: directIpThrottleTracker,
+      },
+      {
+        // Account-authentication routes override this high ceiling to apply a
+        // second account-scoped limit in addition to the direct-peer IP limit.
+        name: 'account',
+        ttl: 60_000,
+        limit: 10_000,
+        getTracker: accountSecurityThrottleTracker,
+      },
+      {
+        // A high platform ceiling contains request floods that fan out across
+        // many accounts or source addresses. Cost-bearing services enforce
+        // their lower tenant/user quotas independently.
+        name: 'platform',
+        ttl: 60_000,
+        limit: 10_000,
+        getTracker: async () => 'platform',
+      },
+    ]),
     TypeOrmModule.forRoot(buildDatabaseOptions()),
     DurableJobsModule,
     CrmEventsModule,

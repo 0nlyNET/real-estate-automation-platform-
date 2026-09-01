@@ -5,7 +5,7 @@ import {
   Logger,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { MoreThan, Repository } from "typeorm";
 import * as crypto from "crypto";
 import { User } from "./user.entity";
 import { UserRole } from "../../common/rbac";
@@ -103,17 +103,30 @@ export class UsersService {
     if (!user) throw new BadRequestException("Invalid token");
 
     if (
-      user.emailVerifyTokenExpiresAt &&
-      user.emailVerifyTokenExpiresAt.getTime() < Date.now()
+      !user.emailVerifyTokenExpiresAt ||
+      user.emailVerifyTokenExpiresAt.getTime() <= Date.now()
     ) {
       throw new BadRequestException("Token expired");
     }
-
+    const claim = await this.repo.update(
+      {
+        id: user.id,
+        emailVerifyToken: tokenHash,
+        emailVerifyTokenExpiresAt: MoreThan(new Date()),
+      },
+      {
+        isEmailVerified: true,
+        emailVerifyToken: null,
+        emailVerifyTokenExpiresAt: null,
+      },
+    );
+    if (claim.affected !== 1) {
+      throw new BadRequestException('Token already used or expired');
+    }
     user.isEmailVerified = true;
     user.emailVerifyToken = null;
     user.emailVerifyTokenExpiresAt = null;
-
-    return await this.repo.save(user);
+    return user;
   }
 
   async updateRole(
