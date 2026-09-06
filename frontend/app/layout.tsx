@@ -1,4 +1,5 @@
 import type React from "react"
+import { Suspense } from "react"
 import type { Metadata, Viewport } from "next"
 import { Toaster } from "@/components/ui/toaster"
 import { ThemeProvider } from "@/components/theme-provider"
@@ -48,7 +49,9 @@ export default function RootLayout({
       <body className="font-sans antialiased">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <SessionExpiryRedirect />
-          <SupportNavigationHistory />
+          <Suspense fallback={null}>
+            <SupportNavigationHistory />
+          </Suspense>
           {children}
           <Toaster />
         </ThemeProvider>

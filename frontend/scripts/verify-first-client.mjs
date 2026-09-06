@@ -17,6 +17,10 @@ for (const input of ["//evil.example/path", "https://evil.example", "/app/../../
   assert.equal(supportReturnPath(input, false, true), "/app/dashboard")
 }
 assert.equal(supportReturnPath(null, false, false), "/")
+const supportHistorySource = await readFile("components/support-navigation-history.tsx", "utf8")
+assert.match(supportHistorySource, /useSearchParams/)
+assert.match(supportHistorySource, /\[pathname,\s*search\]/)
+assert.match(supportHistorySource, /supportReturnPath", `\$\{pathname\}\$\{query\}`/)
 
 const session = { userId: "client", platformRole: null, serviceAccess: { allowed: false, billingEligible: false } }
 const { proxy } = await loadTs("proxy.ts", {

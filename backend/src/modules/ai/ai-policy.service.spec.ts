@@ -37,7 +37,10 @@ describe('AI policy guardrails', () => {
 
   it.each([
     ['Please connect me with a real person', 'HUMAN_REQUESTED'],
+    ['human please.', 'HUMAN_REQUESTED'],
+    ['real person!', 'HUMAN_REQUESTED'],
     ['Can you negotiate the commission in my contract?', 'LEGAL_OR_CONTRACT'],
+    ['I need to speak with an attorney about the contract', 'LEGAL_OR_CONTRACT'],
     ['Can you tell me whether I qualify for this mortgage?', 'LENDING_OR_TAX'],
     ['Is this a safe neighborhood for families with children?', 'FAIR_HOUSING'],
     ['I am furious and want to report you', 'DISTRESS_OR_COMPLAINT'],
@@ -52,6 +55,8 @@ describe('AI policy guardrails', () => {
     'What services do you offer?',
     'I am a first-time buyer looking for a two-bedroom home.',
     'Can I book a call about your services?',
+    'How do I sign in?',
+    'Can I sign up for alerts?',
   ])('keeps routine inquiry with AI: %s', (text) => {
     expect(policy.classifyInbound(text)).toBeNull();
   });
