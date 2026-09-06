@@ -208,6 +208,7 @@ export class AiConfigurationService {
     settings.configurationApprovalStatus = 'approved';
     settings.configurationApprovedAt = new Date();
     settings.configurationApprovedById = actor.userId;
+    settings.aiEnabled = true;
     await this.settings.save(settings);
     await this.audit.recordHuman({
       tenantId,
@@ -434,8 +435,8 @@ export class AiConfigurationService {
           allowedChannels: ['sms', 'email'],
           tone: 'professional_warm',
           bookingBehavior: 'verified_link_only',
-          responseMode: 'human_only',
-          maximumAutomaticTurns: 6,
+          responseMode: 'controlled_autopilot',
+          maximumAutomaticTurns: 12,
           minimumConfidenceThreshold: 0.82,
           allowedTopics: [],
           escalationRules: {},

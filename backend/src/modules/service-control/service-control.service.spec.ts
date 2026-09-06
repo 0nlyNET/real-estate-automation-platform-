@@ -9,6 +9,9 @@ function harness(overrides: Partial<Tenant> = {}) {
   const tenant = {
     id: '11111111-1111-4111-8111-111111111111',
     name: 'Example Realty',
+    paymentConfirmedAt: new Date(),
+    paidSubscriptionId: 'sub_paid',
+    stripeSubscriptionId: 'sub_paid',
     status: 'active',
     lifecycleStatus: 'ACTIVE',
     ...overrides,
@@ -81,6 +84,15 @@ function harness(overrides: Partial<Tenant> = {}) {
 }
 
 describe('client service control', () => {
+  it('automatically restores only billing suspensions after verified payment', async () => {
+    const billing = harness({ lifecycleStatus: 'SUSPENDED', serviceSuspensionSource: 'billing', servicePreviousLifecycleStatus: 'ACTIVE' });
+    await expect(billing.service.restoreAfterPayment(billing.tenant.id)).resolves.toMatchObject({ changed: true, lifecycleStatus: 'ACTIVE' });
+    expect(billing.settings.automationsEnabled).toBe(true);
+    for (const source of ['manual', 'safety'] as const) {
+      const h = harness({ lifecycleStatus: 'SUSPENDED', serviceSuspensionSource: source, servicePreviousLifecycleStatus: 'ACTIVE' });
+      await expect(h.service.restoreAfterPayment(h.tenant.id)).resolves.toMatchObject({ changed: false, lifecycleStatus: 'SUSPENDED' });
+    }
+  });
   it('suspends every automation path while preserving the workspace', async () => {
     const setup = harness();
     const result = await setup.service.suspend({

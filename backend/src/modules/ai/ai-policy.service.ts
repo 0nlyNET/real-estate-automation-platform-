@@ -24,7 +24,7 @@ const ESCALATION_PATTERNS: Array<{
   {
     code: 'HUMAN_REQUESTED',
     pattern:
-      /\b(human|person|real person|agent|broker|manager|supervisor|attorney|lawyer|lender|loan officer)\b/i,
+      /\b(?:(?:speak|talk|connect|transfer|put me through|chat)(?:\s+\w+){0,4}\s+(?:human|person|agent|broker|manager|supervisor|attorney|lawyer|lender|loan officer)|(?:want|need|prefer|request)(?:\s+(?:a|an|the|real|human|live)){0,3}\s+(?:human|person|agent|broker|manager)|(?:human|real person)\s*(?:please)?[.!?]?$)\b/i,
     reason: 'The lead asked to speak with a person or licensed professional.',
     priority: 'high',
   },
@@ -38,7 +38,7 @@ const ESCALATION_PATTERNS: Array<{
   {
     code: 'LEGAL_OR_CONTRACT',
     pattern:
-      /\b(contract|agreement|offer|counteroffer|negotiate|negotiation|commission|disclosure|lawsuit|legal advice|binding|sign(?:ing)?|attorney)\b/i,
+      /\b(contract|agreement|counteroffer|negotiate|negotiation|commission|disclosure|lawsuit|legal advice|binding|sign(?:ing)?|attorney|(?:make|submit|accept|reject|review|prepare|write)(?:\s+\w+){0,2}\s+offer)\b/i,
     reason: 'The conversation involves a contract, offer, negotiation, disclosure, or legal matter.',
     priority: 'urgent',
   },

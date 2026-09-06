@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { Tenant } from '../tenants/tenant.entity';
 import { TenantEmailIdentity } from './tenant-email-identity.entity';
 import { AuditService } from '../audit/audit.service';
+import { sanitizeOperationalText } from '../../common/operational-log';
 
 @Injectable()
 export class EmailIdentityService {
@@ -16,9 +17,31 @@ export class EmailIdentityService {
     @Optional() private readonly audit?: AuditService,
   ) {}
 
-  async provisionTenant(tenantId: string, input?: { fromName?: string; signature?: string }) {
+  async provisionTenant(tenantId: string, input?: { fromEmail?: string; fromName?: string; inboundAddress?: string; signature?: string }) {
     const existing = await this.identities.findOne({ where: { tenantId } });
-    if (existing) return existing;
+    const fromEmail = input?.fromEmail?.trim().toLowerCase();
+    const inboundAddress = input?.inboundAddress?.trim().toLowerCase();
+    if (fromEmail && !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(fromEmail)) {
+      throw new BadRequestException('A valid sender email is required');
+    }
+    if (inboundAddress && (!/^[a-z0-9_-]+@[^\s@]+$/.test(inboundAddress) ||
+        inboundAddress.split('@')[1] !== requiredDomain('SENDGRID_REPLY_DOMAIN'))) {
+      throw new BadRequestException('Reply address must use the configured inbound email domain');
+    }
+    if (existing) {
+      const updates = {
+        fromEmail: fromEmail || existing.fromEmail,
+        fromName: input?.fromName?.trim() || existing.fromName,
+        inboundAddress: inboundAddress || existing.inboundAddress,
+        signature: input?.signature === undefined ? existing.signature : input.signature.trim() || null,
+      };
+      if (Object.entries(updates).every(([key, value]) => existing[key as keyof TenantEmailIdentity] === value)) return existing;
+      Object.assign(existing, updates, {
+        emailStatus: 'testing', lastVerifiedAt: null, lastError: null,
+        replyToken: updates.inboundAddress.split('@')[0],
+      });
+      return this.identities.save(existing);
+    }
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) throw new BadRequestException('Tenant not found');
     const sendingDomain = requiredDomain('SENDGRID_SENDING_DOMAIN');
@@ -33,10 +56,10 @@ export class EmailIdentityService {
     const saved = await this.identities.save(
       this.identities.create({
         tenantId,
-        fromEmail: `${senderLocalPart}@${sendingDomain}`,
+        fromEmail: fromEmail || `${senderLocalPart}@${sendingDomain}`,
         fromName: String(input?.fromName || tenant.name).trim(),
-        replyToken,
-        inboundAddress: `${replyToken}@${replyDomain}`,
+        replyToken: inboundAddress?.split('@')[0] || replyToken,
+        inboundAddress: inboundAddress || `${replyToken}@${replyDomain}`,
         signature: String(input?.signature || '').trim() || null,
         classification: 'lead_follow_up',
         reputationStatus: 'warming',
@@ -77,6 +100,13 @@ export class EmailIdentityService {
       afterState: { emailStatus: saved.emailStatus, lastVerifiedAt: saved.lastVerifiedAt },
     });
     return saved;
+  }
+
+  async markFailed(tenantId: string, error: unknown) {
+    await this.identities.update({ tenantId }, {
+      emailStatus: 'failed',
+      lastError: sanitizeOperationalText(error instanceof Error ? error.message : String(error), 500),
+    });
   }
 }
 

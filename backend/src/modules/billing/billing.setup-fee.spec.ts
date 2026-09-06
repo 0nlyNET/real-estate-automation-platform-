@@ -238,6 +238,7 @@ describe('Stripe one-time setup fee billing', () => {
     (service as any).stripe = {
       webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
       subscriptions: { retrieve: jest.fn().mockResolvedValue(subscription) },
+      invoices: { retrieve: jest.fn().mockResolvedValue({ ...event.data.object, status: 'paid' }) },
     };
 
     await expect(service.handleWebhook(Buffer.from('{}'), 'valid')).resolves.toEqual({
@@ -314,6 +315,7 @@ describe('Stripe one-time setup fee billing', () => {
     (service as any).stripe = {
       webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
       subscriptions: { retrieve: jest.fn().mockResolvedValue(subscription) },
+      invoices: { retrieve: jest.fn().mockResolvedValue({ ...event.data.object, status: 'paid' }) },
     };
 
     await expect(service.handleWebhook(Buffer.from('{}'), 'valid')).resolves.toEqual({

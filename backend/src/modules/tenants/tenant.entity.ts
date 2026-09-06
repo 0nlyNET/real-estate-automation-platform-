@@ -139,6 +139,12 @@ export class Tenant {
   @Column({ type: 'text', nullable: true })
   stripeSubscriptionStatus?: string | null;
 
+  @Column({ name: 'payment_confirmed_at', type: 'timestamptz', nullable: true })
+  paymentConfirmedAt?: Date | null;
+
+  @Column({ name: 'paid_subscription_id', type: 'text', nullable: true })
+  paidSubscriptionId?: string | null;
+
   @Column({ name: 'stripe_checkout_session_id', type: 'text', nullable: true })
   stripeCheckoutSessionId?: string | null;
 

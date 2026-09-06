@@ -47,6 +47,15 @@ describe('AI policy guardrails', () => {
     expect(policy.classifyInbound(text)).toMatchObject({ code });
   });
 
+  it.each([
+    'My agent mentioned your brokerage. What areas do you cover?',
+    'What services do you offer?',
+    'I am a first-time buyer looking for a two-bedroom home.',
+    'Can I book a call about your services?',
+  ])('keeps routine inquiry with AI: %s', (text) => {
+    expect(policy.classifyInbound(text)).toBeNull();
+  });
+
   it('adds the approved disclosure to the first AI response only', () => {
     expect(
       policy.ensureIdentityDisclosure(

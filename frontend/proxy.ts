@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 type VerifiedSession = {
+  serviceAccess: { allowed: boolean; billingEligible: boolean }
   userId: string
   isPlatformAdmin: boolean
   platformRole: "super_admin" | "staff" | null
@@ -33,6 +34,7 @@ async function readVerifiedSession(req: NextRequest): Promise<VerifiedSession | 
       const session = (await response.json()) as Partial<VerifiedSession>
       if (typeof session.userId !== "string" || !session.userId) return null
       return {
+        serviceAccess: { allowed: session.serviceAccess?.allowed === true, billingEligible: session.serviceAccess?.billingEligible === true },
         userId: session.userId,
         isPlatformAdmin: session.isPlatformAdmin === true,
         platformRole:
@@ -53,6 +55,11 @@ export async function proxy(req: NextRequest) {
 
   if (req.nextUrl.pathname.startsWith("/admin") && !session.platformRole) {
     return NextResponse.redirect(new URL("/app/dashboard", req.url))
+  }
+  const setupPaths = new Set(["/app/billing", "/app/onboarding", "/app/settings"])
+  if (req.nextUrl.pathname.startsWith("/app") && !session.platformRole &&
+      !session.serviceAccess.allowed && !setupPaths.has(req.nextUrl.pathname.replace(/\/$/, ""))) {
+    return NextResponse.redirect(new URL(session.serviceAccess.billingEligible ? "/support" : "/app/billing", req.url))
   }
   return NextResponse.next()
 }

@@ -23,7 +23,6 @@ import { TenantProvisioningService } from './tenant-provisioning.service';
 import { AuditModule } from '../audit/audit.module';
 import { TwilioComplianceService } from './twilio-compliance.service';
 import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
-import { CalendarOAuthState } from '../calendar/calendar-oauth-state.entity';
 
 @Module({
   imports: [
@@ -34,7 +33,6 @@ import { CalendarOAuthState } from '../calendar/calendar-oauth-state.entity';
       TenantEmailIdentity,
       Tenant,
       OnboardingRecord,
-      CalendarOAuthState,
     ]),
     CommonModule,
     OperationsModule,

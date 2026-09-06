@@ -181,7 +181,7 @@ describe('Stripe billing safety controls', () => {
       .fn()
       .mockReturnValueOnce(eventFor('evt_known', 'price_service_month'))
       .mockReturnValueOnce(eventFor('evt_unknown', 'price_unknown'));
-    (service as any).stripe = { webhooks: { constructEvent } };
+    (service as any).stripe = { webhooks: { constructEvent }, subscriptions: { retrieve: jest.fn().mockResolvedValueOnce(subscription('price_service_month')).mockResolvedValueOnce(subscription('price_unknown')) }, invoices: { retrieve: jest.fn().mockResolvedValue({ status: 'paid', amount_paid: 49900, customer: 'cus_1', subscription: 'sub_1' }) } };
 
     await expect(service.handleWebhook(Buffer.from('{}'), 'valid')).resolves.toEqual({ received: true });
     expect(tenants.updateBilling).toHaveBeenCalledWith(
@@ -232,6 +232,8 @@ describe('Stripe billing safety controls', () => {
       },
     };
     (service as any).stripe = {
+      subscriptions: { retrieve: jest.fn().mockResolvedValue(subscription) },
+      invoices: { retrieve: jest.fn().mockResolvedValue({ status: 'paid', amount_paid: 49900, customer: 'cus_1', subscription: 'sub_ready' }) },
       webhooks: {
         constructEvent: jest.fn().mockReturnValue({
           id: 'evt_ready',
@@ -274,7 +276,7 @@ describe('Stripe billing safety controls', () => {
     };
     const notifications = { createForPlatform: jest.fn().mockResolvedValue([]) };
     const tenants = {
-      findById: jest.fn(),
+      findById: jest.fn().mockResolvedValue({ id: 'tenant-1', stripeCustomerId: 'cus_1' }),
       findByStripeReference: jest.fn().mockResolvedValue({ id: 'tenant-1' }),
       updateBilling: jest.fn().mockResolvedValue(undefined),
     };
@@ -303,6 +305,7 @@ describe('Stripe billing safety controls', () => {
     (service as any).stripe = {
       webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
       subscriptions: { retrieve: jest.fn().mockResolvedValue(subscription) },
+      invoices: { retrieve: jest.fn().mockResolvedValue({ ...event.data.object, status: 'paid' }) },
     };
 
     await expect(service.handleWebhook(Buffer.from('{}'), 'valid')).resolves.toEqual({ received: true });
@@ -369,6 +372,7 @@ describe('Stripe billing safety controls', () => {
     (service as any).stripe = {
       webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
       subscriptions: { retrieve: jest.fn().mockResolvedValue(subscription) },
+      invoices: { retrieve: jest.fn().mockResolvedValue({ ...event.data.object, status: 'paid' }) },
     };
 
     await expect(service.handleWebhook(Buffer.from('{}'), 'valid')).resolves.toEqual({
@@ -421,6 +425,8 @@ describe('Stripe billing safety controls', () => {
       },
     };
     (service as any).stripe = {
+      subscriptions: { retrieve: jest.fn().mockResolvedValue(subscription) },
+      invoices: { retrieve: jest.fn().mockResolvedValue({ status: 'paid', amount_paid: 49900, customer: 'cus_1', subscription: 'sub_legacy' }) },
       webhooks: {
         constructEvent: jest.fn().mockReturnValue({
           id: 'evt_legacy',

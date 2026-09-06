@@ -72,13 +72,13 @@ describe('workspace AI configuration approval', () => {
     else process.env.OPENAI_API_KEY = originalKey;
   });
 
-  it('creates every workspace as disabled and human-only by default', async () => {
+  it('defaults to autopilot but keeps sending disabled until setup is approved', async () => {
     const result = await service.getConfiguration(
       '00000000-0000-4000-8000-000000000001',
     );
     expect(result.settings).toMatchObject({
       aiEnabled: false,
-      responseMode: 'human_only',
+      responseMode: 'controlled_autopilot',
       configurationApprovalStatus: 'draft',
     });
   });

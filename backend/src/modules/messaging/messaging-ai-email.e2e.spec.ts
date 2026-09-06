@@ -88,6 +88,12 @@ describe('email reply to AI response end-to-end', () => {
         return value;
       }),
       findOne: jest.fn(async ({ where }: any) => {
+        if (Array.isArray(where)) {
+          return messages.find((row) => where.some((filter) =>
+            row.providerMessageId === filter.providerMessageId &&
+            filter.lead?.tenantId === tenantId && row.leadId === lead.id,
+          )) || null;
+        }
         if (where?.id) {
           const found = messages.find((row) => row.id === where.id) || null;
           if (found) found.lead = lead;
@@ -112,7 +118,14 @@ describe('email reply to AI response end-to-end', () => {
         return null;
       }),
       find: jest.fn(async ({ where, order, take }: any) => {
-        let rows = messages.filter((row) => !where?.leadId || row.leadId === where.leadId);
+        let rows = messages.filter((row) =>
+          (Array.isArray(where) ? where : [where]).some((filter) =>
+            (!filter?.leadId || row.leadId === filter.leadId) &&
+            (!filter?.direction || row.direction === filter.direction) &&
+            (!filter?.status || (filter.status.value
+              ? filter.status.value.includes(row.status) : row.status === filter.status)),
+          ),
+        );
         if (where?.authorship) rows = rows.filter((row) => row.authorship === where.authorship);
         if (where?.status) rows = rows.filter((row) => row.status === where.status);
         rows = [...rows].sort((a, b) =>
@@ -423,7 +436,7 @@ describe('email reply to AI response end-to-end', () => {
     expect(inbound).toMatchObject({
       leadId,
       subject: 'Re: Austin home search',
-      providerMessageId: 'sendgrid:lead-reply@example.com',
+      providerMessageId: `sendgrid-inbound:${tenantId}:lead-reply@example.com`,
       status: 'received',
     });
     expect(lead.sequenceStatus).toBe('stopped');

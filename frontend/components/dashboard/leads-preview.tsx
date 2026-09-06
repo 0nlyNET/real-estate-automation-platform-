@@ -70,7 +70,7 @@ export function DashboardLeadsPreview() {
           <div className="rounded-lg border border-dashed border-border/70 bg-background/40 p-5">
             <div className="text-sm font-medium">No leads yet</div>
             <div className="mt-1 text-sm text-muted-foreground">
-              Connect Facebook Lead Ads or use the intake endpoint to start capturing leads.
+              Connect your website form or use the intake endpoint to start capturing leads.
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
               <Button asChild size="sm" className="h-8">

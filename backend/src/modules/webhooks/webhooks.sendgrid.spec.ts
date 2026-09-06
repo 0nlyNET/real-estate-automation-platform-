@@ -17,6 +17,7 @@ describe('SendGrid inbound email webhook', () => {
   });
 
   function build(options?: {
+    tenantId?: string;
     stop?: boolean;
     duplicate?: boolean;
     integration?: {
@@ -28,7 +29,7 @@ describe('SendGrid inbound email webhook', () => {
   }) {
     const lead = Object.assign(new Lead(), {
       id: '00000000-0000-4000-8000-000000000020',
-      tenantId: '00000000-0000-4000-8000-000000000001',
+      tenantId: options?.tenantId || '00000000-0000-4000-8000-000000000001',
       fullName: 'Jordan Client',
       email: 'jordan@example.com',
       sequenceStatus: 'active',
@@ -146,14 +147,14 @@ describe('SendGrid inbound email webhook', () => {
     ).resolves.toEqual({ status: 'ok' });
     expect(item.manager.query).toHaveBeenCalledWith(
       'SELECT pg_advisory_xact_lock(hashtext($1))',
-      ['sendgrid:email-123@example.com'],
+      ['sendgrid-inbound:00000000-0000-4000-8000-000000000001:email-123@example.com'],
     );
     expect(item.messageRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
         leadId: item.lead.id,
         channel: 'email',
         direction: 'inbound',
-        providerMessageId: 'sendgrid:email-123@example.com',
+        providerMessageId: 'sendgrid-inbound:00000000-0000-4000-8000-000000000001:email-123@example.com',
         subject: 'Austin search',
       }),
     );
@@ -164,6 +165,27 @@ describe('SendGrid inbound email webhook', () => {
         channel: 'email',
       }),
     );
+  });
+
+  it('scopes sender-supplied Message-IDs and legacy duplicate lookups to each workspace', async () => {
+    const first = build();
+    const second = build({ tenantId: '00000000-0000-4000-8000-000000000002' });
+    await first.service.handleSendGridInbound(body, authorization());
+    await second.service.handleSendGridInbound(body, authorization());
+    const firstMessage = first.messageRepo.create.mock.calls[0][0];
+    const secondMessage = second.messageRepo.create.mock.calls[0][0];
+    expect(firstMessage.providerMessageId).not.toEqual(secondMessage.providerMessageId);
+    for (const item of [first, second]) {
+      const lookup = item.messageRepo.findOne.mock.calls[0][0];
+      expect(lookup.where).toHaveLength(2);
+      expect(lookup.where).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          providerMessageId: 'sendgrid:email-123@example.com',
+          lead: { tenantId: item.lead.tenantId },
+        }),
+      ]));
+      expect(lookup.where.every((filter: any) => filter.lead.tenantId === item.lead.tenantId)).toBe(true);
+    }
   });
 
   it('reserves lead usage before an inbound email creates a new real lead', async () => {

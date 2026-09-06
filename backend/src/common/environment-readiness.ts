@@ -302,7 +302,6 @@ export function environmentReadiness() {
         present('SENDGRID_INBOUND_PASSWORD')
           ? 'configured'
           : 'tenant_unavailable',
-      meta: present('FACEBOOK_WEBHOOK_URL') ? 'configured' : 'tenant_unavailable',
     },
     aiProvider: {
       status: present('OPENAI_API_KEY') ? 'configured' : 'not_configured',

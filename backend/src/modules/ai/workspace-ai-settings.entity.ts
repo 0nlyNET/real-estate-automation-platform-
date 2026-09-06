@@ -38,13 +38,13 @@ export class WorkspaceAiSettings {
   @Column({ name: 'booking_behavior', type: 'varchar', length: 40, default: 'verified_link_only' })
   bookingBehavior!: 'calendar_booking' | 'verified_link_only' | 'handoff' | 'disabled';
 
-  @Column({ name: 'response_mode', type: 'varchar', length: 30, default: 'human_only' })
+  @Column({ name: 'response_mode', type: 'varchar', length: 30, default: 'controlled_autopilot' })
   responseMode!: AiResponseMode;
 
   @Column({ name: 'identity_label', type: 'varchar', length: 160, nullable: true })
   identityLabel?: string | null;
 
-  @Column({ name: 'maximum_automatic_turns', type: 'int', default: 6 })
+  @Column({ name: 'maximum_automatic_turns', type: 'int', default: 12 })
   maximumAutomaticTurns!: number;
 
   @Column({ name: 'minimum_confidence_threshold', type: 'double precision', default: 0.82 })

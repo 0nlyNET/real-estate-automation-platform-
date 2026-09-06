@@ -12,6 +12,30 @@ describe('EmailIdentityService sender isolation', () => {
     process.env = { ...originalEnv };
   });
 
+  it('keeps a verified identity unchanged across service instances and requires testing after an edit', async () => {
+    const identity: any = { tenantId: 'tenant-1', fromEmail: 'owner@client.example', fromName: 'Client',
+      inboundAddress: 'token@reply.example.com', signature: null, emailStatus: 'ready', lastVerifiedAt: new Date() };
+    const repository = { findOne: jest.fn(async () => identity), save: jest.fn(async (row) => row),
+      update: jest.fn(async (_where, patch) => Object.assign(identity, patch)) };
+    const service = new EmailIdentityService(repository as any, {} as any);
+    const verified = identity.lastVerifiedAt;
+    await service.provisionTenant('tenant-1', { fromEmail: identity.fromEmail, fromName: identity.fromName });
+    await new EmailIdentityService(repository as any, {} as any).provisionTenant('tenant-1');
+    expect(repository.save).not.toHaveBeenCalled();
+    expect(identity.lastVerifiedAt).toBe(verified);
+    await service.provisionTenant('tenant-1', { fromEmail: 'new@client.example' });
+    expect(identity).toMatchObject({ fromEmail: 'new@client.example', emailStatus: 'testing', lastVerifiedAt: null });
+    await service.markFailed('tenant-1', new Error('SendGrid rejected the sender'));
+    expect(identity).toMatchObject({ emailStatus: 'failed', lastError: 'SendGrid rejected the sender' });
+    await service.markVerified('tenant-1');
+    expect(identity).toMatchObject({ emailStatus: 'ready', lastError: null });
+  });
+
+  it('rejects reply routing to an unrelated email domain', async () => {
+    const service = new EmailIdentityService({ findOne: async () => null } as any, {} as any);
+    await expect(service.provisionTenant('tenant-1', { inboundAddress: 'other@attacker.example' })).rejects.toThrow('configured inbound email domain');
+  });
+
   it('creates collision-safe identities for tenants with the same name', async () => {
     const rows: any[] = [];
     const identities = {

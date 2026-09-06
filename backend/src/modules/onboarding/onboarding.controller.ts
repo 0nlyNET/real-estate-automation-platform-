@@ -1,9 +1,11 @@
+import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
 import { Body, Controller, Get, Put, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 import { OnboardingService } from './onboarding.service';
 import { UpdateOnboardingDto } from './onboarding.dto';
 
+@AllowSetupAccess()
 @Controller('onboarding')
 @UseGuards(JwtAuthGuard)
 export class OnboardingController {

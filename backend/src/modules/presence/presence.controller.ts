@@ -1,9 +1,11 @@
+import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
 import { Body, Controller, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PresenceService } from './presence.service';
 import { PresenceStatusDto } from './presence.dto';
 
 @UseGuards(JwtAuthGuard)
+@AllowSetupAccess()
 @Controller('presence')
 export class PresenceController {
   constructor(private readonly presence: PresenceService) {}

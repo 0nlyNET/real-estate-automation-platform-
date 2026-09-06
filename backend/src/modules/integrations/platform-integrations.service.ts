@@ -393,10 +393,14 @@ export class PlatformIntegrationsService {
 
   async tenantSummary(tenantId: string) {
     if (this.messagingResources && this.emailIdentities) {
-      const [twilio, sendgrid] = await Promise.all([
+      const [twilio, sendgrid, sendgridPlatform] = await Promise.all([
         this.messagingResources.findOne({ where: { tenantId } }),
         this.emailIdentities.findOne({ where: { tenantId } }),
+        this.platformPayload('sendgrid'),
       ]);
+      const emailConnected = Boolean(sendgrid?.emailStatus === 'ready' && !sendgrid.lastError &&
+        !['blocked', 'paused'].includes(sendgrid.reputationStatus) && sendgridPlatform?.apiKey &&
+        sendgridPlatform.connected === true && !sendgridPlatform.error);
       return {
         twilio: {
           configured: Boolean(twilio?.twilioSubaccountSid),
@@ -415,9 +419,9 @@ export class PlatformIntegrationsService {
         },
         sendgrid: {
           configured: Boolean(sendgrid),
-          connected: sendgrid?.emailStatus === 'ready',
-          status: sendgrid?.emailStatus || 'disconnected',
-          error: sendgrid?.lastError || null,
+          connected: emailConnected,
+          status: emailConnected ? 'ready' : sendgrid?.emailStatus === 'ready' ? 'failed' : sendgrid?.emailStatus || 'disconnected',
+          error: sendgrid?.lastError || (sendgrid?.emailStatus === 'ready' && !emailConnected ? 'The platform email connection needs to be retested by RealtyTechAI operations.' : null),
           lastSync: sendgrid?.updatedAt || null,
           managedByPlatform: true,
           display: {
@@ -488,12 +492,14 @@ export class PlatformIntegrationsService {
     if (!this.emailIdentityService) {
       throw new BadRequestException('Managed SendGrid identity service is unavailable');
     }
-    await this.emailIdentityService.provisionTenant(tenantId, {
+    const identity = await this.emailIdentityService.provisionTenant(tenantId, {
+      ...(dto.fromEmail?.trim() ? { fromEmail: dto.fromEmail } : {}),
       fromName: dto.fromName,
+      ...(dto.inboundAddress?.trim() ? { inboundAddress: dto.inboundAddress } : {}),
     });
     const legacy = await this.tenantRow(tenantId, 'sendgrid');
     if (legacy) await this.tenantCredentials.remove(legacy);
-    await this.onboarding?.invalidateLaunchEvidence(tenantId, {
+    if (identity.emailStatus !== 'ready') await this.onboarding?.invalidateLaunchEvidence(tenantId, {
       reason: 'Managed SendGrid identity was provisioned or reconciled',
       retestMessaging: true,
       sendgridApproval: false,
@@ -582,9 +588,16 @@ export class PlatformIntegrationsService {
           text: 'This is a controlled RealtyTechAI email delivery test.',
           categories: ['transactional'],
         });
+        const platform = await this.platformPayload('sendgrid') as SendGridPlatformPayload | null;
+        if (platform?.apiKey === config.apiKey) {
+          await this.savePlatformPayload('sendgrid', {
+            ...platform, configured: true, connected: true, error: null, lastSync: nowIso(),
+          });
+        }
         await this.emailIdentityService.markVerified(tenantId);
         return { ok: true };
       } catch (error: any) {
+        await this.emailIdentityService.markFailed(tenantId, error);
         return { ok: false, error: sanitizeOperationalText(error?.message || 'SendGrid test failed') };
       }
     }

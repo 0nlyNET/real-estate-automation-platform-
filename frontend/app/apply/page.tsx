@@ -75,7 +75,7 @@ export default function ApplyPage() {
 
               <ul className="mt-6 space-y-4">
                 {[
-                  "Generate online leads (Facebook, website, portals)",
+                  "Generate online leads (website, CRM, portals)",
                   "Want prompt, approved response and consistent follow-up",
                   "Are tired of manually chasing leads",
                   "Want observable lead handling rather than unsupported outcome claims",
@@ -164,7 +164,7 @@ export default function ApplyPage() {
                   <input
                     required
                     name="lead_source"
-                    placeholder="Primary lead source (Facebook, website, Realtor.com, etc.)"
+                    placeholder="Primary lead source (website, CRM, Realtor.com, etc.)"
                     className="w-full rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
                   />
 

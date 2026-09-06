@@ -135,6 +135,7 @@ export default function InboxPage() {
   const [actionError, setActionError] = useState("")
   const [notice, setNotice] = useState("")
   const [threads, setThreads] = useState<ThreadRow[]>([])
+  const threadItemsRef = useRef(threads)
   const [threadTake, setThreadTake] = useState(50)
   const [hasMoreThreads, setHasMoreThreads] = useState(false)
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null)
@@ -144,7 +145,7 @@ export default function InboxPage() {
   const [hasOlderMessages, setHasOlderMessages] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [sendChannel, setSendChannel] = useState<"sms" | "email">("sms")
+  const [sendChannel, setSendChannel] = useState<"sms" | "email">("email")
   const [busy, setBusy] = useState(false)
   const [sendFailures, setSendFailures] = useState<Record<string, SendFailure>>({})
   const [scope, setScope] = useState<"shared" | "mine">("shared")
@@ -183,6 +184,7 @@ export default function InboxPage() {
       )
       if (requestVersion !== threadRequestVersion.current) return
       const items = Array.isArray(page?.items) ? page.items : []
+      threadItemsRef.current = items
       setThreads(items)
       setHasMoreThreads(Boolean(page?.hasMore))
       const requested = requestedLeadIdConsumed.current
@@ -265,12 +267,9 @@ export default function InboxPage() {
       if (activeLeadIdRef.current !== leadId) return
       const messageRows = Array.isArray(messagePage?.items) ? messagePage.items : []
       setMessages((current) => mode === "initial" ? messageRows : mergeMessages(current, messageRows))
-      const latest = messageRows.length
-        ? messageRows[messageRows.length - 1]
-        : null
       if (mode === "initial" && channelLeadRef.current !== leadId) {
         channelLeadRef.current = leadId
-        setSendChannel(latest?.channel || "sms")
+        setSendChannel(threadItemsRef.current.find((thread) => thread.leadId === leadId)?.leadEmail ? "email" : "sms")
       }
       if (enrollmentRows) setEnrollments(Array.isArray(enrollmentRows) ? enrollmentRows : [])
       if (mode !== "poll") {
@@ -451,7 +450,7 @@ export default function InboxPage() {
           <CardContent className="p-0">
             {loading ? <div className="p-4 text-sm text-muted-foreground">Loading conversations…</div> : null}
             <div className="max-h-[680px] divide-y overflow-y-auto">
-              {threads.map((thread) => <button key={thread.leadId} type="button" onClick={() => { activeLeadIdRef.current = thread.leadId; channelLeadRef.current = thread.leadId; setActiveLeadId(thread.leadId); setSendChannel(thread.channel === "email" && thread.leadEmail ? "email" : thread.leadPhone ? "sms" : "email") }} className={`w-full p-4 text-left hover:bg-muted/60 ${activeLeadId === thread.leadId ? "bg-muted" : ""}`}><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{thread.leadName || "Lead"}</span>{thread.temperature ? <Badge variant={thread.temperature === "hot" ? "destructive" : "secondary"}>{thread.temperature}</Badge> : null}</div><div className="mt-1 truncate text-xs text-muted-foreground">{thread.lastMessageBody || "No message"}</div>{thread.status ? <div className="mt-1 text-[11px] text-muted-foreground">{statusLabel(thread.status)}</div> : null}</button>)}
+              {threads.map((thread) => <button key={thread.leadId} type="button" onClick={() => { activeLeadIdRef.current = thread.leadId; channelLeadRef.current = thread.leadId; setActiveLeadId(thread.leadId); setSendChannel(thread.leadEmail ? "email" : "sms") }} className={`w-full p-4 text-left hover:bg-muted/60 ${activeLeadId === thread.leadId ? "bg-muted" : ""}`}><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{thread.leadName || "Lead"}</span>{thread.temperature ? <Badge variant={thread.temperature === "hot" ? "destructive" : "secondary"}>{thread.temperature}</Badge> : null}</div><div className="mt-1 truncate text-xs text-muted-foreground">{thread.lastMessageBody || "No message"}</div>{thread.status ? <div className="mt-1 text-[11px] text-muted-foreground">{statusLabel(thread.status)}</div> : null}</button>)}
               {hasMoreThreads ? <div className="p-3"><Button type="button" size="sm" variant="outline" className="w-full" onClick={() => setThreadTake((current) => Math.min(current + 50, 200))}>Load more conversations</Button></div> : null}
               {!loading && !threads.length ? <div className="p-8 text-center text-sm text-muted-foreground">No conversations yet.</div> : null}
             </div>

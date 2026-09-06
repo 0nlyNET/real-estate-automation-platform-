@@ -1,16 +1,20 @@
+import { EntitlementService } from '../entitlements/entitlement.service';
+import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
 import { Controller, Get, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantsService } from '../tenants/tenants.service';
 import { describeServiceState } from '../service-control/service-control.service';
 
+@AllowSetupAccess()
 @Controller('me')
 export class MeController {
-  constructor(private readonly tenants: TenantsService) {}
+  constructor(private readonly tenants: TenantsService, private readonly entitlements: EntitlementService) {}
 
   @UseGuards(JwtAuthGuard)
   @Get()
   async me(@Req() req: any) {
     return {
+      serviceAccess: await this.entitlements.workspaceAccess(req.user?.tenantId),
       userId: req.user?.sub || null,
       tenantId: req.user?.tenantId || null,
       role: req.user?.role || null,
@@ -32,18 +36,18 @@ export class MeController {
     if (!t) {
       return {
         plan: 'free',
-        status: 'active',
+        status: 'incomplete',
         billingInterval: 'month',
         trialEndsAt: null,
         currentPeriodEnd: null,
         cancelAtPeriodEnd: false,
         cancelAt: null,
         stripeSubscriptionStatus: null,
-        lifecycleStatus: 'ACTIVE',
+        lifecycleStatus: 'ONBOARDING',
         serviceState: {
-          state: 'active',
-          label: 'Active',
-          reason: 'RealtyTechAI services are active.',
+          state: 'onboarding',
+          label: 'Workspace unavailable',
+          reason: 'Workspace was not found.',
           graceEndsAt: null,
         },
         serviceSuspendedAt: null,
@@ -54,6 +58,7 @@ export class MeController {
     }
 
     return {
+      serviceAccess: await this.entitlements.workspaceAccess(tenantId),
       plan: t.plan,
       status: t.status,
       billingInterval: t.billingInterval || 'month',

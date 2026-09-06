@@ -1,19 +1,16 @@
 import {
   Body,
   Controller,
-  Get,
   Header,
   Headers,
   HttpCode,
   Logger,
   Post,
-  Query,
-  Req,
   Res,
   UseInterceptors,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { WebhooksService } from './webhooks.service';
 import {
@@ -128,31 +125,4 @@ export class WebhooksController {
     }
   }
 
-  @Get('facebook/lead-ads')
-  facebookVerify(
-    @Query('hub.mode') mode: string | undefined,
-    @Query('hub.verify_token') verifyToken: string | undefined,
-    @Query('hub.challenge') challenge: string | undefined,
-    @Res() res: Response,
-  ) {
-    const verified = this.webhooks.verifyFacebookWebhook(
-      mode,
-      verifyToken,
-      challenge,
-    );
-    return res.status(200).send(verified);
-  }
-
-  @Post('facebook/lead-ads')
-  async facebookLeadAds(
-    @Req() req: Request & { rawBody?: Buffer },
-    @Body() body: any,
-    @Headers('x-hub-signature-256') signature?: string,
-  ) {
-    return this.webhooks.handleFacebookLeadAds(
-      body,
-      req.rawBody,
-      signature || '',
-    );
-  }
 }

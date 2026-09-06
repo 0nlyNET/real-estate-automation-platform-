@@ -585,6 +585,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       const raw = String(error?.message || error || 'Provider request failed');
       const sanitized = sanitizeProviderError(raw);
       const definitiveRejection = isDefinitiveProviderRejection(error);
+      if (message.channel === 'email' && definitiveRejection && [401, 403].includes(error.status)) {
+        await this.providerConfig?.recordSendGridCredentialFailure(lead.tenantId);
+      }
       if (
         definitiveRejection &&
         isTransientProviderError(error) &&
@@ -878,6 +881,7 @@ function normalizeEmail(value?: string) {
 
 function emailMessageIdHeader(providerMessageId: string) {
   const value = String(providerMessageId || '')
+    .replace(/^sendgrid-inbound:[^:]+:/, '')
     .replace(/^sendgrid:/, '')
     .replace(/[<>\r\n]/g, '')
     .trim()

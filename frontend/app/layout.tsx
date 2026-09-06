@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next"
 import { Toaster } from "@/components/ui/toaster"
 import { ThemeProvider } from "@/components/theme-provider"
 import { SessionExpiryRedirect } from "@/components/session-expiry-redirect"
+import { SupportNavigationHistory } from "@/components/support-navigation-history"
 import "./globals.css"
 
 export const metadata: Metadata = {
@@ -47,6 +48,7 @@ export default function RootLayout({
       <body className="font-sans antialiased">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <SessionExpiryRedirect />
+          <SupportNavigationHistory />
           {children}
           <Toaster />
         </ThemeProvider>

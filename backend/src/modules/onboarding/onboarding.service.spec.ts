@@ -31,6 +31,9 @@ describe('operator-controlled workspace activation', () => {
         id: 'tenant-1',
         name: 'Lakeview Realty',
         status: 'active',
+        stripeSubscriptionId: 'sub_paid',
+        paidSubscriptionId: 'sub_paid',
+        paymentConfirmedAt: new Date(),
         lifecycleStatus: 'ONBOARDING',
       }),
       manager: { transaction: jest.fn() },
@@ -240,6 +243,9 @@ describe('operator-controlled workspace activation', () => {
       findOne: jest.fn().mockResolvedValue({
         id: 'tenant-1',
         status: 'active',
+        stripeSubscriptionId: 'sub_paid',
+        paidSubscriptionId: 'sub_paid',
+        paymentConfirmedAt: new Date(),
         lifecycleStatus: 'TESTING',
       }),
     };

@@ -343,21 +343,23 @@ export class NotificationsService {
   async getPreferences(recipientUserId: string) {
     let preference = await this.preferences.findOne({ where: { recipientUserId } });
     if (!preference) {
-      preference = await this.preferences.save(
-        this.preferences.create({
-          recipientUserId,
-          inAppEnabled: true,
-          pushEnabled: true,
-          emailEnabled: false,
-          privacyMode: true,
-          categorySettings: DEFAULT_CATEGORIES,
-          severitySettings: DEFAULT_SEVERITIES,
-          quietHoursEnabled: false,
-          quietHoursStart: '21:00',
-          quietHoursEnd: '08:00',
-          timezone: 'America/New_York',
-        }),
-      );
+      // Multiple first-login requests may initialize preferences simultaneously.
+      // A competing insert must preserve the existing user's choices.
+      await this.preferences.createQueryBuilder().insert().values({
+        recipientUserId,
+        inAppEnabled: true,
+        pushEnabled: true,
+        emailEnabled: false,
+        privacyMode: true,
+        categorySettings: DEFAULT_CATEGORIES,
+        severitySettings: DEFAULT_SEVERITIES,
+        quietHoursEnabled: false,
+        quietHoursStart: '21:00',
+        quietHoursEnd: '08:00',
+        timezone: 'America/New_York',
+      }).orIgnore().execute();
+      preference = await this.preferences.findOne({ where: { recipientUserId } });
+      if (!preference) throw new Error('Notification preferences could not be initialized');
     }
     return preference;
   }

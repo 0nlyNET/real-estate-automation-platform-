@@ -1,6 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import Link from "next/link"
+import { ArrowLeft } from "lucide-react"
+import { supportReturnPath } from "@/lib/support-navigation"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -13,6 +16,20 @@ export default function SupportPage() {
   const [subject, setSubject] = useState("")
   const [message, setMessage] = useState("")
   const [loading, setLoading] = useState(false)
+  const [backHref, setBackHref] = useState("/")
+
+  useEffect(() => {
+    let active = true
+    apiFetch<{ platformRole: string | null; serviceAccess?: { allowed: boolean; billingEligible: boolean } }>("/me")
+      .then((me) => {
+        let previous: string | null = new URLSearchParams(window.location.search).get("from")
+        try { previous ||= sessionStorage.getItem("supportReturnPath") } catch {}
+        const target = !me.platformRole && me.serviceAccess?.allowed === false
+          ? "/app/billing" : supportReturnPath(previous, Boolean(me.platformRole), true)
+        if (active) setBackHref(target)
+      }).catch(() => { if (active) setBackHref("/") })
+    return () => { active = false }
+  }, [])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -30,7 +47,7 @@ export default function SupportPage() {
         title: "Support ticket created",
         description: res.notificationSent
           ? "The support team was notified."
-          : "Your ticket was saved, but operator email notification is not configured yet.",
+          : "Your ticket was saved for the support team to review.",
       })
     } catch (e: any) {
       toast({ title: "Error", description: e?.message || "Could not send." })
@@ -41,6 +58,7 @@ export default function SupportPage() {
 
   return (
     <div className="mx-auto max-w-2xl p-6">
+      <Button asChild variant="ghost" className="mb-4"><Link href={backHref}><ArrowLeft className="h-4 w-4" /> Back</Link></Button>
       <Card>
         <CardHeader>
           <div className="space-y-1">

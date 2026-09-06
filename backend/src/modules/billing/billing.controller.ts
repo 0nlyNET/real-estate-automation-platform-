@@ -1,9 +1,11 @@
+import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
 import { Controller, Headers, Post, Req, UseGuards } from '@nestjs/common';
 import { BillingService } from './billing.service';
 import { BillingReconciliationService } from './billing-reconciliation.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 
+@AllowSetupAccess()
 @Controller('billing')
 export class BillingController {
   constructor(

@@ -19,7 +19,7 @@ describe('ProviderConfigService tenant isolation', () => {
         provider: where.provider,
         encryptedValue: JSON.stringify(
           where.provider === 'sendgrid'
-            ? { apiKey: 'SG.platform-only' }
+            ? { connected: true, apiKey: 'SG.platform-only' }
             : { accountSid: 'AC-parent', authToken: 'parent-secret' },
         ),
       })),

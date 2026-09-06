@@ -136,7 +136,7 @@ describe('SendGrid authenticated inbound HTTP workflow', () => {
       expect.objectContaining({
         channel: 'email',
         direction: 'inbound',
-        providerMessageId: 'sendgrid:http-email-123@example.com',
+        providerMessageId: 'sendgrid-inbound:00000000-0000-4000-8000-000000000001:http-email-123@example.com',
         status: 'received',
       }),
     );
