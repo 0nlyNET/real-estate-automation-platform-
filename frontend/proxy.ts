@@ -5,6 +5,15 @@ type VerifiedSession = {
   platformRole: "super_admin" | "staff" | null
 }
 
+/**
+ * Verifies an authenticated session by making a direct backend request with
+ * the session cookie, supporting fallback to legacy endpoint and failing closed
+ * on backend unavailability.
+ *
+ * @param req - The Next.js request containing session cookie
+ * @returns VerifiedSession object or null if session is expired/invalid
+ * @throws Error if backend is unavailable or returns malformed response
+ */
 async function readVerifiedSession(req: NextRequest): Promise<VerifiedSession | null> {
   const cookie = req.headers.get("cookie")
   if (!cookie || !/(?:^|;\s*)rtai_session=[^;]+/.test(cookie)) return null
@@ -31,6 +40,14 @@ async function readVerifiedSession(req: NextRequest): Promise<VerifiedSession | 
   }
 }
 
+/**
+ * Next.js middleware that verifies authenticated sessions before allowing access
+ * to /app and /admin routes, redirecting to login or showing service-unavailable
+ * errors as appropriate.
+ *
+ * @param req - The Next.js request to verify
+ * @returns NextResponse with redirect, rewrite, or passthrough
+ */
 export async function proxy(req: NextRequest) {
   let session: VerifiedSession | null
   try {

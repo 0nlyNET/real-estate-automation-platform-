@@ -10,6 +10,14 @@ import { Button } from "@/components/ui/button"
 
 type Access = { platformRole: string | null; serviceAccess: { allowed: boolean; billingEligible: boolean; reason: string | null } }
 
+/**
+ * Guards client workspace routes by verifying service access eligibility,
+ * allowing platform operators and setup paths through while blocking suspended
+ * or unpaid accounts from operational features.
+ *
+ * @param children - The protected route content to render when access is granted
+ * @returns React component showing access check, restriction notice, or children
+ */
 export function ClientAccessGuard({ children }: { children: ReactNode }) {
   const pathname = usePathname()
   const [access, setAccess] = useState<Access | null>(null)

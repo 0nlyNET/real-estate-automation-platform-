@@ -9,6 +9,12 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 const AdminSessionContext = createContext<Me | null>(null)
 
+/**
+ * Hook to access the verified admin session from the AdminAccessGuard context.
+ *
+ * @returns The current admin session with platform role and user details
+ * @throws Error if called outside of AdminAccessGuard context
+ */
 export function useAdminSession() {
   const session = useContext(AdminSessionContext)
   if (!session) throw new Error("Admin session is not available")

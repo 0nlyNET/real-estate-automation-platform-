@@ -183,6 +183,13 @@ const schedulingProviders: Array<{
   },
 ]
 
+/**
+ * Returns a status badge component for messaging integrations based on connection
+ * and configuration state.
+ *
+ * @param item - The integration item with status, or null if unavailable
+ * @returns Badge component with appropriate variant and text
+ */
 function statusBadge(item?: Integration | null) {
   if (!item) return <Badge variant="outline">Status unavailable</Badge>
   if (item?.status === "connected") return <Badge>Connected</Badge>
@@ -191,6 +198,13 @@ function statusBadge(item?: Integration | null) {
   return <Badge variant="secondary">Not configured</Badge>
 }
 
+/**
+ * Returns a status badge component for Realtor.com integration based on
+ * connection and test status.
+ *
+ * @param item - The Realtor.com setup item with status, or null
+ * @returns Badge component with appropriate variant and text
+ */
 function realtorStatusBadge(item?: RealtorSetup | null) {
   if (item?.status === "connected") return <Badge>Connected</Badge>
   if (item?.status === "error") return <Badge variant="destructive">Needs attention</Badge>
@@ -198,6 +212,13 @@ function realtorStatusBadge(item?: RealtorSetup | null) {
   return <Badge variant="secondary">Not configured</Badge>
 }
 
+/**
+ * Returns a status badge component for calendar/scheduling providers based on
+ * connection state and resource selection.
+ *
+ * @param item - The booking provider status item, or null
+ * @returns Badge component with appropriate variant and text
+ */
 function calendarStatusBadge(item?: BookingProviderStatus | null) {
   if (item?.connected) return <Badge>Connected</Badge>
   if (item?.status === "needs_attention") return <Badge variant="destructive">Needs attention</Badge>
@@ -205,6 +226,12 @@ function calendarStatusBadge(item?: BookingProviderStatus | null) {
   return <Badge variant="secondary">Not configured</Badge>
 }
 
+/**
+ * Extracts a user-friendly error message from an unknown error value.
+ *
+ * @param error - The error object, Error instance, or other value
+ * @returns Formatted error message string
+ */
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Please try again."
 }

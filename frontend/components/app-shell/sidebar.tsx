@@ -27,6 +27,14 @@ interface SidebarProps {
   onClose?: () => void
 }
 
+/**
+ * Sidebar navigation component for client workspace with links to all main
+ * sections. Supports collapsed mode and mobile sheet integration.
+ *
+ * @param isCollapsed - Whether to show icon-only navigation
+ * @param onClose - Optional callback when a navigation item is clicked (for mobile)
+ * @returns React component with navigation links and branding
+ */
 export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
   const pathname = usePathname()
 

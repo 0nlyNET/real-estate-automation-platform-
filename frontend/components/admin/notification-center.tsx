@@ -52,6 +52,14 @@ const EMPTY_DEVICE_STATUS: DeviceStatus = {
   permission: "unavailable",
 }
 
+/**
+ * Decodes a base64url-encoded VAPID public key for web push subscription
+ * registration, applying RFC 4648 padding and validation.
+ *
+ * @param value - The base64url-encoded public key string
+ * @returns Uint8Array containing the decoded 65-byte public key
+ * @throws Error if the decoded key is not exactly 65 bytes
+ */
 function applicationKey(value: string) {
   const padding = "=".repeat((4 - (value.length % 4)) % 4)
   const raw = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"))
@@ -62,6 +70,13 @@ function applicationKey(value: string) {
   return key
 }
 
+/**
+ * Detects browser and device capabilities for web push notifications including
+ * service worker support, push manager availability, and notification permissions.
+ * Includes special detection for Apple mobile devices and standalone PWA mode.
+ *
+ * @returns DeviceStatus object with capability flags and permission state
+ */
 function detectDeviceStatus(): DeviceStatus {
   if (typeof window === "undefined") return EMPTY_DEVICE_STATUS
   const appleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent)
@@ -78,6 +93,13 @@ function detectDeviceStatus(): DeviceStatus {
   }
 }
 
+/**
+ * Notification center component providing in-app notifications, device push
+ * subscription management, and notification preferences for admin or client users.
+ *
+ * @param audience - Target audience ("admin" or "client") to determine API paths
+ * @returns React component with notification popover and management UI
+ */
 export function NotificationCenter({ audience = "admin" }: { audience?: "admin" | "client" }) {
   const router = useRouter()
   const basePath = audience === "client" ? "/notifications" : "/admin/notifications"
