@@ -66,13 +66,31 @@ async function forward(
       },
     )
   }
-  const upstream = await fetch(target, {
-    method: request.method,
-    headers,
-    body,
-    redirect: "manual",
-    cache: "no-store",
-  })
+  const timeout = AbortSignal.timeout(["GET", "HEAD"].includes(request.method) ? 12_000 : 60_000)
+  const signal = AbortSignal.any([request.signal, timeout])
+  let upstream: Response
+  let responseBody: ArrayBuffer
+  try {
+    upstream = await fetch(target, {
+      method: request.method,
+      headers,
+      body,
+      redirect: "manual",
+      cache: "no-store",
+      signal,
+    })
+    // Keep the deadline active while reading the response, not just headers.
+    responseBody = await upstream.arrayBuffer()
+  } catch {
+    const timedOut = timeout.aborted
+    console.error("backend_proxy_unavailable", { path: path.join("/"), method: request.method, timedOut })
+    return NextResponse.json({
+      code: timedOut ? "UPSTREAM_TIMEOUT" : "UPSTREAM_UNAVAILABLE",
+      message: timedOut
+        ? "The service took too long to respond. Check the latest state before retrying a change."
+        : "The service is temporarily unavailable. Please try again.",
+    }, { status: timedOut ? 504 : 502, headers: { "cache-control": "private, no-store", "retry-after": "5" } })
+  }
   const responseHeaders = new Headers()
   for (const name of ["content-type", "location", "retry-after"]) {
     const value = upstream.headers.get(name)
@@ -91,7 +109,7 @@ async function forward(
     const cookie = upstream.headers.get("set-cookie")
     if (cookie) responseHeaders.append("set-cookie", cookie)
   }
-  return new NextResponse(upstream.body, {
+  return new NextResponse([204, 205, 304].includes(upstream.status) ? null : responseBody, {
     status: upstream.status,
     headers: responseHeaders,
   })
