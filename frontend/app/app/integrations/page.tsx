@@ -38,7 +38,7 @@ import {
 
 const REALTOR_PRO_LOGIN_URL = "https://www.realtor.com/marketing/log-in/"
 
-type Provider = "twilio" | "sendgrid" | "facebook_lead_ads"
+type Provider = "twilio" | "sendgrid"
 
 type Integration = {
   provider: Provider
@@ -68,7 +68,6 @@ type RotatedKey = {
   endpointPath: string
 }
 
-type FacebookPage = { id: string; name: string }
 
 type RealtorSetup = {
   provider: "realtor_com"
@@ -232,8 +231,6 @@ export default function IntegrationsPage() {
   const [rotatedKey, setRotatedKey] = useState<RotatedKey | null>(null)
   const [realtorSetup, setRealtorSetup] = useState<RealtorSetup | null>(null)
   const [realtorCredentials, setRealtorCredentials] = useState<RealtorCredentials | null>(null)
-  const [facebookPages, setFacebookPages] = useState<FacebookPage[]>([])
-  const [facebookPageId, setFacebookPageId] = useState("")
   const [zapierConnections, setZapierConnections] = useState<ZapierConnection[]>([])
   const [zapierCredential, setZapierCredential] = useState<ZapierCredential | null>(null)
   const [webhooks, setWebhooks] = useState<WebhookSubscription[]>([])
@@ -252,16 +249,13 @@ export default function IntegrationsPage() {
   )
   const twilioStatus = byProvider.get("twilio")
   const sendgridStatus = byProvider.get("sendgrid")
-  const facebookStatus = byProvider.get("facebook_lead_ads")
-  const facebookWebhookUrl = facebookStatus?.display?.webhookUrl || ""
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const legacyCalendar = params.get("calendar")
     const scheduling = params.get("scheduling") || (legacyCalendar ? "google" : null)
     const schedulingStatus = params.get("status") || legacyCalendar
-    const facebook = params.get("facebook")
-    const hasCallback = Boolean(schedulingStatus || facebook)
+    const hasCallback = Boolean(schedulingStatus)
     if (!hasCallback) return
 
     if (scheduling && schedulingStatus) {
@@ -282,21 +276,6 @@ export default function IntegrationsPage() {
           variant: "destructive",
         })
       }
-    }
-
-    if (facebook === "success") {
-      toast({
-        title: "Facebook authorization complete",
-        description: "Load your Pages and select the brokerage Page to finish lead delivery setup.",
-      })
-    } else if (facebook === "error") {
-      toast({
-        title: "Facebook connection failed",
-        description: params.get("code") === "OAUTH_DENIED"
-          ? "Authorization was declined or did not complete. Try connecting again."
-          : "Facebook could not finish authorization. Try connecting again.",
-        variant: "destructive",
-      })
     }
 
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.hash}`)
@@ -582,62 +561,6 @@ export default function IntegrationsPage() {
       setRealtorCredentials(null)
       await load()
       toast({ title: "Realtor.com disconnected" })
-    } catch (error) {
-      toast({ title: "Disconnect failed", description: errorMessage(error), variant: "destructive" })
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const connectFacebook = async () => {
-    setBusy("facebook")
-    try {
-      const result = await apiFetch<{ url: string }>("/integrations/facebook/connect")
-      window.location.assign(result.url)
-    } catch (error) {
-      toast({ title: "Facebook setup failed", description: errorMessage(error), variant: "destructive" })
-      setBusy(null)
-    }
-  }
-
-  const loadFacebookPages = async () => {
-    setBusy("facebook-pages")
-    try {
-      const result = await apiFetch<{ pages: FacebookPage[] }>("/integrations/facebook/pages")
-      setFacebookPages(result.pages)
-      if (result.pages.length === 1) setFacebookPageId(result.pages[0].id)
-      if (!result.pages.length) {
-        toast({ title: "No Facebook Pages found", description: "Use a Facebook account that administers the brokerage Page.", variant: "destructive" })
-      }
-    } catch (error) {
-      toast({ title: "Could not load Facebook Pages", description: errorMessage(error), variant: "destructive" })
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const selectFacebookPage = async () => {
-    setBusy("facebook-select")
-    try {
-      await apiFetch("/integrations/facebook/page", {
-        method: "POST",
-        body: { pageId: facebookPageId },
-      })
-      await load()
-      toast({ title: "Facebook Lead Ads is connected", description: "New Page leads will now enter this workspace." })
-    } catch (error) {
-      toast({ title: "Facebook Page subscription failed", description: errorMessage(error), variant: "destructive" })
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const disconnectFacebook = async () => {
-    setBusy("facebook-disconnect")
-    try {
-      await apiFetch("/integrations/facebook_lead_ads", { method: "DELETE" })
-      await load()
-      toast({ title: "Facebook Lead Ads disconnected" })
     } catch (error) {
       toast({ title: "Disconnect failed", description: errorMessage(error), variant: "destructive" })
     } finally {
@@ -947,21 +870,7 @@ export default function IntegrationsPage() {
           </CardContent>
         </Card>
 
-        <Card className="xl:col-span-2">
-          <CardHeader className="flex flex-row items-start justify-between gap-4"><div className="space-y-1"><CardTitle>Facebook Lead Ads</CardTitle><p className="text-sm text-muted-foreground">Authorize the brokerage Page that owns your lead forms.</p></div>{statusBadge(facebookStatus)}</CardHeader>
-          <CardContent className="space-y-4">
-            {facebookStatus?.error ? <Alert variant="destructive"><AlertTitle>Connection error</AlertTitle><AlertDescription>{facebookStatus.error}</AlertDescription></Alert> : null}
-            {facebookStatus?.display?.pageName ? <Alert><CheckCircle2 /><AlertTitle>Receiving leads from {facebookStatus.display.pageName}</AlertTitle><AlertDescription>Page ID: {facebookStatus.display.pageId}</AlertDescription></Alert> : null}
-            {facebookStatus?.status === "configured" && canManage ? (
-              <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
-                <div className="font-medium">Finish Page connection</div>
-                {!facebookPages.length ? <Button variant="outline" onClick={loadFacebookPages} disabled={Boolean(busy)}><RefreshCw /> Load my Pages</Button> : <><Label htmlFor="facebookPage">Brokerage Page</Label><select id="facebookPage" className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={facebookPageId} onChange={(event) => setFacebookPageId(event.target.value)}><option value="">Select a Page</option>{facebookPages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select><Button onClick={selectFacebookPage} disabled={Boolean(busy) || !facebookPageId}>Connect selected Page</Button></>}
-              </div>
-            ) : null}
-            {!facebookWebhookUrl ? <Alert variant="destructive"><AlertTitle>Meta webhook setup is required</AlertTitle><AlertDescription>RealtyTechAI operations must configure the public Facebook webhook before launch.</AlertDescription></Alert> : null}
-            {canManage ? <div className="flex flex-wrap gap-2"><Button onClick={connectFacebook} disabled={Boolean(busy)}><ExternalLink /> {facebookStatus?.connected ? "Reconnect Facebook" : facebookStatus?.status === "configured" ? "Reauthorize Facebook" : "Authorize Facebook"}</Button>{facebookStatus?.connected ? <Button variant="ghost" onClick={disconnectFacebook} disabled={Boolean(busy)}><Unplug /> Disconnect</Button> : null}</div> : null}
-          </CardContent>
-        </Card>
+
       </div>
     </PageShell>
   )

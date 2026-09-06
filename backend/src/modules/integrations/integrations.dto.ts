@@ -82,20 +82,3 @@ export class AssignManagedSendGridDto {
   @IsString()
   inboundAddress?: string;
 }
-
-export class UpsertFacebookLeadAdsDto {
-  @IsString()
-  pageId!: string;
-
-  @IsString()
-  accessToken!: string;
-
-  @IsOptional()
-  @IsString()
-  verifyToken?: string;
-}
-
-export class SelectFacebookPageDto {
-  @IsString()
-  pageId!: string;
-}

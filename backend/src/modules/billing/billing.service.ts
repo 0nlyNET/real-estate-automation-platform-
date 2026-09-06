@@ -135,6 +135,10 @@ export class BillingService {
     });
   }
 
+  async withCustomerLock<T>(customerId: string, callback: () => Promise<T>) {
+    return this.withCheckoutLock(`webhook:${customerId}`, callback);
+  }
+
   async createCheckoutSession(params: {
     tenantId: string;
     userEmail: string;
@@ -315,7 +319,9 @@ export class BillingService {
       );
       throw error;
     }
-    return this.processVerifiedEvent(event);
+    const object = event.data.object as { customer?: string | { id: string } };
+    const customer = typeof object.customer === 'string' ? object.customer : object.customer?.id;
+    return this.withCustomerLock(customer || event.id, () => this.processVerifiedEvent(event));
   }
 
   private async claimEvent(event: Stripe.Event) {
@@ -384,7 +390,9 @@ export class BillingService {
         event.type === 'customer.subscription.updated' ||
         event.type === 'customer.subscription.deleted'
       ) {
-        const subscription = event.data.object as Stripe.Subscription;
+        const snapshot = event.data.object as Stripe.Subscription;
+        const subscription = event.type === 'customer.subscription.deleted'
+          ? snapshot : await this.getStripe().subscriptions.retrieve(snapshot.id);
         subscriptionId = subscription.id;
         customerId =
           typeof subscription.customer === 'string'
@@ -444,10 +452,12 @@ export class BillingService {
           if (!tenantId)
             throw new Error('Invoice event could not be mapped to a workspace');
           await this.syncSubscription(subscription, tenantId, false, invoice.id);
-          if (event.type === 'invoice.payment_failed') {
+          const currentInvoiceId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id;
+          const currentInvoiceEvent = !currentInvoiceId || currentInvoiceId === invoice.id;
+          if (currentInvoiceEvent && event.type === 'invoice.payment_failed' && subscription.status !== 'active') {
             await this.tenants.updateBilling(tenantId, {
               status: 'past_due',
-              lastPaymentFailureAt: new Date(),
+              lastPaymentFailureAt: (await this.tenants.findById(tenantId))?.lastPaymentFailureAt || new Date(),
               latestInvoiceId: invoice.id,
               billingStateUpdatedAt: new Date(),
             });
@@ -501,7 +511,7 @@ export class BillingService {
                   'Stripe confirmed a failed payment and no billing grace period is configured.',
               });
             }
-          } else {
+          } else if (currentInvoiceEvent && event.type === 'invoice.payment_succeeded') {
             await this.recordSetupPaymentIfIncluded(
               subscription,
               tenantId,
@@ -714,6 +724,17 @@ export class BillingService {
     deleted: boolean,
     latestInvoiceId?: string,
   ) {
+    const existingTenant = await this.tenants.findById(tenantId);
+    if (!existingTenant) throw new Error('Workspace not found');
+    const customer = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id;
+    if (!customer || (existingTenant.stripeCustomerId && existingTenant.stripeCustomerId !== customer) ||
+        (subscription.metadata?.tenantId && subscription.metadata.tenantId !== tenantId)) {
+      throw new Error('Stripe subscription does not belong to this workspace');
+    }
+    if (existingTenant.stripeSubscriptionId && existingTenant.stripeSubscriptionId !== subscription.id &&
+        !['canceled', 'incomplete_expired'].includes(String(existingTenant.stripeSubscriptionStatus || existingTenant.status))) {
+      throw new Error('Stripe event refers to a different workspace subscription');
+    }
     const { priceId, productId, unitAmount, currency, interval } = this.subscriptionPrice(subscription);
     let mapped:
       | {
@@ -787,10 +808,24 @@ export class BillingService {
     const status = deleted
       ? 'canceled'
       : mapStripeStatusToTenantStatus(subscription.status);
+    let paymentConfirmedAt = existingTenant.paidSubscriptionId === subscription.id
+      ? existingTenant.paymentConfirmedAt || null : null;
+    const invoiceReference = typeof subscription.latest_invoice === 'string'
+      ? subscription.latest_invoice : subscription.latest_invoice?.id;
+    if (!deleted && status === 'active' && invoiceReference) {
+      const invoice = await this.getStripe().invoices.retrieve(invoiceReference);
+      const invoiceCustomer = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
+      if (invoice.status === 'paid' && invoice.amount_paid > 0 && invoiceCustomer === customer &&
+          this.invoiceSubscriptionId(invoice) === subscription.id) {
+        paymentConfirmedAt ||= stripeDate(invoice.status_transitions?.paid_at) || new Date();
+      }
+    }
     await this.tenants.updateBilling(tenantId, {
       plan: mapped.plan,
       billingInterval: mapped.interval,
       status,
+      paymentConfirmedAt,
+      paidSubscriptionId: paymentConfirmedAt ? subscription.id : null,
       stripeCustomerId: customerId,
       stripeSubscriptionId: subscription.id,
       stripeSubscriptionStatus: deleted ? 'canceled' : subscription.status,
@@ -808,7 +843,6 @@ export class BillingService {
       cancellationDate: stripeDate(subscription.cancel_at),
       canceledAt: stripeDate(subscription.canceled_at || subscription.ended_at),
       latestInvoiceId:
-        latestInvoiceId ||
         (typeof subscription.latest_invoice === 'string'
           ? subscription.latest_invoice
           : subscription.latest_invoice?.id || null),
@@ -820,7 +854,7 @@ export class BillingService {
     await this.onboarding?.recordBillingFromStripe({
       tenantId,
       eventReference: latestInvoiceId || subscription.id,
-      eligible: !deleted && ['active', 'trialing'].includes(subscription.status),
+      eligible: !deleted && status === 'active' && Boolean(paymentConfirmedAt),
       subscriptionStatus: deleted ? 'canceled' : subscription.status,
     });
     if (deleted && this.settingsRepo) {
@@ -849,6 +883,14 @@ export class BillingService {
         reason: 'Stripe confirmed that the subscription is unpaid.',
       });
     }
+    if (!deleted && status === 'active' && paymentConfirmedAt) {
+      await this.serviceControl?.restoreAfterPayment(tenantId);
+    }
+  }
+
+  async reconcileSubscription(subscription: Stripe.Subscription, tenantId: string) {
+    await this.syncSubscription(subscription, tenantId, subscription.status === 'canceled');
+    return this.tenants.findById(tenantId);
   }
 
   private async saveBillingEvent(

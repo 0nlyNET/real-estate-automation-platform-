@@ -809,9 +809,6 @@ export class OnboardingService {
           String(source).toLowerCase(),
         )
       : [];
-    const metaRequired = leadSources.some(
-      (source) => source.includes('meta') || source.includes('facebook'),
-    );
     const intakeRequired = leadSources.some((source) => source.includes('api'));
     const twilio = integrations.get('twilio');
     const twilioRow = credentialRows.get('twilio');
@@ -1256,19 +1253,6 @@ export class OnboardingService {
       },
     );
     add(
-      'meta',
-      'Meta Lead Ads is connected and tested',
-      !metaRequired ||
-        (integrations.get('facebook_lead_ads')?.connected === true &&
-          Boolean(integrations.get('facebook_lead_ads')?.lastSync)),
-      metaRequired,
-      {
-        category: 'provider_configuration',
-        responsibleParty: 'client',
-        nextAction: 'Authorize the correct Meta page and form, then complete a test lead.',
-      },
-    );
-    add(
       'intake_api',
       'Custom intake API key is configured',
       !intakeRequired || Boolean(settings?.intakeApiKeyHash),
@@ -1506,7 +1490,6 @@ export class OnboardingService {
         sms: record.smsEnabled,
         email: record.emailEnabled,
         booking: record.bookingEnabled,
-        meta: metaRequired,
         customIntakeApi: intakeRequired,
       },
       externalProviderApprovals: {

@@ -8,19 +8,15 @@ import {
   Param,
   Post,
   Put,
-  Query,
   Req,
-  Res,
   UseGuards,
 } from "@nestjs/common";
-import type { Request, Response } from "express";
 
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { IntegrationsService } from "./integrations.service";
 import {
   TestSendGridDto,
   TestTwilioDto,
-  SelectFacebookPageDto,
   UpsertSendGridDto,
   UpsertTwilioDto,
 } from "./integrations.dto";
@@ -76,7 +72,7 @@ export class IntegrationsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @RequireRole("admin")
   async disconnect(@Req() req: any, @Param("provider") provider: string) {
-    if (!["twilio", "sendgrid", "facebook_lead_ads"].includes(provider)) {
+    if (!["twilio", "sendgrid"].includes(provider)) {
       throw new BadRequestException("Unsupported integration provider");
     }
     if (provider === "twilio" || provider === "sendgrid") {
@@ -90,76 +86,4 @@ export class IntegrationsController {
     );
   }
 
-  /** Facebook Lead Ads OAuth with an opaque, single-use server-side state. */
-  @Get("facebook/connect")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole("admin")
-  async facebookConnect(@Req() req: any) {
-    const result = await this.integrationsService.facebookOAuthStart(
-      req.user?.tenantId,
-      req.user?.sub,
-    );
-    return { ok: true, ...result };
-  }
-
-  @Get("facebook/pages")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole("admin")
-  async facebookPages(@Req() req: any) {
-    return this.integrationsService.listFacebookPages(req.user?.tenantId);
-  }
-
-  @Post("facebook/page")
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @RequireRole("admin")
-  async facebookPage(@Req() req: any, @Body() body: SelectFacebookPageDto) {
-    return this.integrationsService.selectFacebookPage(
-      req.user?.tenantId,
-      body.pageId,
-    );
-  }
-
-  /**
-   * Facebook OAuth callback:
-   * - code + state come from Facebook
-   * - your service already has facebookOAuthCallback(code, state)
-   * - redirect back to frontend integrations page with a result flag
-   */
-  @Get("facebook/callback")
-  async facebookCallback(
-    @Req() req: Request,
-    @Res() res: Response,
-    @Query("code") code?: string,
-    @Query("state") state?: string,
-    @Query("error") error?: string,
-  ) {
-    const frontend = String(
-      process.env.FRONTEND_URL || "http://localhost:3000",
-    ).replace(/\/+$/, "");
-
-    if (error) {
-      return res.redirect(
-        `${frontend}/app/integrations?facebook=error&code=OAUTH_DENIED`,
-      );
-    }
-
-    if (!code || !state) {
-      return res.redirect(
-        `${frontend}/app/integrations?facebook=error&code=OAUTH_CALLBACK_INVALID`,
-      );
-    }
-
-    const result = await this.integrationsService.facebookOAuthCallback(
-      String(code),
-      String(state),
-    );
-
-    if (result?.ok) {
-      return res.redirect(`${frontend}/app/integrations?facebook=success`);
-    }
-
-    return res.redirect(
-      `${frontend}/app/integrations?facebook=error&code=OAUTH_FAILED`,
-    );
-  }
 }

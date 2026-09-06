@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import Stripe = require('stripe');
 import { TenantsService } from '../tenants/tenants.service';
-import { mapStripeStatusToTenantStatus } from '../tenants/stripe-billing-update';
+import { BillingService } from './billing.service';
 
 const OPEN_SUBSCRIPTION_STATES = new Set([
   'active',
@@ -20,7 +20,7 @@ function stripeDate(seconds?: number | null) {
 export class BillingReconciliationService {
   private readonly stripe: Stripe | null;
 
-  constructor(private readonly tenants: TenantsService) {
+  constructor(private readonly tenants: TenantsService, private readonly billing: BillingService) {
     const key = process.env.STRIPE_SECRET_KEY?.trim();
     this.stripe = key ? new Stripe(key) : null;
   }
@@ -32,19 +32,6 @@ export class BillingReconciliationService {
       );
     }
     return this.stripe;
-  }
-
-  private subscriptionPeriod(subscription: Stripe.Subscription) {
-    const starts = subscription.items.data
-      .map((item) => item.current_period_start)
-      .filter((value): value is number => Number.isFinite(value));
-    const ends = subscription.items.data
-      .map((item) => item.current_period_end)
-      .filter((value): value is number => Number.isFinite(value));
-    return {
-      start: starts.length ? stripeDate(Math.min(...starts)) : null,
-      end: ends.length ? stripeDate(Math.max(...ends)) : null,
-    };
   }
 
   async reconcileTenant(tenantId: string) {
@@ -59,6 +46,13 @@ export class BillingReconciliationService {
       };
     }
 
+    return this.billing.withCustomerLock(tenant.stripeCustomerId, async () => this.reconcileCustomer(tenantId));
+  }
+
+  private async reconcileCustomer(tenantId: string) {
+    const tenant = await this.tenants.findById(tenantId);
+    if (!tenant?.stripeCustomerId) throw new BadRequestException('Stripe customer is not configured');
+
     const subscriptions = await this.getStripe().subscriptions.list({
       customer: tenant.stripeCustomerId,
       status: 'all',
@@ -70,19 +64,9 @@ export class BillingReconciliationService {
       .sort((left, right) => right.created - left.created)[0];
 
     if (open) {
-      const period = this.subscriptionPeriod(open);
-      const updated = await this.tenants.updateBilling(tenant.id, {
-        status: mapStripeStatusToTenantStatus(open.status),
-        stripeSubscriptionId: open.id,
-        stripeSubscriptionStatus: open.status,
-        currentPeriodStart: period.start,
-        currentPeriodEnd: period.end,
-        cancelAtPeriodEnd: Boolean(open.cancel_at_period_end),
-        cancelAt: stripeDate(open.cancel_at),
-        cancellationDate: null,
-        canceledAt: null,
-        billingStateUpdatedAt: new Date(),
-      });
+      await this.billing.reconcileSubscription(open, tenant.id);
+      const updated = await this.tenants.findById(tenant.id);
+      if (!updated) throw new BadRequestException('Tenant not found');
       return {
         reconciled: true,
         status: updated.status,

@@ -20,7 +20,7 @@ import { Tenant } from '../tenants/tenant.entity';
 export type ServiceSuspensionSource = 'manual' | 'billing' | 'safety';
 
 export type ServiceControlActor = {
-  id: string;
+  id: string | null;
   email?: string | null;
 };
 
@@ -356,9 +356,14 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async restoreAfterPayment(tenantId: string) {
+    return this.restore({ tenantId, actor: { id: null }, billingRecoveryOnly: true });
+  }
+
   async restore(input: {
     tenantId: string;
     actor: ServiceControlActor;
+    billingRecoveryOnly?: boolean;
   }) {
     const result = await this.dataSource.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
@@ -371,10 +376,11 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
       if (tenant.lifecycleStatus !== 'SUSPENDED') {
         return { changed: false, tenant, restoredEnrollments: 0 };
       }
+      if (input.billingRecoveryOnly && tenant.serviceSuspensionSource !== 'billing') {
+        return { changed: false, tenant, restoredEnrollments: 0 };
+      }
       const paymentConfirmed =
-        tenant.status === 'active' ||
-        (tenant.status === 'trialing' &&
-          Boolean(tenant.trialEndsAt && tenant.trialEndsAt > new Date()));
+        tenant.status === 'active' && billingEligibility(tenant).allowed;
       if (!paymentConfirmed) {
         throw new BadRequestException(
           'Payment must be confirmed by Stripe before services can be restored',
@@ -383,7 +389,7 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
 
       const previous = tenant.servicePreviousLifecycleStatus;
       const restoreToActive = previous === 'ACTIVE';
-      tenant.lifecycleStatus = restoreToActive ? 'ACTIVE' : 'PAUSED';
+      tenant.lifecycleStatus = restoreToActive ? 'ACTIVE' : previous || 'ONBOARDING';
       tenant.servicePausedAt = restoreToActive ? null : tenant.servicePausedAt;
       tenant.serviceRestoredAt = new Date();
       tenant.serviceRestoredById = input.actor.id;
@@ -510,7 +516,8 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
     if (result.changed) {
       await this.audit.record({
         tenantId: input.tenantId,
-        actorId: input.actor.id,
+        actorId: input.actor.id || '00000000-0000-0000-0000-000000000000',
+        actorType: input.actor.id ? 'user' : 'system',
         actorEmail: input.actor.email || null,
         action: 'client.services.restored',
         method: 'POST',

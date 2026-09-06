@@ -1,6 +1,5 @@
 import type { Response } from 'express';
 import { CalendarController } from '../calendar/calendar.controller';
-import { IntegrationsController } from './integrations.controller';
 
 function redirectResponse() {
   const redirect = jest.fn((url: string) => url);
@@ -80,29 +79,5 @@ describe('OAuth callback browser handoff contracts', () => {
     );
   });
 
-  it('does not place Facebook provider responses or secrets in the redirect URL', async () => {
-    process.env.FRONTEND_URL = 'https://www.realtytechai.app/';
-    const integrations = {
-      facebookOAuthCallback: jest.fn().mockResolvedValue({
-        ok: false,
-        error: 'Graph response contained access_token=provider-secret',
-      }),
-    };
-    const controller = new IntegrationsController(integrations as any);
-    const { response, redirect } = redirectResponse();
 
-    await controller.facebookCallback(
-      {} as any,
-      response,
-      'authorization-code',
-      'signed-state',
-    );
-
-    const location = redirect.mock.calls[0][0];
-    expect(location).toBe(
-      'https://www.realtytechai.app/app/integrations?facebook=error&code=OAUTH_FAILED',
-    );
-    expect(location).not.toContain('provider-secret');
-    expect(location).not.toContain('access_token');
-  });
 });

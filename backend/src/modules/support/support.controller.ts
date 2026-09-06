@@ -1,3 +1,4 @@
+import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SupportService } from './support.service';
@@ -5,6 +6,7 @@ import { AccountRequestDto, CreateSupportTicketDto, UpdateSupportTicketDto } fro
 import { RequireRole, RolesGuard } from '../../common/guards/roles.guard';
 import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
 
+@AllowSetupAccess()
 @Controller('support')
 export class SupportController {
   constructor(private readonly support: SupportService) {}

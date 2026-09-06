@@ -164,7 +164,7 @@ assert.doesNotMatch(integrations, /platformProviderSetupEnabled\s*=\s*false/)
 assert.doesNotMatch(integrations, /Zillow/i)
 assert.match(integrations, /new URLSearchParams\(window\.location\.search\)/)
 assert.match(integrations, /\$\{label\} authorization complete/)
-assert.match(integrations, /Facebook authorization complete/)
+assert.doesNotMatch(integrations, /facebook|Facebook/)
 assert.match(integrations, /window\.history\.replaceState/)
 
 const managedIntegrations = read("components/admin/managed-integrations.tsx")

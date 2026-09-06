@@ -9,6 +9,7 @@ import { Reflector } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Tenant } from '../../modules/tenants/tenant.entity';
+import { billingEligibility } from '../../modules/entitlements/entitlement.service';
 
 export const REQUIRE_SERVICE_ACCESS_KEY = 'require_service_access';
 
@@ -33,7 +34,8 @@ export class ServiceAccessGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<any>();
     const tenantId = req.user?.tenantId;
     const tenant = tenantId ? await this.tenantRepo.findOne({ where: { id: tenantId } }) : null;
-    const serviceAvailable = tenant && !['canceled', 'unpaid', 'incomplete_expired'].includes(String(tenant.status));
+    const serviceAvailable = tenant && billingEligibility(tenant).allowed &&
+      !['SUSPENDED', 'CANCELED'].includes(tenant.lifecycleStatus);
     if (!serviceAvailable) {
       throw new ForbiddenException('This workspace is not available');
     }

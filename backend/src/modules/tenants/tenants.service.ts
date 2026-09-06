@@ -52,6 +52,8 @@ export class TenantsService {
         | 'stripeCustomerId'
         | 'stripeSubscriptionId'
         | 'stripeSubscriptionStatus'
+        | 'paymentConfirmedAt'
+        | 'paidSubscriptionId'
         | 'stripePriceId'
         | 'billingInterval'
         | 'lifecycleStatus'

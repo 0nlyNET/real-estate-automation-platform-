@@ -1,3 +1,4 @@
+import { FirstClientPayment1788652800001 } from './migrations/202609060001-first-client-payment';
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { randomUUID } from "crypto";
@@ -218,6 +219,7 @@ describe("deployed legacy schema reproduction", () => {
     await new GoogleCalendarReliability1787011200001().up(queryRunner);
     await new MultiProviderScheduling1787011200002().up(queryRunner);
     await new AssistantConversationReliability1787875200001().up(queryRunner);
+    await new FirstClientPayment1788652800001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
@@ -346,6 +348,7 @@ describe("deployed legacy schema reproduction", () => {
     await new GoogleCalendarReliability1787011200001().up(queryRunner);
     await new MultiProviderScheduling1787011200002().up(queryRunner);
     await new AssistantConversationReliability1787875200001().up(queryRunner);
+    await new FirstClientPayment1788652800001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
@@ -358,6 +361,7 @@ describe("deployed legacy schema reproduction", () => {
 
     const rollbackRunner = dataSource.createQueryRunner();
     await rollbackRunner.connect();
+    await new FirstClientPayment1788652800001().down(rollbackRunner);
     await new AssistantConversationReliability1787875200001().down(rollbackRunner);
     await new MultiProviderScheduling1787011200002().down(rollbackRunner);
     await new GoogleCalendarReliability1787011200001().down(rollbackRunner);

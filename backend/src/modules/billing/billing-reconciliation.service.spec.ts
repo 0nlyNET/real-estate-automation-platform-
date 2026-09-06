@@ -1,162 +1,53 @@
 import { BillingReconciliationService } from './billing-reconciliation.service';
-import { TenantsService } from '../tenants/tenants.service';
 
-function tenantFixture(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 'tenant-1',
-    status: 'active',
-    stripeCustomerId: 'cus_test',
-    stripeSubscriptionId: 'sub_old',
-    stripeSubscriptionStatus: 'active',
-    setupPaidAt: new Date('2026-08-04T06:34:45.000Z'),
-    ...overrides,
-  } as any;
-}
+describe('Stripe reconciliation uses the canonical payment verifier', () => {
+  const original = process.env.STRIPE_SECRET_KEY;
+  beforeEach(() => { process.env.STRIPE_SECRET_KEY = 'sk_test_reconcile'; });
+  afterEach(() => { if (original === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = original; });
 
-describe('BillingReconciliationService', () => {
-  const originalStripeKey = process.env.STRIPE_SECRET_KEY;
-
-  beforeEach(() => {
-    process.env.STRIPE_SECRET_KEY = 'sk_test_reconciliation';
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-    if (originalStripeKey === undefined) {
-      delete process.env.STRIPE_SECRET_KEY;
-    } else {
-      process.env.STRIPE_SECRET_KEY = originalStripeKey;
-    }
-  });
-
-  it('repairs a stale active tenant when Stripe has no open subscription', async () => {
-    const tenant = tenantFixture();
-    const updateBilling = jest.fn(async (_tenantId: string, patch: any) => ({
-      ...tenant,
-      ...patch,
-    }));
+  function setup() {
+    const tenant: any = { id: 'tenant-1', status: 'active', stripeCustomerId: 'cus_1', stripeSubscriptionId: 'sub_1', stripeSubscriptionStatus: 'active' };
     const tenants = {
-      findById: jest.fn().mockResolvedValue(tenant),
-      updateBilling,
-    } as unknown as TenantsService;
-    const service = new BillingReconciliationService(tenants);
-    (service as any).stripe = {
-      subscriptions: {
-        list: jest.fn().mockResolvedValue({
-          data: [
-            {
-              id: 'sub_old',
-              status: 'canceled',
-              created: 1,
-              canceled_at: 1785826250,
-              items: { data: [] },
-            },
-          ],
-        }),
-      },
+      findById: jest.fn(async () => tenant),
+      updateBilling: jest.fn(async (_id, patch) => Object.assign(tenant, patch)),
     };
-
-    const result = await service.reconcileTenant(tenant.id);
-
-    expect(updateBilling).toHaveBeenCalledWith(
-      tenant.id,
-      expect.objectContaining({
-        status: 'canceled',
-        stripeSubscriptionStatus: 'canceled',
-        cancelAtPeriodEnd: false,
-        cancelAt: null,
-        stripeCheckoutSessionId: null,
-        stripeCheckoutStartedAt: null,
-      }),
-    );
-    const patch = updateBilling.mock.calls[0][1];
-    expect(patch).not.toHaveProperty('setupPaidAt');
-    expect(result).toEqual(
-      expect.objectContaining({
-        reconciled: true,
-        status: 'canceled',
-        stripeSubscriptionStatus: 'canceled',
-      }),
-    );
-  });
-
-  it('keeps and refreshes a genuinely active Stripe subscription', async () => {
-    const tenant = tenantFixture({ stripeSubscriptionId: 'sub_active' });
-    const updateBilling = jest.fn(async (_tenantId: string, patch: any) => ({
-      ...tenant,
-      ...patch,
-    }));
-    const tenants = {
-      findById: jest.fn().mockResolvedValue(tenant),
-      updateBilling,
-    } as unknown as TenantsService;
-    const service = new BillingReconciliationService(tenants);
-    (service as any).stripe = {
-      subscriptions: {
-        list: jest.fn().mockResolvedValue({
-          data: [
-            {
-              id: 'sub_active',
-              status: 'active',
-              created: 2,
-              cancel_at_period_end: false,
-              cancel_at: null,
-              items: {
-                data: [
-                  {
-                    current_period_start: 1785825281,
-                    current_period_end: 1788503681,
-                  },
-                ],
-              },
-            },
-          ],
-        }),
-      },
+    const billing = {
+      reconcileSubscription: jest.fn().mockResolvedValue(tenant),
+      withCustomerLock: jest.fn(async (_customer, callback) => callback()),
     };
-
-    const result = await service.reconcileTenant(tenant.id);
-
-    expect(updateBilling).toHaveBeenCalledWith(
-      tenant.id,
-      expect.objectContaining({
-        status: 'active',
-        stripeSubscriptionId: 'sub_active',
-        stripeSubscriptionStatus: 'active',
-        cancelAtPeriodEnd: false,
-      }),
-    );
-    expect(result).toEqual(
-      expect.objectContaining({
-        reconciled: true,
-        status: 'active',
-        stripeSubscriptionStatus: 'active',
-      }),
-    );
-  });
-
-  it('does not call Stripe for a tenant without a Stripe customer', async () => {
-    const tenant = tenantFixture({
-      stripeCustomerId: null,
-      stripeSubscriptionId: null,
-      stripeSubscriptionStatus: null,
-      status: 'incomplete',
-    });
-    const tenants = {
-      findById: jest.fn().mockResolvedValue(tenant),
-      updateBilling: jest.fn(),
-    } as unknown as TenantsService;
-    const service = new BillingReconciliationService(tenants);
+    const service = new BillingReconciliationService(tenants as any, billing as any);
     const list = jest.fn();
     (service as any).stripe = { subscriptions: { list } };
+    return { tenant, tenants, billing, service, list };
+  }
 
-    const result = await service.reconcileTenant(tenant.id);
+  it('repairs stale active status when Stripe has no open subscription', async () => {
+    const h = setup();
+    h.list.mockResolvedValue({ data: [{ id: 'sub_1', status: 'canceled', created: 1, canceled_at: 1785826250 }] });
+    await expect(h.service.reconcileTenant(h.tenant.id)).resolves.toMatchObject({ status: 'canceled' });
+    expect(h.tenants.updateBilling).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ status: 'canceled', stripeCheckoutSessionId: null }));
+  });
 
-    expect(list).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      reconciled: false,
-      status: 'incomplete',
-      stripeSubscriptionStatus: null,
-    });
+  it('delegates active subscriptions to price, ownership and payment verification', async () => {
+    const h = setup();
+    const subscription = { id: 'sub_1', status: 'active', created: 2 };
+    h.list.mockResolvedValue({ data: [subscription] });
+    await h.service.reconcileTenant(h.tenant.id);
+    expect(h.billing.reconcileSubscription).toHaveBeenCalledWith(subscription, 'tenant-1');
+    expect(h.tenants.updateBilling).not.toHaveBeenCalled();
+  });
+
+  it('propagates payment verification failures without enabling access', async () => {
+    const h = setup();
+    h.list.mockResolvedValue({ data: [{ id: 'sub_1', status: 'active', created: 2 }] });
+    h.billing.reconcileSubscription.mockRejectedValue(new Error('Payment verification failed'));
+    await expect(h.service.reconcileTenant(h.tenant.id)).rejects.toThrow('Payment verification failed');
+    expect(h.tenants.updateBilling).not.toHaveBeenCalled();
+  });
+
+  it('does not call Stripe before a customer is created', async () => {
+    const h = setup(); h.tenant.stripeCustomerId = null;
+    await expect(h.service.reconcileTenant(h.tenant.id)).resolves.toMatchObject({ reconciled: false });
+    expect(h.list).not.toHaveBeenCalled();
   });
 });

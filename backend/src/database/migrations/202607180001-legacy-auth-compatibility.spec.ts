@@ -18,6 +18,7 @@ import { FirstClientSafetyPipeline1785974400001 } from "./202608060001-first-cli
 import { ManagedProviderArchitecture1786492800001 } from "./202608120001-managed-provider-architecture";
 import { GoogleCalendarReliability1787011200001 } from "./202608180001-google-calendar-reliability";
 import { MultiProviderScheduling1787011200002 } from "./202608180002-multi-provider-scheduling";
+import { FirstClientPayment1788652800001 } from "./202609060001-first-client-payment";
 import { TenantSettings } from "../../modules/settings/tenant-settings.entity";
 
 function memoryDatabase() {
@@ -117,6 +118,7 @@ describe("legacy auth compatibility migration", () => {
         ManagedProviderArchitecture1786492800001,
         GoogleCalendarReliability1787011200001,
         MultiProviderScheduling1787011200002,
+        FirstClientPayment1788652800001,
       ],
       migrationsRun: true,
       migrationsTableName: "app_migrations",

@@ -7,7 +7,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { ConversationLockService } from '../../common/conversation-lock.service';
 import { nextAllowedSendTime } from '../../common/time';
 import { operationalEvent, sanitizeOperationalText } from '../../common/operational-log';
@@ -257,8 +257,8 @@ export class AiConversationService
       settings.allowedChannels?.length ? settings.allowedChannels : ['sms', 'email'],
     );
     const candidates: Array<'sms' | 'email'> = [];
-    if (allowedChannels.has('sms') && lead.smsEligible && lead.phone) candidates.push('sms');
     if (allowedChannels.has('email') && lead.emailEligible && lead.email) candidates.push('email');
+    if (allowedChannels.has('sms') && lead.smsEligible && lead.phone) candidates.push('sms');
     for (const channel of candidates) {
       const aiEvent: AiConversationEvent = {
         tenantId: event.tenantId,
@@ -863,8 +863,8 @@ export class AiConversationService
         this.settings.create({
           tenantId,
           aiEnabled: false,
-          responseMode: 'human_only',
-          maximumAutomaticTurns: 6,
+          responseMode: 'controlled_autopilot',
+          maximumAutomaticTurns: 12,
           minimumConfidenceThreshold: 0.82,
           perConversationUsageLimit: 12_000,
           monthlyWorkspaceUsageLimit: 500_000,
@@ -886,7 +886,10 @@ export class AiConversationService
         ? configured
         : 12_000;
     const rows = await this.messages.find({
-      where: { leadId },
+      where: [
+        { leadId, direction: 'inbound' },
+        { leadId, direction: 'outbound', status: In(['provider_accepted', 'sent', 'delivered']) },
+      ],
       order: { createdAt: 'DESC' },
       take: 20,
     });

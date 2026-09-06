@@ -36,18 +36,16 @@ export function configuredBillingGraceDays() {
 export function billingEligibility(
   tenant: Pick<
     Tenant,
-    'status' | 'trialEndsAt' | 'lastPaymentFailureAt'
+    'status' | 'trialEndsAt' | 'lastPaymentFailureAt' | 'paymentConfirmedAt' | 'paidSubscriptionId' | 'stripeSubscriptionId'
   >,
   now = new Date(),
 ) {
   const status = String(tenant.status || '').toLowerCase();
-  if (status === 'active') return { allowed: true, reason: null, graceEndsAt: null };
-  if (status === 'trialing') {
-    const trialEnd = tenant.trialEndsAt?.getTime();
-    return trialEnd && trialEnd > now.getTime()
-      ? { allowed: true, reason: null, graceEndsAt: null }
-      : { allowed: false, reason: 'Trial has expired', graceEndsAt: null };
+  if (!tenant.paymentConfirmedAt || !tenant.stripeSubscriptionId ||
+      tenant.paidSubscriptionId !== tenant.stripeSubscriptionId) {
+    return { allowed: false, reason: 'Payment has not been confirmed by Stripe', graceEndsAt: null };
   }
+  if (status === 'active') return { allowed: true, reason: null, graceEndsAt: null };
   if (status === 'past_due') {
     const days = configuredBillingGraceDays();
     const failedAt = tenant.lastPaymentFailureAt?.getTime();
@@ -78,6 +76,17 @@ export class EntitlementService {
     @InjectRepository(TenantSettings)
     private readonly settings: Repository<TenantSettings>,
   ) {}
+
+  async workspaceAccess(tenantId: string) {
+    const tenant = tenantId ? await this.tenants.findOne({ where: { id: tenantId } }) : null;
+    const billing = tenant ? billingEligibility(tenant) : { allowed: false, reason: 'Workspace not found' };
+    const suspended = !tenant || ['SUSPENDED', 'CANCELED'].includes(tenant.lifecycleStatus);
+    return {
+      allowed: billing.allowed && !suspended,
+      billingEligible: billing.allowed,
+      reason: billing.reason || (suspended ? 'Workspace services are suspended' : null),
+    };
+  }
 
   async evaluate(
     tenantId: string,

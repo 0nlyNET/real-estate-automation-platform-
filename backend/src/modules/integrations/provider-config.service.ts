@@ -18,6 +18,12 @@ export class ProviderConfigService {
     private readonly emailIdentities: Repository<TenantEmailIdentity>,
   ) {}
 
+  async recordSendGridCredentialFailure(tenantId: string) {
+    await this.emailIdentities.update({ tenantId }, {
+      emailStatus: 'failed', lastError: 'SendGrid rejected the email credentials or sender permissions. RealtyTechAI operations must retest the connection.',
+    });
+  }
+
   async resolveTwilio(tenantId: string, options?: { allowTesting?: boolean }) {
     const resource = await this.messagingResources.findOne({ where: { tenantId } });
     if (
@@ -56,11 +62,11 @@ export class ProviderConfigService {
     if (
       !identity ||
       (identity.emailStatus !== 'ready' &&
-        !(options?.allowTesting && identity.emailStatus === 'testing')) ||
-      identity.reputationStatus === 'blocked'
+        !(options?.allowTesting && ['testing', 'failed'].includes(identity.emailStatus))) ||
+      ['blocked', 'paused'].includes(identity.reputationStatus)
     ) return null;
     const root = platform ? decryptIntegrationPayload(platform.encryptedValue) : null;
-    if (!root?.apiKey) return null;
+    if (!root?.apiKey || (!options?.allowTesting && (root.connected !== true || root.error || identity.lastError))) return null;
     return {
       connected: true,
       apiKey: String(root.apiKey),

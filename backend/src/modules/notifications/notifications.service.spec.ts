@@ -64,6 +64,7 @@ describe('admin notifications', () => {
       findOne: jest.fn(async ({ where }: any) => ({ ...preference, recipientUserId: where.recipientUserId })),
       create: jest.fn((value) => value),
       save: jest.fn(async (value) => value),
+      createQueryBuilder: jest.fn(),
     };
     const users = {
       find: jest.fn().mockResolvedValue([
@@ -78,8 +79,19 @@ describe('admin notifications', () => {
       preferences as any,
       users as any,
     );
-    return { service, stored, notifications, users, subscriptions };
+    return { service, stored, notifications, users, subscriptions, preferences };
   }
+
+  it('recovers concurrent first-login preference creation without overwriting the winner', async () => {
+    const h = setup();
+    const winner = { recipientUserId: 'user-owner', inAppEnabled: false };
+    (h.preferences.findOne as jest.Mock).mockResolvedValueOnce(null).mockResolvedValueOnce(winner);
+    const insert = { insert: jest.fn().mockReturnThis(), values: jest.fn().mockReturnThis(), orIgnore: jest.fn().mockReturnThis(), execute: jest.fn().mockResolvedValue({ identifiers: [] }) };
+    h.preferences.createQueryBuilder.mockReturnValue(insert);
+    await expect(h.service.getPreferences('user-owner')).resolves.toBe(winner);
+    expect(insert.orIgnore).toHaveBeenCalled();
+    expect(h.preferences.save).not.toHaveBeenCalled();
+  });
 
   it('creates operational alerts for both roles, financial alerts for owner only, and deduplicates retries', async () => {
     const { service, stored } = setup();

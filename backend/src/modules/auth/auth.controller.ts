@@ -1,3 +1,4 @@
+import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
 import { Body, Controller, HttpCode, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
@@ -15,6 +16,7 @@ import {
   setSessionCookie,
 } from './session-cookie';
 
+@AllowSetupAccess()
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}

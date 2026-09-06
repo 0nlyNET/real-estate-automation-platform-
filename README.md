@@ -93,8 +93,6 @@ See `backend/.env.example` and `frontend/.env.example`. At minimum, configure:
 - server-only `GOOGLE_CALENDAR_CLIENT_ID` and `GOOGLE_CALENDAR_CLIENT_SECRET`, the Google Calendar API enabled, the exact redirect URI `<api-origin>/calendar/google/oauth/callback`, and the public HTTPS change-notification endpoint `<api-origin>/calendar/google/notifications`; follow `docs/google-calendar-production-setup.md`
 - server-only `MICROSOFT_CALENDAR_CLIENT_ID` and `MICROSOFT_CALENDAR_CLIENT_SECRET`, a multitenant organizational Entra application, the exact redirect URI `<api-origin>/calendar/microsoft/oauth/callback`, and the public HTTPS notification endpoint `<api-origin>/calendar/microsoft/notifications`; follow `docs/microsoft-calendar-production-setup.md`
 - server-only `CALENDLY_CLIENT_ID`, `CALENDLY_CLIENT_SECRET`, and `CALENDLY_WEBHOOK_SIGNING_KEY`, the exact redirect URI `<api-origin>/calendar/calendly/oauth/callback`, and the public HTTPS webhook endpoint `<api-origin>/calendar/calendly/notifications`; follow `docs/calendly-production-setup.md`
-- Meta app credentials, an active `FACEBOOK_GRAPH_API_VERSION`, and the exact
-  `FACEBOOK_WEBHOOK_URL` only when Facebook Lead Ads is enabled
 - platform-owned SendGrid and Twilio credentials are saved once by the owner; tenant subaccounts, numbers, and email identities are provisioned server-side
 - `SALES_INBOX_EMAIL` for public contact/application delivery
 - `STRIPE_PRICE_SERVICE_MONTH` plus matching Stripe secret/webhook values when billing is enabled
@@ -117,21 +115,6 @@ Before accepting a pilot payment, complete:
 - `docs/calendly-production-setup.md`
 - `docs/appointment-provider-controlled-uat.md`
 - all 21 journeys in `docs/first-client-uat.md`
-
-### Facebook Lead Ads production setup
-
-1. In the Meta app, configure `FACEBOOK_REDIRECT_URL` as the backend OAuth
-   callback: `/integrations/facebook/callback`.
-2. Configure `FACEBOOK_WEBHOOK_URL` as the public backend endpoint:
-   `/webhooks/facebook/lead-ads`.
-3. Enter the same strong random value in Meta and
-   `FACEBOOK_WEBHOOK_VERIFY_TOKEN`, then subscribe the app's Page object to the
-   `leadgen` field.
-4. Pin `FACEBOOK_GRAPH_API_VERSION` to an active version supported by the Meta
-   app. Revalidate it before Meta's version retirement date.
-5. In RealtyTechAI, authorize Facebook, select the brokerage Page, and confirm
-   that the integration badge says **Connected**. OAuth authorization by itself
-   is intentionally shown as **Test required** until Page subscription succeeds.
 
 ## Validation
 

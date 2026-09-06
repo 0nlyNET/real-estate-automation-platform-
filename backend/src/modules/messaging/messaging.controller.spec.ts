@@ -31,6 +31,13 @@ describe('MessagingController client inbox boundaries', () => {
   const leadId = '00000000-0000-4000-8000-000000000010';
   const requestId = '00000000-0000-4000-8000-000000000020';
 
+  it('defaults to a real email reply when a lead has both contact channels', async () => {
+    const h = harness({ id: leadId, tenantId, email: 'lead@example.com', phone: '+15555550100' });
+    await h.controller.send({ user: { tenantId, sub: 'owner', role: 'owner' } }, { leadId, body: 'Hello', requestId });
+    expect(h.inbox.queueEmailToLead).toHaveBeenCalledWith(tenantId, leadId, 'Hello', expect.any(Object), requestId);
+    expect(h.inbox.sendSmsToLead).not.toHaveBeenCalled();
+  });
+
   it('rejects malformed pagination instead of passing NaN to the database', async () => {
     const item = harness();
     await expect(

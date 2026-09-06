@@ -110,7 +110,7 @@ export class MessagingController {
       throw new ForbiddenException('Lead is not assigned to this user');
     }
 
-    const channel = body.channel || (lead.phone ? 'sms' : 'email');
+    const channel = body.channel || (lead.email ? 'email' : 'sms');
     const recipient = channel === 'sms' ? lead.phone : lead.email;
     if (!recipient) {
       throw new ConflictException(
@@ -161,12 +161,12 @@ export class MessagingController {
     const tenantId = req.user?.tenantId;
     const lead = await this.leadRepository.findOne({ where: { id: body.leadId, tenantId } });
     if (!lead) throw new ForbiddenException('Lead not found');
-    if (!lead.phone) throw new BadRequestException('Add a phone number before sending the booking link');
+    if (!lead.phone && !lead.email) throw new BadRequestException('Add an email address or phone number before sending the booking link');
     const role = req.user?.role as UserRole;
     if (!['owner', 'admin'].includes(role) && lead.assignedToUserId !== req.user?.sub) throw new ForbiddenException('Lead is not assigned to this user');
     const settings = await this.settingsService.getTenantSettings(tenantId);
     if (!settings || !isSafeBookingUrl(settings.bookingLink) || !settings.bookingLinkVerifiedAt) throw new ConflictException('Test and confirm the workspace booking link before sending it');
-    return this.inboxSendService.sendSmsToLead(
+    return this.inboxSendService[lead.email ? 'queueEmailToLead' : 'sendSmsToLead'](
       tenantId,
       lead.id,
       `Choose a convenient appointment time here: ${settings.bookingLink}`,

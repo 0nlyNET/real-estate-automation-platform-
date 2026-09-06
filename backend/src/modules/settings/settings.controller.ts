@@ -1,3 +1,4 @@
+import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
 import {
   Body,
   Controller,
@@ -12,6 +13,7 @@ import { SettingsService } from "./settings.service";
 import { UpdateTenantSettingsDto } from "./settings.dto";
 import { RequireRole, RolesGuard } from "../../common/guards/roles.guard";
 
+@AllowSetupAccess()
 @Controller("settings")
 export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}

@@ -22,13 +22,6 @@ const ESCALATION_PATTERNS: Array<{
   priority: AiPolicyEscalation['priority'];
 }> = [
   {
-    code: 'HUMAN_REQUESTED',
-    pattern:
-      /\b(human|person|real person|agent|broker|manager|supervisor|attorney|lawyer|lender|loan officer)\b/i,
-    reason: 'The lead asked to speak with a person or licensed professional.',
-    priority: 'high',
-  },
-  {
     code: 'BINDING_DECISION',
     pattern:
       /\b(submit (?:an )?offer|ready to sign|sign today|list my (?:home|house|property)|accept the offer|make it official)\b/i,
@@ -38,9 +31,16 @@ const ESCALATION_PATTERNS: Array<{
   {
     code: 'LEGAL_OR_CONTRACT',
     pattern:
-      /\b(contract|agreement|offer|counteroffer|negotiate|negotiation|commission|disclosure|lawsuit|legal advice|binding|sign(?:ing)?|attorney)\b/i,
+      /\b(contract|agreement|counteroffer|negotiate|negotiation|commission|disclosure|lawsuit|legal advice|binding|attorney|(?:sign(?:ing)?)(?:\s+\w+){0,3}\s+(?:contract|agreement|offer|disclosure)|(?:contract|agreement|offer|disclosure)(?:\s+\w+){0,3}\s+sign(?:ing)?|(?:make|submit|accept|reject|review|prepare|write)(?:\s+\w+){0,2}\s+offer)\b/i,
     reason: 'The conversation involves a contract, offer, negotiation, disclosure, or legal matter.',
     priority: 'urgent',
+  },
+  {
+    code: 'HUMAN_REQUESTED',
+    pattern:
+      /\b(?:(?:speak|talk|connect|transfer|put me through|chat)(?:\s+\w+){0,4}\s+(?:human|person|agent|broker|manager|supervisor|attorney|lawyer|lender|loan officer)|(?:want|need|prefer|request)(?:\s+(?:a|an|the|real|human|live)){0,3}\s+(?:human|person|agent|broker|manager)|(?:human|real person)\b\s*(?:please)?[.!?]?$)/i,
+    reason: 'The lead asked to speak with a person or licensed professional.',
+    priority: 'high',
   },
   {
     code: 'LENDING_OR_TAX',

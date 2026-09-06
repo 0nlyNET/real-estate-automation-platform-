@@ -1,17 +1,17 @@
 import { BadRequestException, Injectable, Logger, Optional } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { DataSource, Repository } from "typeorm";
+import { Repository } from "typeorm";
 import { TenantMessagingResource } from './tenant-messaging-resource.entity';
 import { TenantEmailIdentity } from './tenant-email-identity.entity';
+import { PlatformCredential } from './platform-credential.entity';
 import { Credential } from "../settings/credential.entity";
 import * as crypto from "crypto";
 import { normalizePhoneE164 } from "../../common/phone";
 import { OperationsService } from "../operations/operations.service";
 import { operationalEvent } from "../../common/operational-log";
 import { NotificationsService } from "../notifications/notifications.service";
-import { CalendarOAuthState } from '../calendar/calendar-oauth-state.entity';
 
-export type IntegrationProvider = "twilio" | "sendgrid" | "facebook_lead_ads";
+export type IntegrationProvider = "twilio" | "sendgrid";
 export type IntegrationStatus =
   | "disconnected"
   | "configured"
@@ -97,16 +97,6 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function facebookGraphBase() {
-  const version = String(
-    process.env.FACEBOOK_GRAPH_API_VERSION || "v19.0",
-  ).trim();
-  if (!/^v\d+\.\d+$/.test(version)) {
-    throw new BadRequestException("FACEBOOK_GRAPH_API_VERSION is invalid");
-  }
-  return `https://graph.facebook.com/${version}`;
-}
-
 function mask(value: string | null | undefined, keepEnd = 4) {
   if (!value) return null;
   const v = String(value);
@@ -134,9 +124,8 @@ export class IntegrationsService {
     @InjectRepository(TenantEmailIdentity)
     private readonly emailIdentities?: Repository<TenantEmailIdentity>,
     @Optional()
-    @InjectRepository(CalendarOAuthState)
-    private readonly oauthStates?: Repository<CalendarOAuthState>,
-    @Optional() private readonly dataSource?: DataSource,
+    @InjectRepository(PlatformCredential)
+    private readonly platformCredentials?: Repository<PlatformCredential>,
   ) {}
 
   private async getRow(
@@ -299,7 +288,7 @@ export class IntegrationsService {
   }
 
   async list(tenantId: string): Promise<IntegrationSummary[]> {
-    const [creds, managedTwilio, managedEmail] = await Promise.all([
+    const [creds, managedTwilio, managedEmail, platformEmail] = await Promise.all([
       this.credentialsRepo.find({
         where: { tenant: { id: tenantId } as any },
         relations: ["tenant"],
@@ -308,7 +297,10 @@ export class IntegrationsService {
         Promise.resolve(null),
       this.emailIdentities?.findOne({ where: { tenantId } }) ||
         Promise.resolve(null),
+      this.platformCredentials?.findOne({ where: { provider: 'sendgrid' } }) || Promise.resolve(null),
     ]);
+    const platformEmailPayload = platformEmail ? decryptIntegrationPayload(platformEmail.encryptedValue) : null;
+    const platformEmailReady = !this.platformCredentials || Boolean(platformEmailPayload?.apiKey && platformEmailPayload.connected && !platformEmailPayload.error);
 
     const byProvider = new Map<string, Credential>();
     for (const c of creds) byProvider.set(c.provider, c);
@@ -316,7 +308,6 @@ export class IntegrationsService {
     const providers: IntegrationProvider[] = [
       "twilio",
       "sendgrid",
-      "facebook_lead_ads",
     ];
 
     return providers.map((provider) => {
@@ -342,11 +333,12 @@ export class IntegrationsService {
         } as IntegrationSummary;
       }
       if (provider === 'sendgrid' && managedEmail) {
-        const connected = managedEmail.emailStatus === 'ready';
+        const connected = platformEmailReady && managedEmail.emailStatus === 'ready' && !managedEmail.lastError && !['blocked', 'paused'].includes(managedEmail.reputationStatus);
+        const error = managedEmail.lastError || (!platformEmailReady ? 'The email connection needs attention from RealtyTechAI support.' : null);
         return {
           provider,
           connected,
-          status: managedEmail.lastError
+          status: error
             ? 'error'
             : connected
               ? 'connected'
@@ -354,7 +346,7 @@ export class IntegrationsService {
           lastSync: (
             managedEmail.lastVerifiedAt || managedEmail.updatedAt
           )?.toISOString?.() || null,
-          error: managedEmail.lastError,
+          error,
           display: {
             fromEmail: managedEmail.fromEmail,
             fromName: managedEmail.fromName,
@@ -387,14 +379,6 @@ export class IntegrationsService {
           inboundWebhookUrl:
             String(process.env.SENDGRID_INBOUND_WEBHOOK_URL || "").trim() ||
             null,
-        };
-      } else if (provider === "facebook_lead_ads") {
-        display = {
-          pageId: parsed?.pageId || null,
-          pageName: parsed?.pageName || null,
-          lastSync: parsed?.lastSync || null,
-          webhookUrl:
-            String(process.env.FACEBOOK_WEBHOOK_URL || "").trim() || null,
         };
       }
 
@@ -645,310 +629,6 @@ export class IntegrationsService {
   }
 
   // Manual connect kept (for advanced users)
-  async connectFacebookLeadAdsManual(
-    tenantId: string,
-    dto: { pageId: string; accessToken: string; verifyToken?: string },
-  ) {
-    const pageId = dto.pageId?.trim();
-    const accessToken = dto.accessToken?.trim();
-    const verifyToken =
-      dto.verifyToken?.trim() || crypto.randomBytes(16).toString("hex");
-
-    if (!pageId || !accessToken) {
-      throw new BadRequestException("Missing Facebook Lead Ads credentials");
-    }
-
-    const previous = await this.getPayload(tenantId, "facebook_lead_ads");
-    await this.upsertEncrypted(tenantId, "facebook_lead_ads", {
-      connected: true,
-      pageId,
-      accessToken,
-      verifyToken,
-      lastSync: nowIso(),
-      error: null,
-      incidentKey: null,
-    });
-    await this.recordRecovery(tenantId, "facebook_lead_ads", previous);
-
-    return { ok: true, verifyToken };
-  }
-
-  // OAuth start: returns URL for frontend to redirect the user to Facebook consent screen
-  async facebookOAuthStart(tenantId: string, userId: string) {
-    const appId = (process.env.FACEBOOK_APP_ID || "").trim();
-    const redirectUrl = (process.env.FACEBOOK_REDIRECT_URL || "").trim();
-
-    if (!appId || !redirectUrl) {
-      throw new BadRequestException(
-        "Facebook OAuth is not configured (FACEBOOK_APP_ID / FACEBOOK_REDIRECT_URL)",
-      );
-    }
-
-    if (!tenantId || !userId || !this.oauthStates) {
-      throw new BadRequestException('Facebook OAuth state storage is unavailable');
-    }
-    const state = crypto.randomBytes(32).toString('base64url');
-    await this.oauthStates.save(
-      this.oauthStates.create({
-        stateHash: crypto.createHash('sha256').update(state).digest('hex'),
-        tenantId,
-        userId,
-        provider: 'facebook',
-        // The shared OAuth-state table also carries PKCE verifiers for calendar
-        // providers. Facebook state needs no verifier, but the encrypted marker
-        // preserves the table's non-null and at-rest-protection contract.
-        codeVerifierEncrypted: encryptJson({ provider: 'facebook' }),
-        expiresAt: new Date(Date.now() + 10 * 60_000),
-        consumedAt: null,
-      }),
-    );
-
-    const scopes = [
-      "pages_show_list",
-      "pages_read_engagement",
-      "leads_retrieval",
-      "pages_manage_metadata",
-    ].join(",");
-
-    const version = String(
-      process.env.FACEBOOK_GRAPH_API_VERSION || "v19.0",
-    ).trim();
-    if (!/^v\d+\.\d+$/.test(version)) {
-      throw new BadRequestException("FACEBOOK_GRAPH_API_VERSION is invalid");
-    }
-    const url =
-      `https://www.facebook.com/${version}/dialog/oauth` +
-      `?client_id=${encodeURIComponent(appId)}` +
-      `&redirect_uri=${encodeURIComponent(redirectUrl)}` +
-      `&state=${encodeURIComponent(state)}` +
-      `&response_type=code` +
-      `&scope=${encodeURIComponent(scopes)}`;
-
-    return { url };
-  }
-
-  // OAuth callback: exchange code -> token, store token. Page selection is next step.
-  async facebookOAuthCallback(
-    code: string,
-    state: string,
-  ): Promise<{ ok: boolean; error?: string }> {
-    let tenantId: string | null = null;
-    try {
-      const appId = (process.env.FACEBOOK_APP_ID || "").trim();
-      const appSecret = (process.env.FACEBOOK_APP_SECRET || "").trim();
-      const redirectUrl = (process.env.FACEBOOK_REDIRECT_URL || "").trim();
-
-      if (!appId || !appSecret || !redirectUrl) {
-        return {
-          ok: false,
-          error:
-            "Facebook OAuth not configured (FACEBOOK_APP_ID / FACEBOOK_APP_SECRET / FACEBOOK_REDIRECT_URL)",
-        };
-      }
-
-      if (!code || !state) {
-        return { ok: false, error: "Invalid Facebook callback payload" };
-      }
-      const claimedState = await this.consumeFacebookOAuthState(state);
-      if (!claimedState) {
-        return {
-          ok: false,
-          error: "Facebook state mismatch. Please retry connect.",
-        };
-      }
-      tenantId = claimedState.tenantId;
-      const existing = await this.getPayload(tenantId, "facebook_lead_ads");
-
-      const tokenUrl = `${facebookGraphBase()}/oauth/access_token`;
-      const tokenBody = new URLSearchParams({
-        client_id: appId,
-        redirect_uri: redirectUrl,
-        client_secret: appSecret,
-        code,
-      });
-      // Keep the app secret out of URLs, access logs, redirects, and exception
-      // strings. Reject redirects so provider responses cannot turn the token
-      // exchange into a credential-forwarding request.
-      const r = await fetch(tokenUrl, {
-        method: "POST",
-        redirect: 'error',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: tokenBody,
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!r.ok) {
-        const t = await r.text().catch(() => "");
-        const msg = t || `Facebook token exchange failed (${r.status})`;
-        await this.recordFailure(tenantId, "facebook_lead_ads", msg);
-        return { ok: false, error: msg };
-      }
-
-      const data: any = await r.json().catch(() => ({}));
-      const accessToken = data?.access_token ? String(data.access_token) : null;
-
-      if (!accessToken) {
-        const msg = "Facebook token exchange returned no access_token";
-        await this.recordFailure(tenantId, "facebook_lead_ads", msg);
-        return { ok: false, error: msg };
-      }
-
-      // OAuth only authorizes access. A Page must still be selected and
-      // subscribed before lead delivery is considered connected.
-      await this.upsertEncrypted(tenantId, "facebook_lead_ads", {
-        connected: false,
-        configured: true,
-        pageId: null,
-        userAccessToken: accessToken,
-        verifyToken:
-          existing?.verifyToken || crypto.randomBytes(16).toString("hex"),
-        lastSync: nowIso(),
-        error: null,
-      });
-
-      return { ok: true };
-    } catch (e: any) {
-      const msg = e?.message
-        ? String(e.message)
-        : "Facebook token exchange failed";
-      if (tenantId)
-        await this.recordFailure(tenantId, "facebook_lead_ads", msg);
-      return { ok: false, error: msg };
-    }
-  }
-
-  private async consumeFacebookOAuthState(rawState: string) {
-    if (!this.dataSource) return null;
-    const stateHash = crypto
-      .createHash('sha256')
-      .update(String(rawState || ''))
-      .digest('hex');
-    return this.dataSource.transaction(async (manager) => {
-      const repository = manager.getRepository(CalendarOAuthState);
-      const row = await repository
-        .createQueryBuilder('state')
-        .setLock('pessimistic_write')
-        .where(
-          'state.stateHash = :stateHash AND state.provider = :provider',
-          { stateHash, provider: 'facebook' },
-        )
-        .getOne();
-      if (!row || row.consumedAt || row.expiresAt.getTime() <= Date.now()) {
-        return null;
-      }
-      row.consumedAt = new Date();
-      await repository.save(row);
-      return row;
-    });
-  }
-
-  async listFacebookPages(tenantId: string) {
-    const existing = await this.getPayload(tenantId, "facebook_lead_ads");
-    const userAccessToken = String(existing?.userAccessToken || "").trim();
-    if (!userAccessToken) {
-      throw new BadRequestException(
-        "Authorize Facebook before selecting a Page",
-      );
-    }
-
-    const url = new URL(`${facebookGraphBase()}/me/accounts`);
-    url.searchParams.set("fields", "id,name,access_token,tasks");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${userAccessToken}` },
-    });
-    const payload: any = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const message =
-        payload?.error?.message ||
-        `Facebook Page lookup failed (${response.status})`;
-      await this.recordFailure(tenantId, "facebook_lead_ads", message);
-      throw new BadRequestException(message);
-    }
-
-    return {
-      pages: Array.isArray(payload?.data)
-        ? payload.data.map((page: any) => ({
-            id: String(page.id),
-            name: String(page.name || page.id),
-          }))
-        : [],
-    };
-  }
-
-  async selectFacebookPage(tenantId: string, selectedPageId: string) {
-    const pageId = String(selectedPageId || "").trim();
-    const existing = await this.getPayload(tenantId, "facebook_lead_ads");
-    const userAccessToken = String(existing?.userAccessToken || "").trim();
-    if (!pageId || !userAccessToken) {
-      throw new BadRequestException("Authorize Facebook and select a Page");
-    }
-
-    const pages = await this.fetchFacebookPages(userAccessToken);
-    const page = pages.find(
-      (candidate: any) => String(candidate.id) === pageId,
-    );
-    if (!page?.access_token) {
-      throw new BadRequestException(
-        "Selected Page is not available to this Facebook account",
-      );
-    }
-
-    const subscribeUrl = new URL(
-      `${facebookGraphBase()}/${encodeURIComponent(pageId)}/subscribed_apps`,
-    );
-    subscribeUrl.searchParams.set("subscribed_fields", "leadgen");
-    const subscribed = await fetch(subscribeUrl, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${String(page.access_token)}` },
-    });
-    const subscription: any = await subscribed.json().catch(() => ({}));
-    if (!subscribed.ok || subscription?.success !== true) {
-      const message =
-        subscription?.error?.message ||
-        `Facebook Page subscription failed (${subscribed.status})`;
-      await this.recordFailure(tenantId, "facebook_lead_ads", message);
-      throw new BadRequestException(message);
-    }
-
-    await this.upsertEncrypted(
-      tenantId,
-      "facebook_lead_ads",
-      {
-        ...existing,
-        configured: true,
-        connected: true,
-        pageId,
-        pageName: String(page.name || pageId),
-        pageAccessToken: String(page.access_token),
-        error: null,
-        lastSync: nowIso(),
-      },
-      pageId,
-    );
-
-    return {
-      ok: true,
-      page: { id: pageId, name: String(page.name || pageId) },
-    };
-  }
-
-  private async fetchFacebookPages(userAccessToken: string): Promise<any[]> {
-    const url = new URL(`${facebookGraphBase()}/me/accounts`);
-    url.searchParams.set("fields", "id,name,access_token,tasks");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${userAccessToken}` },
-    });
-    const payload: any = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new BadRequestException(
-        payload?.error?.message ||
-          `Facebook Page lookup failed (${response.status})`,
-      );
-    }
-    return Array.isArray(payload?.data) ? payload.data : [];
-  }
-
   async disconnect(tenantId: string, provider: IntegrationProvider) {
     await this.upsertEncrypted(
       tenantId,
@@ -959,7 +639,7 @@ export class IntegrationsService {
         lastSync: null,
         error: null,
       },
-      provider === "twilio" || provider === "facebook_lead_ads"
+      provider === "twilio"
         ? null
         : undefined,
     );
