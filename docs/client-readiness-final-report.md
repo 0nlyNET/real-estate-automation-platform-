@@ -17,6 +17,7 @@ Live Stripe, SendGrid, and OpenAI credentials were unavailable. Production deplo
 - Conversations default to email for leads with email addresses. Booking-link replies support email-only contacts. Sender-supplied inbound Message-IDs and duplicate lookups are tenant-scoped, with compatibility for previously stored inbound IDs.
 - New AI configuration defaults to controlled autopilot with 12 automatic turns. Approved business knowledge, configuration, provider readiness, consent, and activation remain required; approving valid configuration enables it. Routine references to an agent or offer no longer cause automatic handoff. Unsent/failed outbound drafts are excluded from conversation context. Email is the preferred first-response channel.
 - Help preserves a safe prior workspace/admin path and includes Back. First-login notification preference creation is idempotent.
+- Updated vulnerable Browserslist, fast-uri, and qs dependencies in the lockfiles; both locked dependency audits report zero vulnerabilities.
 - Facebook Lead Ads UI, OAuth routes, webhook triggers, and active setup instructions were removed. Historical data/migrations and generic lead intake remain compatible.
 
 ## VERIFIED WORKFLOWS
@@ -37,7 +38,7 @@ Live Stripe, SendGrid, and OpenAI credentials were unavailable. Production deplo
 | Help / support navigation | PASS | Browser returns to prior settings page; actual API ticket persisted; safe return paths tested. |
 | Tenant isolation | PASS | JWT/API conversation access and settings isolation, plus RBAC/IDOR/AI/provider regressions. |
 
-Validation: all 122 backend suites / 618 tests passed; frontend's five verification scripts passed; backend/frontend TypeScript and production builds passed; backend lint was clean and frontend lint had zero errors (46 warnings); public artifact and secret/workflow scans. All 25 migrations applied against the SQL baseline, reran without changes, and preserved paid evidence through rollback/reapply. Production backend started with 60 entity tables and readiness HTTP 200. Browser checks exercised the real frontend/API with synthetic accounts. Local SQL tests used PGlite (embedded PostgreSQL); the browser harness serialized database connections to accommodate its single-session transport. This is not native PostgreSQL concurrency or live-provider certification; repository CI includes PostgreSQL 15.
+Validation: all 122 backend suites / 618 tests passed; frontend's five verification scripts passed; backend/frontend TypeScript and production builds passed; backend lint was clean and frontend lint had zero errors (46 warnings); public artifact and secret/workflow scans. All 25 migrations applied against the SQL baseline, reran without changes, and preserved paid evidence through rollback/reapply. Production backend started with 60 entity tables and readiness HTTP 200. Browser checks exercised the real frontend/API with synthetic accounts. Local SQL tests used PGlite (embedded PostgreSQL); the browser harness serialized database connections to accommodate its single-session transport. Repository CI also passed all 618 workflow tests using PostgreSQL 15. Live-provider certification remains pending.
 
 ## OWNER SETUP REQUIRED
 
