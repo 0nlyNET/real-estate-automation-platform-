@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import * as webPush from 'web-push';
@@ -323,7 +323,7 @@ export class NotificationsService {
 
   async markRead(recipientUserId: string, id: string) {
     const row = await this.notifications.findOne({ where: { id, recipientUserId } });
-    if (!row) return { ok: false };
+    if (!row) throw new NotFoundException('Notification not found');
     row.readAt = row.readAt || new Date();
     await this.notifications.save(row);
     return { ok: true };

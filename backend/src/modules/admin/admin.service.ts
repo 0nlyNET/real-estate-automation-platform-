@@ -783,24 +783,37 @@ export class AdminService {
     };
   }
 
-  async systemHealth() {
+  private healthRequest: ReturnType<AdminService['readSystemHealth']> | null = null;
+
+  systemHealth() {
+    // Overview and setup request the same database health together. Share only
+    // in-flight work; never cache a completed health result.
+    if (!this.healthRequest) {
+      this.healthRequest = this.readSystemHealth().finally(() => { this.healthRequest = null; });
+    }
+    return this.healthRequest;
+  }
+
+  private async readSystemHealth() {
     const now = Date.now();
     const sinceMs = now - 24 * 60 * 60 * 1000;
     const since = new Date(sinceMs);
 
     // These fields may differ in your Message entity. We handle common cases safely.
-    const totalMessages24h = await this.messagesRepo
+    const totalMessages = this.messagesRepo
       .createQueryBuilder('m')
       .where('m.createdAt >= :since', { since })
       .getCount();
 
-    const failedMessages24h = await this.messagesRepo
+    const failedMessages = this.messagesRepo
       .createQueryBuilder('m')
       .where('m.createdAt >= :since', { since })
       .andWhere('m.status = :failed', { failed: 'failed' })
       .getCount();
 
-    const migrationsPending = await this.dataSource.showMigrations().catch(() => true);
+    const [totalMessages24h, failedMessages24h, migrationsPending] = await Promise.all([
+      totalMessages, failedMessages, this.dataSource.showMigrations().catch(() => true),
+    ]);
 
     return {
       totalMessages24h,

@@ -259,7 +259,7 @@ describe('admin notifications', () => {
   it('only marks a notification owned by the requesting operator as read', async () => {
     const { service, stored } = setup();
     stored.push({ id: 'note-1', recipientUserId: 'user-staff', readAt: null });
-    await expect(service.markRead('user-owner', 'note-1')).resolves.toEqual({ ok: false });
+    await expect(service.markRead('user-owner', 'note-1')).rejects.toThrow('Notification not found');
     await expect(service.markRead('user-staff', 'note-1')).resolves.toEqual({ ok: true });
     expect(stored[0].readAt).toBeInstanceOf(Date);
   });

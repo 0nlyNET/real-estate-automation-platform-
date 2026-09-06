@@ -678,13 +678,10 @@ export function AdminDashboardClient({
         if (section === "billing") setBilling(await apiFetch<BillingOverview>("/admin/billing-overview"))
         if (section === "health") {
           const [healthResult, setupResult, exceptionsResult] = await Promise.allSettled([
-            healthCheck<SystemHealth>("/admin/system-health", "System health"),
-            healthCheck<SetupChecker>("/admin/setup-checker", "Setup checker"),
-            healthCheck<OwnerExceptions>("/admin/operations/exceptions", "Operations exceptions"),
+            healthCheck<SystemHealth>("/admin/system-health", "System health").then((value) => { setHealth(value); return value }),
+            healthCheck<SetupChecker>("/admin/setup-checker", "Setup checker").then((value) => { setSetupChecker(value); return value }),
+            healthCheck<OwnerExceptions>("/admin/operations/exceptions", "Operations exceptions").then((value) => { setOwnerExceptions(value); return value }),
           ])
-          if (healthResult.status === "fulfilled") setHealth(healthResult.value)
-          if (setupResult.status === "fulfilled") setSetupChecker(setupResult.value)
-          if (exceptionsResult.status === "fulfilled") setOwnerExceptions(exceptionsResult.value)
           const failures = [healthResult, setupResult, exceptionsResult]
             .filter((result): result is PromiseRejectedResult => result.status === "rejected")
             .map((result) => messageFor(result.reason, "A health check failed"))

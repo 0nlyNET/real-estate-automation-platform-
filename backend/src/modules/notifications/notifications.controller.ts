@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -50,7 +51,7 @@ export class NotificationsController {
   }
 
   @Patch(':id/read')
-  markRead(@Req() req: any, @Param('id') id: string) {
+  markRead(@Req() req: any, @Param('id', new ParseUUIDPipe()) id: string) {
     return this.notifications.markRead(req.user.sub, id);
   }
 

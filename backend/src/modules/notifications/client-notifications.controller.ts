@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -17,7 +18,9 @@ import {
   UpdateNotificationPreferencesDto,
 } from './notifications.dto';
 import { NotificationsService } from './notifications.service';
+import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
 
+@AllowSetupAccess()
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
 export class ClientNotificationsController {
@@ -49,7 +52,7 @@ export class ClientNotificationsController {
   }
 
   @Patch(':id/read')
-  markRead(@Req() req: any, @Param('id') id: string) {
+  markRead(@Req() req: any, @Param('id', new ParseUUIDPipe()) id: string) {
     return this.notifications.markRead(req.user.sub, id);
   }
 

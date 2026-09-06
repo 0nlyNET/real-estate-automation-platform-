@@ -1,6 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Bell, BellRing, CheckCheck, Smartphone } from "lucide-react"
 import { apiFetch } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -78,6 +79,7 @@ function detectDeviceStatus(): DeviceStatus {
 }
 
 export function NotificationCenter({ audience = "admin" }: { audience?: "admin" | "client" }) {
+  const router = useRouter()
   const basePath = audience === "client" ? "/notifications" : "/admin/notifications"
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<NotificationItem[]>([])
@@ -90,6 +92,9 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
   const [categoryFilter, setCategoryFilter] = useState("all")
   const [severityFilter, setSeverityFilter] = useState("all")
   const [readFilter, setReadFilter] = useState("all")
+  const [marking, setMarking] = useState(false)
+  const markingRef = useRef(false)
+  const loadVersion = useRef(0)
 
   const loadDeviceState = useCallback(async () => {
     const status = detectDeviceStatus()
@@ -104,20 +109,20 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
   }, [])
 
   const load = useCallback(async () => {
+    const version = ++loadVersion.current
     try {
       const query = new URLSearchParams({ take: "30" })
       if (categoryFilter !== "all") query.set("category", categoryFilter)
       if (severityFilter !== "all") query.set("severity", severityFilter)
       if (readFilter !== "all") query.set("read", readFilter)
-      const [nextItems, nextSummary, nextPreferences] = await Promise.all([
-        apiFetch<NotificationItem[]>(`${basePath}?${query.toString()}`),
-        apiFetch<Summary>(`${basePath}/summary`),
-        apiFetch<Preferences>(`${basePath}/preferences/me`),
-        loadDeviceState(),
+      void loadDeviceState().catch(() => undefined)
+      const results = await Promise.allSettled([
+        apiFetch<NotificationItem[]>(`${basePath}?${query.toString()}`).then((value) => { if (version === loadVersion.current) setItems(value) }),
+        apiFetch<Summary>(`${basePath}/summary`).then((value) => { if (version === loadVersion.current) setSummary(value) }),
+        apiFetch<Preferences>(`${basePath}/preferences/me`).then((value) => { if (version === loadVersion.current) setPreferences(value) }),
       ])
-      setItems(nextItems)
-      setSummary(nextSummary)
-      setPreferences(nextPreferences)
+      if (version !== loadVersion.current) return
+      if (results.some((result) => result.status === "rejected")) setMessage("Some notifications could not be loaded. Please retry.")
     } catch {
       setMessage("Notifications could not be loaded.")
     }
@@ -226,15 +231,41 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
   }
 
   async function markAllRead() {
-    await apiFetch(`${basePath}/read-all`, { method: "POST" })
-    setItems((current) => current.map((item) => ({ ...item, readAt: item.readAt || new Date().toISOString() })))
-    setSummary((current) => ({ ...current, unread: 0 }))
+    await markRead()
+  }
+
+  async function markRead(item?: NotificationItem) {
+    if (markingRef.current) return false
+    markingRef.current = true
+    setMarking(true)
+    setMessage("")
+    ++loadVersion.current
+    try {
+      const result = await apiFetch<{ ok: boolean }>(item ? `${basePath}/${item.id}/read` : `${basePath}/read-all`, { method: item ? "PATCH" : "POST" })
+      if (!result?.ok) throw new Error("Notification could not be marked as read.")
+      ++loadVersion.current
+      setItems((current) => current
+        .map((row) => !item || row.id === item.id ? { ...row, readAt: row.readAt || new Date().toISOString() } : row)
+        .filter((row) => readFilter !== "unread" || !row.readAt))
+      setSummary((current) => ({ ...current, unread: item ? Math.max(0, current.unread - (item.readAt ? 0 : 1)) : 0 }))
+      // Reconcile notifications arriving concurrently, without blocking the UI.
+      void load()
+      return true
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "Notifications could not be marked as read. Please retry.")
+      return false
+    } finally {
+      markingRef.current = false
+      setMarking(false)
+    }
   }
 
   async function openItem(item: NotificationItem) {
-    if (!item.readAt) await apiFetch(`${basePath}/${item.id}/read`, { method: "PATCH" })
-    if (item.actionUrl?.startsWith("/admin") || item.actionUrl?.startsWith("/app")) window.location.assign(item.actionUrl)
-    else await load()
+    if (!item.readAt && !await markRead(item)) return
+    if (item.actionUrl && /^\/(admin|app)(\/|$)/.test(item.actionUrl)) {
+      setOpen(false)
+      router.push(item.actionUrl)
+    }
   }
 
   return (
@@ -257,8 +288,8 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
               {audience === "client" ? "Lead replies, appointments, and action items" : "Business updates and action items"}
             </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => void markAllRead()} disabled={!summary.unread}>
-            <CheckCheck className="mr-1 h-4 w-4" /> Mark read
+          <Button variant="ghost" size="sm" onClick={() => void markAllRead()} disabled={marking || !summary.unread}>
+            <CheckCheck className="mr-1 h-4 w-4" /> Mark all as read
           </Button>
         </div>
         <div className="grid grid-cols-3 gap-2 border-b p-3">
@@ -279,13 +310,11 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
         <ScrollArea className="h-80">
           <div className="divide-y">
             {items.map((item) => (
-              <button
+              <div
                 key={item.id}
-                type="button"
-                onClick={() => void openItem(item)}
                 className={`w-full p-4 text-left hover:bg-muted/60 ${item.readAt ? "opacity-70" : "bg-primary/5"}`}
               >
-                <div className="flex items-start gap-3">
+                <button type="button" onClick={() => void openItem(item)} disabled={marking} className="flex w-full items-start gap-3 text-left">
                   <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
                     item.severity === "critical" ? "bg-red-500" :
                     item.severity === "warning" ? "bg-amber-500" :
@@ -298,8 +327,9 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
                       {item.category} · {item.severity} · {new Date(item.createdAt).toLocaleString()}
                     </span>
                   </span>
-                </div>
-              </button>
+                </button>
+                {!item.readAt ? <Button size="sm" variant="ghost" disabled={marking} onClick={() => void markRead(item)} aria-label={`Mark ${item.title} as read`}>Mark as read</Button> : null}
+              </div>
             ))}
             {!items.length ? <div className="p-8 text-center text-sm text-muted-foreground">No notifications match these filters.</div> : null}
           </div>
@@ -374,7 +404,7 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
             </div>
           ) : null}
           <p className="text-xs text-muted-foreground">On iPhone, add RealtyTechAI to your Home Screen first, then open it there and enable alerts.</p>
-          {message ? <p className="rounded-md border p-2 text-xs">{message}</p> : null}
+          {message ? <p role="status" className="rounded-md border p-2 text-xs">{message}</p> : null}
         </div>
       </PopoverContent>
     </Popover>

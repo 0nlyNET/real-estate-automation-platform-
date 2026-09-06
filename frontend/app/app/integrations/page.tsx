@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { PageShell } from "@/app/app/_components/PageShell"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -19,7 +19,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/hooks/use-toast"
 import { API_URL, apiFetch } from "@/lib/api"
 import {
@@ -185,45 +184,37 @@ const schedulingProviders: Array<{
 ]
 
 function statusBadge(item?: Integration | null) {
+  if (!item) return <Badge variant="outline">Status unavailable</Badge>
   if (item?.status === "connected") return <Badge>Connected</Badge>
   if (item?.status === "error") return <Badge variant="destructive">Needs attention</Badge>
-  if (item?.status === "configured") return <Badge variant="outline">Test required</Badge>
-  return <Badge variant="secondary">Not connected</Badge>
+  if (item?.status === "configured") return <Badge variant="outline">Configuration entered — test required</Badge>
+  return <Badge variant="secondary">Not configured</Badge>
 }
 
 function realtorStatusBadge(item?: RealtorSetup | null) {
   if (item?.status === "connected") return <Badge>Connected</Badge>
   if (item?.status === "error") return <Badge variant="destructive">Needs attention</Badge>
   if (item?.status === "configured") return <Badge variant="outline">Awaiting Realtor.com test</Badge>
-  return <Badge variant="secondary">Not connected</Badge>
+  return <Badge variant="secondary">Not configured</Badge>
 }
 
 function calendarStatusBadge(item?: BookingProviderStatus | null) {
   if (item?.connected) return <Badge>Connected</Badge>
   if (item?.status === "needs_attention") return <Badge variant="destructive">Needs attention</Badge>
   if (item?.status === "configured" || item?.status === "choose_resource") return <Badge variant="outline">Finish setup</Badge>
-  return <Badge variant="secondary">Not connected</Badge>
+  return <Badge variant="secondary">Not configured</Badge>
 }
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Please try again."
 }
 
-async function fetchIntegrationData() {
-  return Promise.all([
-    apiFetch<Integration[]>("/integrations"),
-    apiFetch<TenantSettings>("/settings/tenant"),
-    apiFetch<Me>("/me"),
-    apiFetch<RealtorSetup>("/integrations/realtor-com"),
-    apiFetch<ZapierConnection[]>("/integrations/crm/connections/zapier"),
-    apiFetch<WebhookSubscription[]>("/integrations/crm/webhooks"),
-    apiFetch<CalendarStatus>("/calendar/status"),
-  ])
-}
 
 export default function IntegrationsPage() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
+  const [loadErrors, setLoadErrors] = useState<string[]>([])
+  const loadVersion = useRef(0)
   const [busy, setBusy] = useState<string | null>(null)
   const [integrations, setIntegrations] = useState<Integration[]>([])
   const [settings, setSettings] = useState<TenantSettings | null>(null)
@@ -282,48 +273,37 @@ export default function IntegrationsPage() {
   }, [toast])
 
   const load = useCallback(async () => {
-    const [items, tenantSettings, me, realtor, zapier, subscriptions, calendar] = await fetchIntegrationData()
-    setIntegrations(items)
-    setSettings(tenantSettings)
-    setRole(me.role)
-    setRealtorSetup(realtor)
-    setZapierConnections(zapier)
-    setWebhooks(subscriptions)
-    setCalendarStatus(calendar)
-    setSelectedResourceIds(Object.fromEntries(
-      schedulingProviders.map(({ provider }) => [provider, calendar.providers[provider].selectedResource?.id || ""]),
-    ))
+    const version = ++loadVersion.current
+    const failures: string[] = []
+    setLoadErrors([])
+    async function section<T>(name: string, path: string, apply: (value: T) => void) {
+      try {
+        const value = await apiFetch<T>(path)
+        if (version === loadVersion.current) apply(value)
+      } catch {
+        failures.push(name)
+        if (version === loadVersion.current) setLoadErrors([...failures])
+      }
+    }
+    await Promise.all([
+      section<Integration[]>("Messaging", "/integrations", setIntegrations),
+      section<TenantSettings>("Lead forms", "/settings/tenant", setSettings),
+      section<Me>("Account permissions", "/auth/session", (me) => setRole(me.role)),
+      section<RealtorSetup>("Realtor.com", "/integrations/realtor-com", setRealtorSetup),
+      section<ZapierConnection[]>("Zapier", "/integrations/crm/connections/zapier", setZapierConnections),
+      section<WebhookSubscription[]>("Webhooks", "/integrations/crm/webhooks", setWebhooks),
+      section<CalendarStatus>("Scheduling", "/calendar/status", (calendar) => {
+        setCalendarStatus(calendar)
+        setSelectedResourceIds(Object.fromEntries(schedulingProviders.map(({ provider }) => [provider, calendar.providers[provider]?.selectedResource?.id || ""])))
+      }),
+    ])
+    if (version === loadVersion.current) setLoading(false)
   }, [])
 
   useEffect(() => {
-    let alive = true
-    fetchIntegrationData()
-      .then(([items, tenantSettings, me, realtor, zapier, subscriptions, calendar]) => {
-        if (!alive) return
-        setIntegrations(items)
-        setSettings(tenantSettings)
-        setRole(me.role)
-        setRealtorSetup(realtor)
-        setZapierConnections(zapier)
-        setWebhooks(subscriptions)
-        setCalendarStatus(calendar)
-        setSelectedResourceIds(Object.fromEntries(
-          schedulingProviders.map(({ provider }) => [provider, calendar.providers[provider].selectedResource?.id || ""]),
-        ))
-      })
-      .catch((error) => {
-        if (!alive) return
-        toast({
-          title: "Could not load connections",
-          description: errorMessage(error),
-          variant: "destructive",
-        })
-      })
-      .finally(() => alive && setLoading(false))
-    return () => {
-      alive = false
-    }
-  }, [toast])
+    const initialLoad = window.setTimeout(() => void load(), 0)
+    return () => { window.clearTimeout(initialLoad); loadVersion.current += 1 }
+  }, [load])
 
   useEffect(() => {
     if (!canManage || !calendarStatus) return
@@ -676,21 +656,15 @@ export default function IntegrationsPage() {
   const realtorEndpoint = realtorCredentials?.endpointUrl || realtorSetup?.endpointUrl || ""
   const realtorLogin = realtorCredentials?.loginName || realtorSetup?.loginName || ""
 
-  if (loading) {
-    return (
-      <PageShell title="Connections" subtitle="Review the services connected to this workspace.">
-        <div className="grid gap-4 lg:grid-cols-2">
-          {[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-64 w-full" />)}
-        </div>
-      </PageShell>
-    )
-  }
 
   return (
     <PageShell
-      title="Connections"
+      title="Integrations"
       subtitle="Connect your lead sources and review the messaging services managed for you."
     >
+      {loading ? <p role="status">Loading integration status…</p> : null}
+      {busy?.includes("test") ? <p role="status">Testing connection…</p> : null}
+      {loadErrors.length ? <Alert variant="destructive"><AlertTitle>Some connection statuses are unavailable</AlertTitle><AlertDescription>{loadErrors.join(", ")} could not be checked. Displayed results may be from the last successful check.<Button className="ml-2" variant="outline" onClick={() => void load()}>Retry connections</Button></AlertDescription></Alert> : null}
       <Alert>
         <ShieldCheck />
         <AlertTitle>Twilio and SendGrid are managed by RealtyTechAI</AlertTitle>
@@ -797,12 +771,12 @@ export default function IntegrationsPage() {
         <Card className="xl:col-span-2">
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div className="space-y-1"><CardTitle className="flex items-center gap-2"><PlugZap className="h-5 w-5" /> Universal CRM connection with Zapier</CardTitle><p className="text-sm text-muted-foreground">Connect Keller Williams Command, Compass, Follow Up Boss, kvCORE, BoomTown, Lofty, Brivity, HighLevel, HubSpot, forms, and other Zapier-supported sources.</p></div>
-            {zapierConnections.some((item) => item.status === "active") ? <Badge>Connected</Badge> : <Badge variant="secondary">Not connected</Badge>}
+            {zapierConnections.some((item) => item.status === "active" && item.lastTestedAt && !item.lastError) ? <Badge>Connected</Badge> : <Badge variant="secondary">{zapierConnections.some((item) => item.status === "active") ? "Test required" : "Not configured"}</Badge>}
           </CardHeader>
           <CardContent className="space-y-5">
             <Alert><ShieldCheck /><AlertTitle>Tenant-safe credential</AlertTitle><AlertDescription>Zapier sends a Bearer credential; RealtyTechAI resolves this workspace from that credential. A Zap cannot choose a tenant ID. Retries with the same event ID are deduplicated.</AlertDescription></Alert>
             {zapierCredential ? <Alert><KeyRound /><AlertTitle>Copy this credential now—it will not be shown again</AlertTitle><AlertDescription className="space-y-3"><div className="flex gap-2"><Input readOnly value={zapierCredential.credential} className="font-mono text-xs" /><Button variant="outline" onClick={() => copy(zapierCredential.credential, "Zapier credential")}><Clipboard /> Copy</Button></div><div className="flex gap-2"><Input readOnly value={zapierCredential.inboundUrl} className="font-mono text-xs" /><Button variant="outline" size="icon" onClick={() => copy(zapierCredential.inboundUrl, "Zapier URL")}><Clipboard /><span className="sr-only">Copy Zapier URL</span></Button></div></AlertDescription></Alert> : null}
-            {zapierConnections.length ? <div className="space-y-3">{zapierConnections.map((connection) => <div key={connection.id} className="space-y-3 rounded-lg border p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{connection.configuration?.label || "Zapier"}</div><div className="text-xs text-muted-foreground">Credential ending {connection.secretLast4} · {connection.lastUsedAt ? `last event ${new Date(connection.lastUsedAt).toLocaleString()}` : "no event received yet"}</div></div><Badge variant={connection.status === "active" ? "default" : "secondary"}>{connection.status}</Badge></div>{connection.lastError ? <p className="text-sm text-destructive">{connection.lastError}</p> : null}{connection.status === "active" && canManage ? <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => testZapierConnection(connection.id)} disabled={Boolean(busy)}><CheckCircle2 /> Send controlled test lead</Button><Button variant="ghost" onClick={() => rotateZapierConnection(connection.id)} disabled={Boolean(busy)}><KeyRound /> Rotate credential</Button><AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" disabled={Boolean(busy)}><Unplug /> Revoke</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Revoke this Zapier credential?</AlertDialogTitle><AlertDialogDescription>Connected Zaps will stop immediately. This cannot be undone; create a new connection if needed.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => revokeZapierConnection(connection.id)}>Revoke</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div> : null}</div>)}</div> : <p className="text-sm text-muted-foreground">Create a connection, copy the one-time credential into Zapier, and map a stable external event ID plus the lead fields.</p>}
+            {zapierConnections.length ? <div className="space-y-3">{zapierConnections.map((connection) => <div key={connection.id} className="space-y-3 rounded-lg border p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{connection.configuration?.label || "Zapier"}</div><div className="text-xs text-muted-foreground">Credential ending {connection.secretLast4} · {connection.lastUsedAt ? `last event ${new Date(connection.lastUsedAt).toLocaleString()}` : "no event received yet"}</div></div><Badge variant={connection.status === "active" ? "default" : "secondary"}>{connection.lastError ? "Needs attention" : connection.status !== "active" ? connection.status : connection.lastTestedAt ? "Connected" : "Configuration entered — test required"}</Badge></div>{connection.lastError ? <p className="text-sm text-destructive">{connection.lastError}</p> : null}{connection.status === "active" && canManage ? <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => testZapierConnection(connection.id)} disabled={Boolean(busy)}><CheckCircle2 /> Send controlled test lead</Button><Button variant="ghost" onClick={() => rotateZapierConnection(connection.id)} disabled={Boolean(busy)}><KeyRound /> Rotate credential</Button><AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" disabled={Boolean(busy)}><Unplug /> Revoke</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Revoke this Zapier credential?</AlertDialogTitle><AlertDialogDescription>Connected Zaps will stop immediately. This cannot be undone; create a new connection if needed.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => revokeZapierConnection(connection.id)}>Revoke</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div> : null}</div>)}</div> : <p className="text-sm text-muted-foreground">Create a connection, copy the one-time credential into Zapier, and map a stable external event ID plus the lead fields.</p>}
             {canManage ? <Button onClick={createZapierConnection} disabled={Boolean(busy)}><PlugZap /> Create Zapier connection</Button> : null}
 
             <div className="space-y-4 border-t pt-5">
@@ -854,7 +828,7 @@ export default function IntegrationsPage() {
         <Card className="xl:col-span-2">
           <CardHeader className="flex flex-row items-start justify-between gap-4">
             <div className="space-y-1"><CardTitle className="flex items-center gap-2"><PlugZap className="h-5 w-5" /> Website, Zapier, and lead forms</CardTitle><p className="text-sm text-muted-foreground">Send new buyer, seller, renter, or investor leads into this workspace.</p></div>
-            {settings?.intake.configured ? <Badge>Ready</Badge> : <Badge variant="secondary">Key required</Badge>}
+            {settings?.intake.configured ? <Badge variant="outline">Key configured — test your form</Badge> : <Badge variant="secondary">Key required</Badge>}
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">

@@ -53,12 +53,12 @@ assert.match(api, /export class ApiError extends Error/)
 assert.match(api, /extractErrorCode\(payload\)/)
 
 // Independent health failures must render independently, and transient session
-// introspection failures get one bounded retry while authoritative denial fails closed.
+// introspection failures keep the cookie and render a retry page while access fails closed.
 assert.match(dashboard, /Promise\.allSettled\(\[/)
 assert.match(dashboard, /`\$\{label\} did not respond within 15 seconds\.`/)
 assert.match(dashboard, /healthCheck<SystemHealth>\("\/admin\/system-health", "System health"\)/)
-assert.match(proxy, /for \(let attempt = 0; attempt < 2; attempt \+= 1\)/)
-assert.match(proxy, /response\.status === 401 \|\| response\.status === 403/)
-assert.match(proxy, /AbortSignal\.timeout\(5_000\)/)
+assert.match(proxy, /NextResponse\.rewrite/)
+assert.match(proxy, /response\.status === 401/)
+assert.match(proxy, /AbortSignal\.timeout\(8_000\)/)
 
 console.log("Admin/client assistant workflow regression checks passed.")
