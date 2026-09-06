@@ -87,7 +87,7 @@ function requestMessage(error: unknown) {
 
 function requestOutcomeMayStillComplete(error: unknown) {
   if (error instanceof ApiError) {
-    return error.code === "ASSISTANT_REQUEST_IN_PROGRESS"
+    return ["ASSISTANT_REQUEST_IN_PROGRESS", "UPSTREAM_TIMEOUT", "UPSTREAM_UNAVAILABLE"].includes(error.code || "")
   }
   return (
     (error instanceof DOMException && error.name === "TimeoutError") ||

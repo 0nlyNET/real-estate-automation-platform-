@@ -8,13 +8,15 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { apiFetch } from "@/lib/api"
 import { ImpersonationBanner } from './impersonation-banner'
-import { CalendarDays, Inbox, LayoutDashboard, Users } from "lucide-react"
+import { Bot, CalendarDays, Inbox, LayoutDashboard, Plug, Users } from "lucide-react"
 
 const mobileNavItems = [
   { label: "Today", href: "/app/dashboard", icon: LayoutDashboard },
   { label: "Leads", href: "/app/leads", icon: Users },
   { label: "Conversations", href: "/app/inbox", icon: Inbox },
   { label: "Appointments", href: "/app/appointments", icon: CalendarDays },
+  { label: "Integrations", href: "/app/integrations", icon: Plug },
+  { label: "AI assistant", href: "/app/assistant", icon: Bot },
 ]
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -67,7 +69,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Topbar />
         <nav className="flex overflow-x-auto border-b bg-background px-2 py-1 md:hidden" aria-label="Client navigation">
           {mobileNavItems.map(({ label, href, icon: Icon }) => (
-            <Link key={href} href={href} className="flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
+            <Link prefetch={false} key={href} href={href} className="flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
               <Icon className="h-4 w-4" />{label}
             </Link>
           ))}
@@ -109,7 +111,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 )}
               </div>
 
-              <Link href={suspended && !billingRelated ? "/support" : "/app/billing"}>
+              <Link prefetch={false} href={suspended && !billingRelated ? "/support" : "/app/billing"}>
                 <Button size="sm" variant={serviceAttention ? "default" : "outline"}>
                   {suspended && !billingRelated ? "Contact support" : "Manage billing"}
                 </Button>

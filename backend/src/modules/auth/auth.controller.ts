@@ -1,5 +1,5 @@
 import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
-import { Body, Controller, HttpCode, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { Throttle } from '@nestjs/throttler';
@@ -20,6 +20,24 @@ import {
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
+
+  // Authentication must not depend on billing, provider health, or tenant setup.
+  // JwtStrategy still verifies expiry, revocation and current database roles.
+  @Get('session')
+  @UseGuards(JwtAuthGuard)
+  session(@Req() req: any) {
+    return {
+      userId: req.user.sub,
+      tenantId: req.user.tenantId,
+      role: req.user.role,
+      email: req.user.email,
+      isPlatformAdmin: req.user.platformAdmin === true,
+      platformRole: req.user.platformRole || null,
+      impersonated: Boolean(req.user.impersonatedBy),
+      impersonatedBy: req.user.impersonatedBy || null,
+      sessionExpiresAt: req.user.sessionExpiresAt || null,
+    };
+  }
 
   @Post('login')
   @HttpCode(200)

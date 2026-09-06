@@ -112,18 +112,24 @@ export async function apiFetch<T = any>(
     body = requestedBody as BodyInit | null | undefined
   }
 
+  const timeout = AbortSignal.timeout(["GET", "HEAD"].includes((init.method || "GET").toUpperCase()) ? 15_000 : 65_000)
   const res = await fetch(url, {
     ...init,
     headers,
     body,
     credentials: "include",
+    cache: "no-store",
+    signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
   })
 
   const payload = await readResponseBody(res)
 
   if (!res.ok) {
-    if (res.status === 401 && typeof window !== "undefined") {
+    if (res.status === 401 && typeof window !== "undefined" && !path.startsWith("/auth/")) {
       window.dispatchEvent(new Event("rta:session-expired"))
+    }
+    if (res.status === 403 && typeof window !== "undefined" && ["PAYMENT_REQUIRED", "WORKSPACE_SUSPENDED"].includes(extractErrorCode(payload) || "")) {
+      window.dispatchEvent(new Event("rta:workspace-access-changed"))
     }
     const msg = extractErrorMessage(payload)
     throw new ApiError(

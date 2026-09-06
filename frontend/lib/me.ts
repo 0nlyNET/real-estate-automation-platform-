@@ -1,4 +1,4 @@
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 export type Me = {
   userId: string;
@@ -12,9 +12,23 @@ export type Me = {
   sessionExpiresAt: string | null;
 };
 
+let pendingSession: Promise<Me> | null = null;
+
+export function fetchSession(): Promise<Me> {
+  if (!pendingSession) {
+    pendingSession = apiFetch<Me>("/auth/session").catch((cause) => {
+      if (cause instanceof ApiError && cause.status === 404) return apiFetch<Me>("/me");
+      throw cause;
+    }).finally(() => { pendingSession = null; });
+  }
+  return pendingSession;
+}
+
+// Legacy callers use this only to display identity/role. Route guards use
+// fetchSession directly so they can distinguish unavailable from signed out.
 export async function fetchMe(): Promise<Me | null> {
   try {
-    const d = await apiFetch<Me>("/me");
+    const d = await fetchSession();
     if (!d?.userId) return null;
     return d;
   } catch {

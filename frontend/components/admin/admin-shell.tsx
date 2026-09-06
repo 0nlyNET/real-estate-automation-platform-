@@ -64,6 +64,7 @@ function NavigationLink({
   const Icon = icons[item.id]
   const link = (
     <Link
+      prefetch={false}
       href={adminViewHref(item.id)}
       aria-current={active ? "page" : undefined}
       className={cn(
@@ -95,10 +96,10 @@ function Navigation({
         ))}
         {mobile ? (
           <SheetClose asChild>
-            <Link href="/admin/assistant" className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"><Bot className="h-4 w-4" />Operations AI</Link>
+            <Link prefetch={false} href="/admin/assistant" className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"><Bot className="h-4 w-4" />Operations AI</Link>
           </SheetClose>
         ) : (
-          <Link href="/admin/assistant" className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"><Bot className="h-4 w-4" />Operations AI</Link>
+          <Link prefetch={false} href="/admin/assistant" className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"><Bot className="h-4 w-4" />Operations AI</Link>
         )}
       </div>
       {isOwner ? (
@@ -135,7 +136,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
         <div className="border-t px-5 py-4">
           <div className="truncate text-sm font-medium">{session.email}</div>
           <div className="text-xs text-muted-foreground">{isOwner ? "Super administrator" : "Staff"}</div>
-          <Link className="mt-2 inline-block text-xs text-muted-foreground hover:text-foreground" href="/logout">
+          <Link prefetch={false} className="mt-2 inline-block text-xs text-muted-foreground hover:text-foreground" href="/logout">
             Log out
           </Link>
         </div>
@@ -157,7 +158,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
               <Navigation activeView={activeView} isOwner={isOwner} mobile />
               <div className="border-t px-5 py-4">
                 <div className="truncate text-sm font-medium">{session.email}</div>
-                <Link className="mt-1 inline-block text-sm text-muted-foreground hover:text-foreground" href="/logout">
+                <Link prefetch={false} className="mt-1 inline-block text-sm text-muted-foreground hover:text-foreground" href="/logout">
                   Log out
                 </Link>
               </div>

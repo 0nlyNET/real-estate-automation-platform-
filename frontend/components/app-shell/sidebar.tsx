@@ -14,14 +14,11 @@ import {
 } from "lucide-react"
 import { Logo } from "@/components/logo"
 import { cn } from "@/lib/utils"
+import { clientNavigation } from "@/lib/client-navigation"
 
+const icons = [LayoutDashboard, Users, Inbox, CalendarDays, Plug, Bot]
 const navItems = [
-  { label: "Today", href: "/app/dashboard", icon: LayoutDashboard },
-  { label: "Leads", href: "/app/leads", icon: Users },
-  { label: "Conversations", href: "/app/inbox", icon: Inbox },
-  { label: "Appointments", href: "/app/appointments", icon: CalendarDays },
-  { label: "Integrations", href: "/app/integrations", icon: Plug },
-  { label: "AI assistant", href: "/app/assistant", icon: Bot },
+  ...clientNavigation.map((item, index) => ({ ...item, icon: icons[index] })),
   { label: "Help", href: "/support", icon: LifeBuoy },
 ]
 
@@ -44,8 +41,10 @@ export function Sidebar({ isCollapsed = false, onClose }: SidebarProps) {
           const Icon = item.icon as React.ElementType
           return (
             <Link
+      prefetch={false}
               key={item.href}
               href={item.href}
+              aria-current={active ? "page" : undefined}
               onClick={onClose}
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",

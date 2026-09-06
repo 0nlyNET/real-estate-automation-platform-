@@ -22,17 +22,7 @@ assert.match(supportHistorySource, /useSearchParams/)
 assert.match(supportHistorySource, /\[pathname,\s*search\]/)
 assert.match(supportHistorySource, /supportReturnPath", `\$\{pathname\}\$\{query\}`/)
 
-const session = { userId: "client", platformRole: null, serviceAccess: { allowed: false, billingEligible: false } }
-const { proxy } = await loadTs("proxy.ts", {
-  "next/server": { NextResponse: { redirect: (url) => ({ redirect: String(url) }), next: () => ({ allowed: true }) } },
-}, { fetch: async () => ({ ok: true, json: async () => session }) })
-const request = (path) => ({ url: `https://app.example${path}`, nextUrl: new URL(`https://app.example${path}`), headers: new Headers({ cookie: "session=fixture" }) })
-assert.equal((await proxy(request("/app/inbox"))).redirect, "https://app.example/app/billing")
-assert.equal((await proxy(request("/app/onboarding"))).allowed, true)
-assert.equal((await proxy(request("/app/billing"))).allowed, true)
-assert.equal((await proxy(request("/admin/dashboard"))).redirect, "https://app.example/app/dashboard")
-session.serviceAccess = { allowed: true, billingEligible: true }
-assert.equal((await proxy(request("/app/inbox"))).allowed, true)
-session.serviceAccess = { allowed: false, billingEligible: true }
-assert.equal((await proxy(request("/app/inbox"))).redirect, "https://app.example/support")
-console.log("First-client payment routes and safe support navigation passed")
+// Payment restriction behavior is exercised by verify-session-navigation.mjs.
+// Backend workspace-access.e2e.spec.ts independently proves that unpaid API
+// reads/writes remain denied even though page navigation is allowed.
+console.log("First-client safe support navigation passed")

@@ -1,8 +1,9 @@
 "use client"
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
-import { fetchMe, type Me } from "@/lib/me"
+import { fetchSession, type Me } from "@/lib/me"
+import { ApiError } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 
@@ -25,18 +26,27 @@ export function AdminAccessGuard({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Me | null>(null)
   const [checking, setChecking] = useState(true)
   const [failed, setFailed] = useState(false)
+  const generation = useRef(0)
 
   const verify = useCallback(async () => {
-    const session = await fetchMe()
-    if (session?.platformRole === "super_admin" || session?.platformRole === "staff") {
-      setSession(session)
-      setChecking(false)
-      return
+    const current = ++generation.current
+    setFailed(false)
+    try {
+      const next = await fetchSession()
+      if (current !== generation.current) return
+      if (next.platformRole === "super_admin" || next.platformRole === "staff") {
+        setSession(next)
+      } else {
+        setSession(null)
+        router.replace("/app/dashboard")
+      }
+    } catch (cause) {
+      if (current !== generation.current) return
+      setFailed(true)
+      if (cause instanceof ApiError && cause.status === 401) router.replace("/login?reason=session_expired")
+    } finally {
+      if (current === generation.current) setChecking(false)
     }
-    setSession(null)
-    setChecking(false)
-    if (session) router.replace("/app/dashboard")
-    else setFailed(true)
   }, [router])
 
   const retry = useCallback(() => {
@@ -47,9 +57,10 @@ export function AdminAccessGuard({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const initialCheck = window.setTimeout(() => void verify(), 0)
-    const onPageShow = () => void verify()
+    const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) { setChecking(true); void verify() } }
     window.addEventListener("pageshow", onPageShow)
     return () => {
+      generation.current += 1
       window.clearTimeout(initialCheck)
       window.removeEventListener("pageshow", onPageShow)
     }
@@ -82,7 +93,7 @@ export function AdminAccessGuard({ children }: { children: ReactNode }) {
       >
         <h1 className="text-xl font-semibold">Admin access unavailable</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Your session could not be verified. Sign in again or retry the access check.
+          The service could not verify your session. Your sign-in has been kept. Retry the access check.
         </p>
         <div className="mt-5 flex gap-2">
           <Button variant="outline" onClick={retry}>

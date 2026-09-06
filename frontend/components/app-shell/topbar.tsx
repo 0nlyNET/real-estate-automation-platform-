@@ -42,7 +42,7 @@ export function Topbar() {
           <NotificationCenter audience="client" />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full">
+              <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" aria-label="Open account menu">
                 <Avatar className="h-8 w-8">
                   {avatar ? <AvatarImage src={avatar} alt="Avatar" /> : null}
                   <AvatarFallback>{getInitials(displayName)}</AvatarFallback>
@@ -57,23 +57,23 @@ export function Topbar() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild>
-                <Link href="/app/integrations"><Plug className="mr-2 h-4 w-4" />Integrations</Link>
+                <Link prefetch={false} href="/app/integrations"><Plug className="mr-2 h-4 w-4" />Integrations</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                <Link href="/app/onboarding"><ClipboardCheck className="mr-2 h-4 w-4" />Setup progress</Link>
+                <Link prefetch={false} href="/app/onboarding"><ClipboardCheck className="mr-2 h-4 w-4" />Setup progress</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                <Link href="/app/settings"><Settings className="mr-2 h-4 w-4" />Settings</Link>
+                <Link prefetch={false} href="/app/settings"><Settings className="mr-2 h-4 w-4" />Settings</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                <Link href="/app/billing"><CreditCard className="mr-2 h-4 w-4" />Billing</Link>
+                <Link prefetch={false} href="/app/billing"><CreditCard className="mr-2 h-4 w-4" />Billing</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                <Link href="/support"><LifeBuoy className="mr-2 h-4 w-4" />Help</Link>
+                <Link prefetch={false} href="/support"><LifeBuoy className="mr-2 h-4 w-4" />Help</Link>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild>
-                <Link href="/logout"><LogOut className="mr-2 h-4 w-4" />Logout</Link>
+                <Link prefetch={false} href="/logout"><LogOut className="mr-2 h-4 w-4" />Logout</Link>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

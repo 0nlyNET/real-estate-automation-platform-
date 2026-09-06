@@ -9,7 +9,7 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
-    "test": "node scripts/verify-client-readiness.mjs && node scripts/verify-admin-routing.mjs && node scripts/verify-assistant-workflows.mjs && node scripts/verify-security-boundaries.mjs && node scripts/verify-first-client.mjs",
+    "test": "node scripts/verify-client-readiness.mjs && node scripts/verify-admin-routing.mjs && node scripts/verify-assistant-workflows.mjs && node scripts/verify-security-boundaries.mjs && node scripts/verify-first-client.mjs && node scripts/verify-session-navigation.mjs",
     "start": "next start"
   },
   "dependencies": {
