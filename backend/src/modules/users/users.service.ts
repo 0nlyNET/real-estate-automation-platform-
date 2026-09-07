@@ -5,7 +5,7 @@ import {
   Logger,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { MoreThan, Repository } from "typeorm";
+import { MoreThan, Raw, Repository } from "typeorm";
 import * as crypto from "crypto";
 import { User } from "./user.entity";
 import { UserRole } from "../../common/rbac";
@@ -48,9 +48,23 @@ export class UsersService {
   }
 
   async findByEmail(email: string): Promise<User | null> {
+    const normalizedEmail = email.toLowerCase().trim();
     try {
+      // Keep the normal login path on the unique email index. Applying LOWER
+      // to every lookup forced PostgreSQL to scan users as the table grew.
+      const current = await this.repo.findOne({
+        where: { email: normalizedEmail },
+      });
+      if (current) return current;
+
+      // Compatibility for legacy/admin-imported mixed-case rows. The slower
+      // expression runs only after the indexed lookup misses.
       return await this.repo.findOne({
-        where: { email: email.toLowerCase().trim() },
+        where: {
+          email: Raw((column) => `LOWER(${column}) = :normalizedEmail`, {
+            normalizedEmail,
+          }),
+        },
       });
     } catch (error: any) {
       this.logger.error(

@@ -189,6 +189,11 @@ assert.doesNotMatch(adminSource, /window\.confirm|window\.prompt/, "high-impact 
 // Loading, empty, error, mobile, and API-failure handling.
 assert.match(dashboard, /Promise\.allSettled\(sections\.map/, "independent data failures must not block the workspace")
 assert.match(dashboard, /loadedSections/, "data sections must be cached instead of re-fetched by every widget")
+assert.match(
+  dashboard,
+  /setTimeout\(\(\) => \{[\s\S]*loadDataSection\("health"\)[\s\S]*1_500/,
+  "expensive system diagnostics must be deferred until after the initial admin overview paint",
+)
 assert.match(dashboard, /SectionFailures/, "failed sections must expose focused retry actions")
 assert.match(
   dashboard,

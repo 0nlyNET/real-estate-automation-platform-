@@ -75,12 +75,16 @@ export class AuthService {
   }
 
   async login(email: string, password: string, rememberMe = false) {
+    const startedAt = Date.now();
     const user = await this.usersService.findByEmail(email);
+    const lookupMs = Date.now() - startedAt;
 
+    const passwordStartedAt = Date.now();
     const valid = await bcrypt.compare(
       password,
       user?.passwordHash || INVALID_LOGIN_PASSWORD_HASH,
     );
+    const hashCompareMs = Date.now() - passwordStartedAt;
     // Do not reveal whether an account exists, is disabled, is unverified, or
     // has no password. State-specific responses enable account enumeration.
     if (
@@ -90,6 +94,12 @@ export class AuthService {
       !user.isActive ||
       !user.isEmailVerified
     ) {
+      this.logLoginTiming({
+        outcome: 'rejected',
+        totalMs: Date.now() - startedAt,
+        lookupMs,
+        hashCompareMs,
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -100,17 +110,33 @@ export class AuthService {
       });
     }
 
+    const persistenceStartedAt = Date.now();
     user.lastLoginAt = new Date();
     await this.usersService.save(user);
+    const persistenceMs = Date.now() - persistenceStartedAt;
+    const auditStartedAt = Date.now();
     await this.recordSecurityEvent({
       tenantId: user.tenantId,
       eventType: 'account.login_succeeded',
       resourceId: user.id,
       afterState: { rememberMe, sessionVersion: user.sessionVersion },
     });
+    const auditMs = Date.now() - auditStartedAt;
+    const signingStartedAt = Date.now();
+    const accessToken = this.signForUser(user, rememberMe);
+    const signingMs = Date.now() - signingStartedAt;
+    this.logLoginTiming({
+      outcome: 'succeeded',
+      totalMs: Date.now() - startedAt,
+      lookupMs,
+      hashCompareMs,
+      persistenceMs,
+      auditMs,
+      signingMs,
+    });
 
     return {
-      accessToken: this.signForUser(user, rememberMe),
+      accessToken,
       user: {
         id: user.id,
         email: user.email,
@@ -558,6 +584,12 @@ export class AuthService {
         }),
       );
     }
+  }
+
+  private logLoginTiming(timing: Record<string, string | number>) {
+    const event = operationalEvent('authentication_login_timing', timing);
+    if (Number(timing.totalMs) >= 1_000) this.logger.warn(event);
+    else this.logger.log(event);
   }
 }
 

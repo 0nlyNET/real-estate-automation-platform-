@@ -4,6 +4,48 @@ import { User } from './user.entity';
 import { UsersService } from './users.service';
 
 describe('UsersService email verification', () => {
+  it('uses the indexed normalized lookup for current accounts', async () => {
+    const user = Object.assign(new User(), {
+      id: 'admin-1',
+      email: 'admin@realtytechai.example',
+    });
+    const repo = { findOne: jest.fn().mockResolvedValue(user) };
+    const service = new UsersService(repo as any, {} as any);
+
+    await expect(
+      service.findByEmail('  ADMIN@REALTYTECHAI.EXAMPLE  '),
+    ).resolves.toBe(user);
+    expect(repo.findOne).toHaveBeenCalledTimes(1);
+    expect(repo.findOne).toHaveBeenCalledWith({
+      where: { email: 'admin@realtytechai.example' },
+    });
+  });
+
+  it('falls back to a parameterized lookup for legacy mixed-case accounts', async () => {
+    const user = Object.assign(new User(), {
+      id: 'admin-1',
+      email: 'Admin@RealtyTechAI.example',
+    });
+    const repo = {
+      findOne: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(user),
+    };
+    const service = new UsersService(repo as any, {} as any);
+
+    await expect(
+      service.findByEmail('  ADMIN@REALTYTECHAI.EXAMPLE  '),
+    ).resolves.toBe(user);
+
+    expect(repo.findOne).toHaveBeenCalledTimes(2);
+    const emailOperator = repo.findOne.mock.calls[1][0].where.email;
+    expect(emailOperator._type).toBe('raw');
+    expect(emailOperator._objectLiteralParameters).toEqual({
+      normalizedEmail: 'admin@realtytechai.example',
+    });
+    expect(emailOperator._getSql('User.email')).toBe(
+      'LOWER(User.email) = :normalizedEmail',
+    );
+  });
+
   it('accepts the hashed one-time token and clears verification material', async () => {
     const rawToken = 'verification-token-controlled-by-test';
     const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
