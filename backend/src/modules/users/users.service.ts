@@ -5,7 +5,7 @@ import {
   Logger,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { MoreThan, Repository } from "typeorm";
+import { MoreThan, Raw, Repository } from "typeorm";
 import * as crypto from "crypto";
 import { User } from "./user.entity";
 import { UserRole } from "../../common/rbac";
@@ -48,9 +48,19 @@ export class UsersService {
   }
 
   async findByEmail(email: string): Promise<User | null> {
+    const normalizedEmail = email.toLowerCase().trim();
     try {
       return await this.repo.findOne({
-        where: { email: email.toLowerCase().trim() },
+        // Email addresses created by current flows are normalized before they
+        // are stored. Older/admin-imported rows were not always normalized,
+        // though, and an exact lowercase comparison made those accounts
+        // impossible to authenticate. Keep the lookup parameterized while
+        // matching legacy casing; do not fall back to an unscoped scan.
+        where: {
+          email: Raw((column) => `LOWER(${column}) = :normalizedEmail`, {
+            normalizedEmail,
+          }),
+        },
       });
     } catch (error: any) {
       this.logger.error(
