@@ -50,12 +50,16 @@ export class UsersService {
   async findByEmail(email: string): Promise<User | null> {
     const normalizedEmail = email.toLowerCase().trim();
     try {
+      // Keep the normal login path on the unique email index. Applying LOWER
+      // to every lookup forced PostgreSQL to scan users as the table grew.
+      const current = await this.repo.findOne({
+        where: { email: normalizedEmail },
+      });
+      if (current) return current;
+
+      // Compatibility for legacy/admin-imported mixed-case rows. The slower
+      // expression runs only after the indexed lookup misses.
       return await this.repo.findOne({
-        // Email addresses created by current flows are normalized before they
-        // are stored. Older/admin-imported rows were not always normalized,
-        // though, and an exact lowercase comparison made those accounts
-        // impossible to authenticate. Keep the lookup parameterized while
-        // matching legacy casing; do not fall back to an unscoped scan.
         where: {
           email: Raw((column) => `LOWER(${column}) = :normalizedEmail`, {
             normalizedEmail,

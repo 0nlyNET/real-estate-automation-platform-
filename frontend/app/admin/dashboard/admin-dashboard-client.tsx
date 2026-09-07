@@ -713,8 +713,31 @@ export function AdminDashboardClient({
 
   useEffect(() => {
     const sections = [...viewDataSections[view]]
-    if (view === "overview" && isOwner) sections.push("health")
-    void Promise.allSettled(sections.map((section) => loadDataSection(section)))
+    if (view !== "overview") {
+      void Promise.allSettled(sections.map((section) => loadDataSection(section)))
+      return
+    }
+    // Give the small summary request priority over the supporting queues. On
+    // login, starting every dashboard query together can exhaust a small
+    // production DB pool and leave the whole page on its skeleton.
+    void loadDataSection("overview")
+      .catch(() => undefined)
+      .finally(() => {
+        void Promise.allSettled(
+          sections.filter((section) => section !== "overview").map((section) => loadDataSection(section)),
+        )
+      })
+  }, [loadDataSection, view])
+
+  useEffect(() => {
+    if (view !== "overview" || !isOwner || loadedSections.current.has("health")) return
+    // System health fans out to schema/provider diagnostics. It is important,
+    // but must not compete with the first useful admin-dashboard response
+    // immediately after login. Load it once the overview has had time to paint.
+    const timer = window.setTimeout(() => {
+      void loadDataSection("health").catch(() => undefined)
+    }, 1_500)
+    return () => window.clearTimeout(timer)
   }, [isOwner, loadDataSection, view])
 
   const loadClientCore = useCallback(async (tenant: Tenant) => {
@@ -1436,7 +1459,7 @@ export function AdminDashboardClient({
 
   const currentSectionFailures = [
     ...viewDataSections[view],
-    ...(view === "overview" && isOwner ? (["health"] as DataSection[]) : []),
+    ...(view === "overview" && isOwner && sectionErrors.health ? (["health"] as DataSection[]) : []),
   ].filter((section) => sectionErrors[section])
 
   const overviewLoading = view === "overview" && !overview && !sectionErrors.overview
