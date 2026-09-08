@@ -654,6 +654,9 @@ export class AdminController {
       role: u.role,
       tenantId: u.tenantId,
       isActive: u.isActive,
+      isEmailVerified: u.isEmailVerified,
+      mustChangePassword: u.mustChangePassword,
+      passwordConfigured: Boolean(u.passwordHash),
     }));
   }
 
