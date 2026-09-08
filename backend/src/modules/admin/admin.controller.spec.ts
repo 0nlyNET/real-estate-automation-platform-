@@ -5,6 +5,7 @@ describe('AdminController role-sensitive onboarding evidence', () => {
   function setup() {
     const admin = {
       listTenants: jest.fn().mockResolvedValue([]),
+      listUsersByTenant: jest.fn().mockResolvedValue([]),
     };
     const onboarding = {
       recordOperatorEvidence: jest.fn().mockResolvedValue({ ok: true }),
@@ -125,5 +126,14 @@ describe('AdminController role-sensitive onboarding evidence', () => {
     expect(platformIntegrations.assignTwilio).toHaveBeenCalledWith('tenant-1', {
       fromNumber: '+19296395472',
     });
+  });
+
+  it('returns persisted owner invitation and verification state for launch guidance', async () => {
+    const { controller, admin } = setup();
+    admin.listUsersByTenant.mockResolvedValue([{ id: 'owner-1', tenantId: 'tenant-1', email: 'owner@example.com', role: 'owner', isActive: true, isEmailVerified: true, mustChangePassword: false, passwordHash: 'redacted-hash' }]);
+    await expect(controller.listTenantUsers('tenant-1')).resolves.toEqual([
+      expect.objectContaining({ isEmailVerified: true, mustChangePassword: false, passwordConfigured: true }),
+    ]);
+    expect(await controller.listTenantUsers('tenant-1')).not.toEqual(expect.arrayContaining([expect.objectContaining({ passwordHash: expect.anything() })]));
   });
 });

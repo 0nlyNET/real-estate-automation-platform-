@@ -148,13 +148,13 @@ for (const column of ["Lead", "Source", "Stage", "Communication", "Next action",
 assert.equal(
   (
     dashboard.match(
-      /label: "(?:Account created|Business information completed|Branding completed|Lead source and CRM connected|Appointment provider connected and tested|Message settings approved|Controlled workflow completed|Launch approved)"/g,
+      /label: "(?:Client\/account created|Invitation accepted|Email verified|Payment \/ Stripe active|Intake and business information complete|AI configuration approved|Lead source connected|Email configured and tested|Calendar connected and tested|Required integrations connected|Test lead received|AI response tested|Manual conversation reply tested|Appointment workflow tested|Notifications tested|Launch approval)"/g,
     ) || []
   ).length,
-  8,
-  "onboarding must group progress into eight plain-language steps",
+  16,
+  "onboarding must expose the complete guided launch sequence",
 )
-for (const status of ["Not started", "In progress", "Blocked", "Ready for review", "Complete"]) {
+for (const status of ["Action Required", "Waiting on Client", "Waiting on Admin", "Failed", "Blocked", "Complete"]) {
   assert.match(dashboard, new RegExp(status), `onboarding must expose the ${status} state`)
 }
 assert.match(
