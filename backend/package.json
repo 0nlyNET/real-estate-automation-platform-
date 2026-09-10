@@ -73,6 +73,11 @@
     "typescript": "^5.2.2"
   },
   "overrides": {
+    "js-yaml": "4.3.2",
+    "multer": "2.2.0",
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "3.15.1"
+    },
     "typeorm": {
       "minimatch": "10.2.5",
       "brace-expansion": "5.0.9"

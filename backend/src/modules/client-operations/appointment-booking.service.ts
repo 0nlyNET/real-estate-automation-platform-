@@ -25,6 +25,7 @@ import { AuditService } from '../audit/audit.service';
 import { CrmEventsService } from '../crm-events/crm-events.service';
 import { DurableJob } from '../durable-jobs/durable-job.entity';
 import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
+import { EntitlementService } from '../entitlements/entitlement.service';
 import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { LeadStageEvent } from '../leads/lead-stage-event.entity';
@@ -62,6 +63,7 @@ export class AppointmentBookingService implements OnModuleInit {
     private readonly audit: AuditService,
     @Optional() private readonly onboarding?: OnboardingService,
     @Optional() private readonly providers?: BookingProviderRegistry,
+    @Optional() private readonly entitlements?: EntitlementService,
   ) {}
 
   onModuleInit() {
@@ -89,8 +91,25 @@ export class AppointmentBookingService implements OnModuleInit {
     });
     this.durableJobs.register('appointment.reconcile_create', async (job) => {
       try {
+        const tenantId = String(job.tenantId || '');
+        const decision = tenantId && this.entitlements
+          ? await this.entitlements.evaluate(tenantId, 'create_automated_appointment')
+          : null;
+        if (decision && !decision.allowed) {
+          await this.operations.createTask({
+            tenantId,
+            category: 'appointment_workflow',
+            title: 'An uncertain booking was cancelled before reconciliation',
+            description: `Current workspace safety checks failed: ${decision.reasons.join('; ')}`,
+            priority: 'high',
+            relatedEntityType: 'lead',
+            relatedEntityId: String(job.payload.leadId || ''),
+            dedupeOpen: true,
+          });
+          return;
+        }
         await this.create(
-          String(job.tenantId || ''),
+          tenantId,
           {
             leadId: String(job.payload.leadId || ''),
             startsAt: String(job.payload.startsAt || ''),

@@ -96,6 +96,20 @@ export class MessageSafetyService {
       : null;
     const automated = !job || job.authorship !== "human";
 
+    if (automated && job) {
+      const replayReference = job.scheduledAt || job.nextAttemptAt || job.createdAt;
+      const maxAgeMinutes = safeResumeMaxAgeMinutes();
+      if (
+        replayReference &&
+        now.getTime() - new Date(replayReference).getTime() > maxAgeMinutes * 60_000
+      ) {
+        block(
+          "STALE_AUTOMATION",
+          `Automated communication is more than ${maxAgeMinutes} minutes overdue and requires current-state re-evaluation`,
+        );
+      }
+    }
+
     if (!lead)
       block("LEAD_NOT_FOUND", "Lead was not found inside the client workspace");
     if (!tenant) block("CLIENT_NOT_FOUND", "Client workspace was not found");
@@ -394,4 +408,9 @@ function isValidEmail(value?: string | null): boolean {
     .trim()
     .toLowerCase();
   return email.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function safeResumeMaxAgeMinutes(): number {
+  const configured = Number(process.env.AUTOMATION_RESUME_MAX_AGE_MINUTES || 15);
+  return Number.isFinite(configured) && configured > 0 ? configured : 15;
 }

@@ -542,4 +542,26 @@ describe('AI conversation workflow', () => {
     });
     expect(item.dependencies.provider.generate).not.toHaveBeenCalled();
   });
+
+  it('blocks and escalates a stale run before model or tool execution', async () => {
+    const item = fixture('controlled_autopilot');
+    item.run.createdAt = new Date(Date.now() - 16 * 60_000);
+
+    await (item.service as any).processRun(item.run.id);
+
+    expect(item.run).toMatchObject({
+      status: 'blocked',
+      errorCode: 'STALE_AUTOMATION',
+      lockedAt: null,
+      lockedBy: null,
+    });
+    expect(item.dependencies.provider.generate).not.toHaveBeenCalled();
+    expect(item.dependencies.tools.execute).not.toHaveBeenCalled();
+    expect(item.dependencies.clientOperations.createHandoff).toHaveBeenCalledTimes(1);
+    expect(item.dependencies.audit.recordSystem).toHaveBeenCalledWith(
+      item.lead.id,
+      'ai_run_blocked',
+      expect.objectContaining({ runId: item.run.id, code: 'STALE_AUTOMATION' }),
+    );
+  });
 });

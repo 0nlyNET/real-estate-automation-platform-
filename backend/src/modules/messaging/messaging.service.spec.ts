@@ -101,6 +101,38 @@ describe('outbound message worker safety', () => {
     expect(sql).toContain("SET status = 'sending', locked_at = now(), locked_by = $3");
   });
 
+  it('never submits a stale automated message after the safety gate blocks it', async () => {
+    const lead = Object.assign(new Lead(), { id: 'lead-stale', tenantId: 'tenant-1' });
+    const message = Object.assign(new Message(), {
+      id: 'message-stale', leadId: lead.id, lead, channel: 'sms',
+      direction: 'outbound', status: 'sending', authorship: 'system', lockedBy: 'worker',
+    });
+    const manager = { query: jest.fn(async (sql: string) =>
+      sql.includes("AND status = 'sending'") ? [] : [{ id: message.id }]) };
+    const messageRepo = { findOne: jest.fn().mockResolvedValue(message), save: jest.fn() };
+    const messageSafety = {
+      evaluateMessageSafety: jest.fn().mockResolvedValue({
+        allowed: false, reasons: ['Automated communication is overdue'], ruleIds: ['STALE_AUTOMATION'],
+      }),
+    };
+    const providerConfig = { resolveTwilio: jest.fn(), resolveSendGrid: jest.fn() };
+    const fetchSpy = jest.spyOn(global, 'fetch');
+    const service = buildService({
+      dataSource: { transaction: jest.fn(async (callback) => callback(manager)) },
+      messageRepo,
+      messageSafety,
+      providerConfig,
+    });
+
+    await expect(service.processPendingOutbound({ limit: 1 })).resolves.toEqual({ claimed: 1, recovered: 0 });
+    expect(messageSafety.evaluateMessageSafety).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: 'tenant-1', jobId: message.id }),
+    );
+    expect(providerConfig.resolveTwilio).not.toHaveBeenCalled();
+    expect(providerConfig.resolveSendGrid).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('records the third transient provider failure as exhausted and opens an operations task', async () => {
     process.env.TWILIO_STATUS_CALLBACK_URL = 'https://api.example.com/webhooks/twilio/status';
     const lead = Object.assign(new Lead(), {
