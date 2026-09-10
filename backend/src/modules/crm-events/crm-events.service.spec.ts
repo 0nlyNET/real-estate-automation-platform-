@@ -239,4 +239,52 @@ describe('CrmEventsService durable signed delivery', () => {
       relatedEntityId: delivery.id,
     }));
   });
+
+  it('fails closed before webhook delivery when current tenant entitlement is revoked', async () => {
+    const delivery: any = {
+      id: '00000000-0000-4000-8000-000000000003',
+      tenantId: '00000000-0000-4000-8000-000000000002',
+      status: 'scheduled',
+      lastError: null,
+    };
+    const deliveries = {
+      findOne: jest.fn().mockResolvedValue(delivery),
+      save: jest.fn(async (value) => value),
+    };
+    let handler: any;
+    const jobs = { register: jest.fn((_name, callback) => { handler = callback; }) };
+    const entitlements = {
+      evaluate: jest.fn().mockResolvedValue({
+        allowed: false,
+        reasons: ['Workspace lifecycle is SUSPENDED'],
+      }),
+    };
+    const service = new CrmEventsService(
+      {} as any,
+      deliveries as any,
+      jobs as any,
+      {} as any,
+      undefined,
+      entitlements as any,
+    );
+    service.onModuleInit();
+    const fetchSpy = jest.spyOn(global, 'fetch');
+
+    await expect(handler({
+      tenantId: delivery.tenantId,
+      payload: { deliveryId: delivery.id },
+      attemptCount: 1,
+      maxAttempts: 10,
+    })).resolves.toBeUndefined();
+
+    expect(entitlements.evaluate).toHaveBeenCalledWith(
+      delivery.tenantId,
+      'deliver_integration_webhook',
+    );
+    expect(delivery).toMatchObject({
+      status: 'failed',
+      lastError: expect.stringContaining('SUSPENDED'),
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

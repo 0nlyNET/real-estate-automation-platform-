@@ -401,6 +401,20 @@ export class AiConversationService
       );
       return;
     }
+    const resumeMaxAgeMinutes = safeResumeMaxAgeMinutes();
+    if (
+      run.createdAt &&
+      Date.now() - new Date(run.createdAt).getTime() > resumeMaxAgeMinutes * 60_000
+    ) {
+      await this.blockRun(
+        run,
+        'STALE_AUTOMATION',
+        `AI response is more than ${resumeMaxAgeMinutes} minutes overdue and requires human review instead of replay.`,
+        'high',
+        preflight,
+      );
+      return;
+    }
 
     try {
       const recentMessages = await this.contextMessages(run.leadId);
@@ -1143,6 +1157,11 @@ export class AiConversationService
       entityId: lead.id,
     });
   }
+}
+
+function safeResumeMaxAgeMinutes(): number {
+  const configured = Number(process.env.AUTOMATION_RESUME_MAX_AGE_MINUTES || 15);
+  return Number.isFinite(configured) && configured > 0 ? configured : 15;
 }
 
 function replySubject(subject?: string | null) {

@@ -15,6 +15,7 @@ import { OperationsService } from '../operations/operations.service';
 import { IntegrationDeliveryEvent } from './integration-delivery-event.entity';
 import { TenantWebhookSubscription } from './tenant-webhook-subscription.entity';
 import { OnboardingService } from '../onboarding/onboarding.service';
+import { EntitlementService } from '../entitlements/entitlement.service';
 
 export const CRM_EVENT_TYPES = [
   'lead.created',
@@ -42,12 +43,27 @@ export class CrmEventsService implements OnModuleInit {
     private readonly jobs: DurableJobsService,
     private readonly operations: OperationsService,
     @Optional() private readonly onboarding?: OnboardingService,
+    @Optional() private readonly entitlements?: EntitlementService,
   ) {}
 
   onModuleInit() {
     this.jobs.register('integration.webhook_delivery', async (job) => {
       const deliveryId = String(job.payload.deliveryId || '');
       if (!deliveryId) throw new Error('Webhook delivery job is missing deliveryId');
+      const decision = job.tenantId && this.entitlements
+        ? await this.entitlements.evaluate(job.tenantId, 'deliver_integration_webhook')
+        : null;
+      if (decision && !decision.allowed) {
+        const delivery = await this.deliveries.findOne({
+          where: { id: deliveryId, tenantId: job.tenantId as string },
+        });
+        if (delivery && delivery.status !== 'delivered') {
+          delivery.status = 'failed';
+          delivery.lastError = `Cancelled before delivery: ${decision.reasons.join('; ')}`.slice(0, 1_000);
+          await this.deliveries.save(delivery);
+        }
+        return;
+      }
       try {
         await this.deliver(deliveryId);
       } catch (error: any) {

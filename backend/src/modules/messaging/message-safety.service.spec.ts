@@ -205,6 +205,23 @@ describe("MessageSafetyService", () => {
     expect(result.ruleIds).toContain(ruleId);
   });
 
+  it("blocks an overdue automated message instead of replaying it on resume", async () => {
+    const item = harness({
+      job: { createdAt: new Date("2026-08-06T15:44:59.000Z") },
+    });
+    const result = await item.service.evaluateMessageSafety(item.input);
+
+    expect(result).toMatchObject({
+      allowed: false,
+      ruleIds: expect.arrayContaining(["STALE_AUTOMATION"]),
+    });
+    expect(item.job).toMatchObject({
+      status: "blocked",
+      errorCode: "SAFETY_GUARDRAIL",
+    });
+    expect(item.leadEventRepository.save).toHaveBeenCalled();
+  });
+
   it.each([
     ["missing", { timeZone: "" }, "TIME_ZONE_MISSING"],
     ["invalid", { timeZone: "Mars/Olympus" }, "TIME_ZONE_INVALID"],

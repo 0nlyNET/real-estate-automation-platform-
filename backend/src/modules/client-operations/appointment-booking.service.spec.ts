@@ -8,7 +8,7 @@ describe('AppointmentBookingService calendar boundary', () => {
   const futureStart = new Date(Date.now() + 30 * 24 * 60 * 60_000);
   const futureEnd = new Date(futureStart.getTime() + 30 * 60_000);
 
-  function fixture(providers?: any) {
+  function fixture(providers?: any, entitlements?: any) {
     const lead: any = {
       id: 'lead-1',
       tenantId: 'tenant-1',
@@ -57,6 +57,7 @@ describe('AppointmentBookingService calendar boundary', () => {
       audit as any,
       onboarding as any,
       providers,
+      entitlements,
     );
     return {
       service,
@@ -695,6 +696,42 @@ describe('AppointmentBookingService calendar boundary', () => {
       expect.objectContaining({
         tenantId: 'tenant-1',
         relatedEntityId: 'appointment-1',
+      }),
+    );
+  });
+
+  it('does not recreate an uncertain provider appointment after tenant suspension', async () => {
+    const entitlements = {
+      evaluate: jest.fn().mockResolvedValue({
+        allowed: false,
+        reasons: ['Workspace lifecycle is SUSPENDED'],
+      }),
+    };
+    const item = fixture(undefined, entitlements);
+    const createSpy = jest.spyOn(item.service, 'create');
+    item.service.onModuleInit();
+    const handler = item.jobs.register.mock.calls.find(
+      ([taskType]) => taskType === 'appointment.reconcile_create',
+    )?.[1];
+
+    await expect(handler({
+      tenantId: 'tenant-1',
+      payload: { leadId: 'lead-1', startsAt: futureStart.toISOString() },
+      attemptCount: 1,
+      maxAttempts: 12,
+    })).resolves.toBeUndefined();
+
+    expect(entitlements.evaluate).toHaveBeenCalledWith(
+      'tenant-1',
+      'create_automated_appointment',
+    );
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(item.calendar.createBookingEvent).not.toHaveBeenCalled();
+    expect(item.operations.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        relatedEntityId: 'lead-1',
+        description: expect.stringContaining('SUSPENDED'),
       }),
     );
   });

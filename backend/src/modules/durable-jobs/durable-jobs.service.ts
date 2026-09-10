@@ -14,6 +14,17 @@ export type DurableJobHandler = (
   job: DurableJob,
 ) => Promise<{ nextRunAt?: Date } | void>;
 
+const RESUME_BATCH_LIMIT = 5;
+const DEFAULT_AUTOMATION_MAX_AGE_MS = 15 * 60_000;
+const AUTOMATION_TASK_PREFIXES = [
+  'appointment.',
+  'calendar.',
+  'integration.webhook_',
+  'tenant.provision',
+  'testing.start',
+  'twilio.a2p_',
+];
+
 @Injectable()
 export class DurableJobsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DurableJobsService.name);
@@ -94,9 +105,15 @@ export class DurableJobsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async runDue(limit = 20) {
+    const paused = process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true';
+    // A bounded resume batch is deliberate: a deployment that clears the
+    // global switch must never turn database recovery into an outbound burst.
+    const effectiveLimit = paused
+      ? limit
+      : Math.min(limit, RESUME_BATCH_LIMIT);
     let processed = 0;
-    while (processed < limit) {
-      const job = await this.claimNext();
+    while (processed < effectiveLimit) {
+      const job = await this.claimNext(paused);
       if (!job) break;
       processed += 1;
       await this.execute(job);
@@ -104,15 +121,19 @@ export class DurableJobsService implements OnModuleInit, OnModuleDestroy {
     return processed;
   }
 
-  private async claimNext() {
+  private async claimNext(globalAutomationPaused: boolean) {
     return this.dataSource.transaction(async (manager) => {
       const rows = await manager.query(
         `SELECT * FROM durable_jobs
-          WHERE (status = 'scheduled' AND next_run_at <= NOW())
-             OR (status = 'running' AND lease_expires_at < NOW())
+          WHERE ((status = 'scheduled' AND next_run_at <= NOW())
+             OR (status = 'running' AND lease_expires_at < NOW()))
+          ${globalAutomationPaused ? `AND NOT (${AUTOMATION_TASK_PREFIXES.map((_, index) => `task_type LIKE $${index + 1}`).join(' OR ')})` : ''}
           ORDER BY COALESCE(lease_expires_at, next_run_at) ASC
           FOR UPDATE SKIP LOCKED
           LIMIT 1`,
+        globalAutomationPaused
+          ? AUTOMATION_TASK_PREFIXES.map((prefix) => `${prefix}%`)
+          : [],
       );
       if (!rows[0]) return null;
       await manager.query(
@@ -133,16 +154,26 @@ export class DurableJobsService implements OnModuleInit, OnModuleDestroy {
     const handler = this.handlers.get(job.taskType);
     try {
       if (!handler) throw new Error(`No handler registered for ${job.taskType}`);
-      const result = await handler(job);
-      if (result?.nextRunAt) {
-        job.status = 'scheduled';
-        job.nextRunAt = result.nextRunAt;
-        job.attemptCount = 0;
-        job.lastError = null;
-      } else {
-        job.status = 'completed';
+      const staleAutomation =
+        this.isAutomationTask(job.taskType) &&
+        Date.now() - new Date(job.nextRunAt).getTime() > this.automationMaxAgeMs();
+      if (staleAutomation) {
+        job.status = 'cancelled';
+        job.lastError =
+          'Cancelled on resume: automation job exceeded the safe replay age and must be re-evaluated from current state.';
         job.completedAt = new Date();
-        job.lastError = null;
+      } else {
+        const result = await handler(job);
+        if (result?.nextRunAt) {
+          job.status = 'scheduled';
+          job.nextRunAt = result.nextRunAt;
+          job.attemptCount = 0;
+          job.lastError = null;
+        } else {
+          job.status = 'completed';
+          job.completedAt = new Date();
+          job.lastError = null;
+        }
       }
     } catch (error: any) {
       job.lastError = sanitizeOperationalText(error?.message || error, 2_000);
@@ -157,5 +188,16 @@ export class DurableJobsService implements OnModuleInit, OnModuleDestroy {
     job.leaseOwner = null;
     job.leaseExpiresAt = null;
     await this.jobs.save(job);
+  }
+
+  private isAutomationTask(taskType: string) {
+    return AUTOMATION_TASK_PREFIXES.some((prefix) => taskType.startsWith(prefix));
+  }
+
+  private automationMaxAgeMs() {
+    const configured = Number(process.env.AUTOMATION_RESUME_MAX_AGE_MINUTES || 15);
+    return Number.isFinite(configured) && configured > 0
+      ? configured * 60_000
+      : DEFAULT_AUTOMATION_MAX_AGE_MS;
   }
 }
