@@ -2,6 +2,12 @@
 
 import { Button } from "@/components/ui/button"
 
+/**
+ * Error page shown when the session check fails due to backend unavailability,
+ * allowing the user to retry without discarding their session cookie.
+ *
+ * @returns React component with retry button and explanatory text
+ */
 export default function SessionUnavailablePage() {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-4 px-6 text-center" role="alert">

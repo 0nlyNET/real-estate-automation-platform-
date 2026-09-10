@@ -52,6 +52,15 @@ const icons: Record<AdminView, typeof Activity> = {
   settings: Settings,
 }
 
+/**
+ * Renders a single navigation link with icon and active state styling,
+ * optionally wrapped in SheetClose for mobile drawer integration.
+ *
+ * @param item - The navigation item to render
+ * @param active - Whether this link is the currently active page
+ * @param mobile - Whether to wrap in SheetClose for mobile drawer
+ * @returns React component with styled link
+ */
 function NavigationLink({
   item,
   active,
@@ -79,6 +88,15 @@ function NavigationLink({
   return mobile ? <SheetClose asChild>{link}</SheetClose> : link
 }
 
+/**
+ * Renders the admin navigation menu with primary links and optional super admin
+ * section, supporting both desktop sidebar and mobile drawer modes.
+ *
+ * @param activeView - The currently active admin view/page
+ * @param isOwner - Whether the user has super_admin role
+ * @param mobile - Whether to render for mobile drawer with SheetClose wrappers
+ * @returns React component with navigation links
+ */
 function Navigation({
   activeView,
   isOwner,
@@ -118,6 +136,14 @@ function Navigation({
   )
 }
 
+/**
+ * Main admin shell component that wraps admin dashboard pages with sidebar
+ * navigation, mobile sheet, and user info display. Restricts certain views
+ * based on super_admin vs staff role.
+ *
+ * @param children - The admin page content to render
+ * @returns React component with admin layout
+ */
 export function AdminShell({ children }: { children: ReactNode }) {
   const session = useAdminSession()
   const searchParams = useSearchParams()

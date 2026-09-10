@@ -19,6 +19,14 @@ const mobileNavItems = [
   { label: "AI assistant", href: "/app/assistant", icon: Bot },
 ]
 
+/**
+ * Main application shell component that wraps client workspace pages with
+ * navigation, billing status banners, and session management. Polls plan status
+ * periodically and shows alerts for suspended, overdue, or canceling accounts.
+ *
+ * @param children - The page content to render within the shell
+ * @returns React component with sidebar, topbar, and content area
+ */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [plan, setPlan] = useState<MePlan | null>(null)
 

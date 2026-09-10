@@ -17,6 +17,12 @@ import { getInitials } from "@/lib/profile"
 import { fetchMe, type Me } from "@/lib/me"
 import { NotificationCenter } from "@/components/admin/notification-center"
 
+/**
+ * Top navigation bar for client workspace showing user identity, notification
+ * center, and account menu with theme toggle and quick links.
+ *
+ * @returns React component with responsive header bar
+ */
 export function Topbar() {
   const [me, setMe] = useState<Me | null>(null)
   const [avatar, setAvatar] = useState<string | null>(null)

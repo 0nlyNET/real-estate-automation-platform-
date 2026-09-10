@@ -2,6 +2,13 @@
 
 import { useEffect } from "react"
 
+/**
+ * Listens for session expiry events and redirects to login after confirming
+ * the session is truly expired with a backend check, preventing false positives
+ * from transient network errors.
+ *
+ * @returns null - this is an invisible side-effect component
+ */
 export function SessionExpiryRedirect() {
   useEffect(() => {
     let checking = false

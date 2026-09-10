@@ -21,6 +21,13 @@ import {
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
+  /**
+   * Returns the current authenticated session details including user identity,
+   * tenant, role, and impersonation status.
+   *
+   * @param req - Express request with JWT payload attached by JwtAuthGuard
+   * @returns Session object with userId, tenantId, role, and platform permissions
+   */
   // Authentication must not depend on billing, provider health, or tenant setup.
   // JwtStrategy still verifies expiry, revocation and current database roles.
   @Get('session')
@@ -86,6 +93,14 @@ export class AuthController {
     return { ok: true };
   }
 
+  /**
+   * Stops an active impersonation session by restoring the primary session
+   * cookie from the backup cookie, if one exists.
+   *
+   * @param request - Express request to read the primary session cookie
+   * @param response - Express response to restore the session cookie
+   * @returns Object indicating success and whether the primary session was restored
+   */
   @Post('stop-impersonation')
   @HttpCode(200)
   @UseGuards(JwtAuthGuard)

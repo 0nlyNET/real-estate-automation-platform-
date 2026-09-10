@@ -785,6 +785,12 @@ export class AdminService {
 
   private healthRequest: ReturnType<AdminService['readSystemHealth']> | null = null;
 
+  /**
+   * Returns system health metrics, coordinating simultaneous requests to share
+   * in-flight database queries while never caching completed results.
+   *
+   * @returns Promise resolving to health metrics including message counts and migration status
+   */
   systemHealth() {
     // Overview and setup request the same database health together. Share only
     // in-flight work; never cache a completed health result.
@@ -794,6 +800,12 @@ export class AdminService {
     return this.healthRequest;
   }
 
+  /**
+   * Queries the database for system health metrics including message statistics
+   * and pending migrations from the last 24 hours.
+   *
+   * @returns Promise resolving to health data object
+   */
   private async readSystemHealth() {
     const now = Date.now();
     const sinceMs = now - 24 * 60 * 60 * 1000;

@@ -64,6 +64,14 @@ const WEB_PUSH_HOST_SUFFIXES = [
   'push.apple.com',
 ];
 
+/**
+ * Validates and normalizes a web push subscription endpoint URL, ensuring it
+ * uses HTTPS and matches a trusted push service provider.
+ *
+ * @param value - The push subscription endpoint URL to validate
+ * @returns Normalized endpoint URL with hash removed
+ * @throws BadRequestException if the endpoint is invalid or untrusted
+ */
 export function assertSafePushEndpoint(value: string) {
   let endpoint: URL;
   try {
@@ -557,6 +565,14 @@ export class NotificationsService {
     await this.notifications.save(notification);
   }
 
+  /**
+   * Checks if an incident is currently open by finding the latest notification
+   * with the given incident key and verifying its event type does not end with
+   * '_recovered'.
+   *
+   * @param incidentKey - The unique incident identifier to check
+   * @returns Promise resolving to true if the incident is open, false otherwise
+   */
   async incidentIsOpen(incidentKey: string) {
     try {
       const latest = await this.notifications.findOne({

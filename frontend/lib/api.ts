@@ -1,5 +1,12 @@
 export const API_URL = "/api/backend"
 
+/**
+ * Reads and parses a Response body as JSON or text, handling empty responses
+ * and non-JSON content gracefully.
+ *
+ * @param res - The fetch Response to read
+ * @returns Parsed JSON object/array, plain text, or null for empty responses
+ */
 async function readResponseBody(res: Response): Promise<unknown> {
   const contentType = (res.headers.get("content-type") || "").toLowerCase()
 
@@ -30,6 +37,13 @@ async function readResponseBody(res: Response): Promise<unknown> {
   return text
 }
 
+/**
+ * Extracts a human-readable error message from various error payload formats
+ * including NestJS validation errors, plain strings, and Error objects.
+ *
+ * @param payload - The error payload from API response or exception
+ * @returns User-friendly error message string
+ */
 function extractErrorMessage(payload: unknown): string {
   if (!payload) return "Request failed"
 
@@ -69,6 +83,12 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Extracts an error code from an API error payload if present.
+ *
+ * @param payload - The error payload from API response
+ * @returns Error code string or null if not found
+ */
 function extractErrorCode(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null
   const code = (payload as Record<string, unknown>).code
@@ -79,6 +99,12 @@ export type ApiRequestInit = Omit<RequestInit, "body"> & {
   body?: BodyInit | Record<string, unknown> | unknown[] | null
 }
 
+/**
+ * Type guard to determine if a request body should be JSON-serialized.
+ *
+ * @param body - The request body to check
+ * @returns true if the body is a plain object or array that should be JSON-stringified
+ */
 function isJsonBody(
   body: ApiRequestInit["body"],
 ): body is Record<string, unknown> | unknown[] {
