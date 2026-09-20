@@ -17,6 +17,9 @@ __MACOSX/
 **/coverage/
 **/.turbo/
 *.tsbuildinfo
+**/.e2e/
+**/test-results/
+**/playwright-report/
 
 # Logs
 *.log
