@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import { AppointmentBookingService } from './appointment-booking.service';
 
-describe('AppointmentBookingService calendar boundary', () => {
+describe("AppointmentBookingService calendar boundary", () => {
   const futureStart = new Date(Date.now() + 30 * 24 * 60 * 60_000);
   const futureEnd = new Date(futureStart.getTime() + 30 * 60_000);
 
@@ -700,7 +700,7 @@ describe('AppointmentBookingService calendar boundary', () => {
     );
   });
 
-  it('does not recreate an uncertain provider appointment after tenant suspension', async () => {
+  it("does not recreate an uncertain provider appointment after tenant suspension", async () => {
     const entitlements = {
       evaluate: jest.fn().mockResolvedValue({
         allowed: false,
@@ -722,8 +722,10 @@ describe('AppointmentBookingService calendar boundary', () => {
     })).resolves.toBeUndefined();
 
     expect(entitlements.evaluate).toHaveBeenCalledWith(
-      'tenant-1',
-      'create_automated_appointment',
+      "tenant-1",
+      "create_automated_appointment",
+      expect.any(Date),
+      { controlledTest: false },
     );
     expect(createSpy).not.toHaveBeenCalled();
     expect(item.calendar.createBookingEvent).not.toHaveBeenCalled();
@@ -734,5 +736,25 @@ describe('AppointmentBookingService calendar boundary', () => {
         description: expect.stringContaining('SUSPENDED'),
       }),
     );
+  });
+  it("marks stale post-booking work for attention without changing the provider event", async () => {
+    const item = fixture();
+    item.service.onModuleInit();
+    const cancel = item.jobs.register.mock.calls.find(
+      ([taskType]) => taskType === "appointment.post_commit",
+    )?.[2];
+    await cancel(
+      { tenantId: "tenant-1", payload: { appointmentId: "appointment-1" } },
+      "Overdue automation",
+    );
+    expect(item.appointments.update).toHaveBeenCalledWith(
+      { id: "appointment-1", tenantId: "tenant-1" },
+      { syncStatus: "needs_attention", syncErrorCode: "STALE_AUTOMATION" },
+    );
+    expect(item.operations.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ relatedEntityId: "appointment-1" }),
+    );
+    expect(item.calendar.createBookingEvent).not.toHaveBeenCalled();
+    expect(item.calendar.cancelBookingEvent).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,7 @@ describe('DurableJobsService restart recovery', () => {
   const originalGlobalPause = process.env.GLOBAL_AUTOMATIONS_DISABLED;
 
   afterEach(() => {
+    jest.useRealTimers();
     if (originalGlobalPause === undefined) {
       delete process.env.GLOBAL_AUTOMATIONS_DISABLED;
     } else {
@@ -253,6 +254,7 @@ describe('DurableJobsService restart recovery', () => {
   });
 
   it('covers ON -> enqueue -> PAUSE -> enqueue/age -> RESUME without stale replay or duplicates', async () => {
+    jest.useFakeTimers();
     const rows: any[] = [];
     const repository = {
       create: jest.fn((value) => ({ id: `job-${rows.length + 1}`, createdAt: new Date(), ...value })),
@@ -293,7 +295,8 @@ describe('DurableJobsService restart recovery', () => {
     process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
     const duplicate = await service.schedule({ taskType: 'integration.webhook_delivery', tenantId: 'tenant-a', dedupeKey: 'event:1' });
     await service.schedule({ taskType: 'integration.webhook_delivery', tenantId: 'tenant-b', dedupeKey: 'event:2' });
-    rows.forEach((row) => { row.nextRunAt = new Date(Date.now() - 16 * 60_000); });
+    jest.setSystemTime(new Date(Date.now() + 16 * 60_000));
+    await service.schedule({ taskType: 'integration.webhook_delivery', tenantId: 'tenant-a', dedupeKey: 'event:1' });
     await expect(service.runDue()).resolves.toBe(0);
     expect(external).not.toHaveBeenCalled();
 

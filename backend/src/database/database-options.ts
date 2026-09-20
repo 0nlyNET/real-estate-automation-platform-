@@ -27,6 +27,7 @@ import { ConversationInboxPagination1788220800001 } from './migrations/202609010
 import { FacebookOauthStateHardening1788220800002 } from './migrations/202609010002-facebook-oauth-state-hardening';
 
 import { FirstClientPayment1788652800001 } from './migrations/202609060001-first-client-payment';
+import { AutomationScheduledDueTime1789862400001 } from './migrations/202609200001-automation-scheduled-due-time';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -54,6 +55,7 @@ const databaseMigrations = [
   ConversationInboxPagination1788220800001,
   FacebookOauthStateHardening1788220800002,
   FirstClientPayment1788652800001,
+  AutomationScheduledDueTime1789862400001,
 ];
 
 function migrationOptions() {

@@ -1,7 +1,7 @@
 import { TestingService } from './testing.service';
 
 describe('TestingService production-pipeline UAT', () => {
-  it('creates a run-bound lead through the normal intake service', async () => {
+  it.each(['explicit', 'saved'])('creates a run-bound lead using %s controlled recipients', async (recipientSource) => {
     let sequence = 0;
     const runs = {
       findOne: jest.fn().mockResolvedValue(null),
@@ -15,6 +15,7 @@ describe('TestingService production-pipeline UAT', () => {
       getOrCreate: jest.fn().mockResolvedValue({
         smsEnabled: true,
         emailEnabled: true,
+        contacts: { controlledTestPhone: '+15550000001', controlledTestEmail: 'owner@example.com' },
       }),
       beginTesting: jest.fn().mockResolvedValue({ lifecycleStatus: 'TESTING' }),
     };
@@ -44,7 +45,7 @@ describe('TestingService production-pipeline UAT', () => {
       notifications as any,
     );
 
-    const result = await service.start('tenant-1', 'operator-1', {
+    const result = await service.start('tenant-1', 'operator-1', recipientSource === 'saved' ? {} : {
       smsRecipient: '(555) 000-0001',
       emailRecipient: 'owner@example.com',
     });

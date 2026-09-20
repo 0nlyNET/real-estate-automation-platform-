@@ -35,6 +35,9 @@ export class DurableJob {
   @Column({ name: 'next_run_at', type: 'timestamptz' })
   nextRunAt!: Date;
 
+  @Column({ name: 'scheduled_run_at', type: 'timestamptz', nullable: true })
+  scheduledRunAt!: Date | null;
+
   @Column({ name: 'attempt_count', type: 'integer', default: 0 })
   attemptCount!: number;
 

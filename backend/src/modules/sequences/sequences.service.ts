@@ -162,6 +162,7 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
           status: 'active',
           currentStepIndex: 0,
           nextRunAt,
+          scheduledRunAt: nextRunAt,
         }),
       );
     } catch (error: any) {
@@ -533,9 +534,14 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
       relations: ['sequence', 'lead'],
     });
     if (!enrollment) return;
-    const scheduledRunAt = enrollment.nextRunAt
-      ? new Date(enrollment.nextRunAt)
+    const scheduledRunAt = enrollment.scheduledRunAt || enrollment.nextRunAt
+      ? new Date(enrollment.scheduledRunAt || enrollment.nextRunAt!)
       : null;
+    // Preserve the original due time across entitlement holds and retries.
+    if (!enrollment.scheduledRunAt && scheduledRunAt) {
+      enrollment.scheduledRunAt = scheduledRunAt;
+      await this.enrollmentRepository.save(enrollment);
+    }
     const sequence = await this.sequenceRepository.findOne({
       where: { id: enrollment.sequenceId, tenantId: enrollment.tenantId },
       relations: ['steps'],
@@ -744,6 +750,7 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
         enrollment.currentStepIndex,
       );
     }
+    enrollment.scheduledRunAt = enrollment.nextRunAt || null;
     enrollment.lockedAt = null;
     enrollment.lockedBy = null;
     await this.enrollmentRepository.save(enrollment);

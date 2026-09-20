@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { createHmac } from 'crypto';
 import { encryptString } from '../../common/crypto-secrets';
+import { EntitlementService } from '../entitlements/entitlement.service';
 import { assertSafeWebhookUrl, CrmEventsService } from './crm-events.service';
 
 describe('CrmEventsService durable signed delivery', () => {
@@ -14,6 +15,10 @@ describe('CrmEventsService durable signed delivery', () => {
   afterEach(() => {
     process.env = { ...originalEnvironment };
     global.fetch = originalFetch;
+  });
+
+  const allowedEntitlements = () => ({
+    evaluate: jest.fn().mockResolvedValue({ allowed: true, reasons: [] }),
   });
 
   it('rejects non-HTTPS, credentialed, and non-allowlisted webhook targets', () => {
@@ -116,10 +121,10 @@ describe('CrmEventsService durable signed delivery', () => {
     };
     let handler: any;
     const jobs = { register: jest.fn((_name, callback) => { handler = callback; }), schedule: jest.fn() };
-    const service = new CrmEventsService(subscriptions, deliveries, jobs as any, { createTask: jest.fn() } as any);
+    const service = new CrmEventsService(subscriptions, deliveries, jobs as any, { createTask: jest.fn() } as any, undefined, allowedEntitlements() as any);
     service.onModuleInit();
     global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 204, text: async () => '' }) as any;
-    await handler({ payload: { deliveryId: delivery.id }, attemptCount: 1, maxAttempts: 10 });
+    await handler({ tenantId: delivery.tenantId, payload: { deliveryId: delivery.id }, attemptCount: 1, maxAttempts: 10 });
     const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
     const body = JSON.stringify(delivery.payload);
     const timestamp = init.headers['X-RealtyTechAI-Timestamp'];
@@ -179,6 +184,14 @@ describe('CrmEventsService durable signed delivery', () => {
       } as any,
       { createTask: jest.fn() } as any,
       onboarding as any,
+      new EntitlementService(
+        { findOne: jest.fn().mockResolvedValue({
+          lifecycleStatus: 'TESTING', status: 'active',
+          paymentConfirmedAt: new Date(), paidSubscriptionId: 'sub-test',
+          stripeSubscriptionId: 'sub-test',
+        }) } as any,
+        { findOne: jest.fn().mockResolvedValue({ automationsEnabled: false }) } as any,
+      ),
     );
     service.onModuleInit();
     global.fetch = jest.fn().mockResolvedValue({
@@ -187,6 +200,7 @@ describe('CrmEventsService durable signed delivery', () => {
       text: async () => '',
     }) as any;
     await handler({
+      tenantId: delivery.tenantId,
       payload: { deliveryId: delivery.id },
       attemptCount: 1,
       maxAttempts: 10,
@@ -220,17 +234,17 @@ describe('CrmEventsService durable signed delivery', () => {
     let handler: any;
     const jobs = { register: jest.fn((_name, callback) => { handler = callback; }), schedule: jest.fn() };
     const operations = { createTask: jest.fn().mockResolvedValue({ id: 'incident-1' }) };
-    const service = new CrmEventsService(subscriptions, deliveries, jobs as any, operations as any);
+    const service = new CrmEventsService(subscriptions, deliveries, jobs as any, operations as any, undefined, allowedEntitlements() as any);
     service.onModuleInit();
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 503, text: async () => 'temporary outage' }) as any;
 
-    await expect(handler({ payload: { deliveryId: delivery.id }, attemptCount: 1, maxAttempts: 10 }))
+    await expect(handler({ tenantId: delivery.tenantId, payload: { deliveryId: delivery.id }, attemptCount: 1, maxAttempts: 10 }))
       .rejects.toThrow('Webhook returned 503');
     expect(delivery).toMatchObject({ status: 'scheduled', attemptCount: 1, lastHttpStatus: 503 });
     expect(subscription.failureCount).toBe(1);
     expect(operations.createTask).not.toHaveBeenCalled();
 
-    await expect(handler({ payload: { deliveryId: delivery.id }, attemptCount: 10, maxAttempts: 10 }))
+    await expect(handler({ tenantId: delivery.tenantId, payload: { deliveryId: delivery.id }, attemptCount: 10, maxAttempts: 10 }))
       .rejects.toThrow('Webhook returned 503');
     expect(delivery.status).toBe('failed');
     expect(operations.createTask).toHaveBeenCalledWith(expect.objectContaining({
@@ -263,7 +277,7 @@ describe('CrmEventsService durable signed delivery', () => {
       {} as any,
       deliveries as any,
       jobs as any,
-      {} as any,
+      { createTask: jest.fn() } as any,
       undefined,
       entitlements as any,
     );
@@ -280,6 +294,8 @@ describe('CrmEventsService durable signed delivery', () => {
     expect(entitlements.evaluate).toHaveBeenCalledWith(
       delivery.tenantId,
       'deliver_integration_webhook',
+      expect.any(Date),
+      { controlledTest: false },
     );
     expect(delivery).toMatchObject({
       status: 'failed',

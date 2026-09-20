@@ -375,4 +375,16 @@ describe("MessageSafetyService", () => {
       item.service.verifyMessageSafety(item.lead.id, item.tenant.id),
     ).resolves.toBe(true);
   });
+  it("does not refresh an old message's replay age when its retry time changes", async () => {
+    const item = harness({
+      job: {
+        createdAt: new Date("2026-08-01T00:00:00Z"),
+        nextAttemptAt: new Date(),
+        scheduledAt: undefined,
+      },
+    });
+    const result = await item.service.evaluateMessageSafety(item.input);
+    expect(result.allowed).toBe(false);
+    expect(result.ruleIds).toContain("STALE_AUTOMATION");
+  });
 });

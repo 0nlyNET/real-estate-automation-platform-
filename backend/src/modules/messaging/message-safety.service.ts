@@ -97,7 +97,7 @@ export class MessageSafetyService {
     const automated = !job || job.authorship !== "human";
 
     if (automated && job) {
-      const replayReference = job.scheduledAt || job.nextAttemptAt || job.createdAt;
+      const replayReference = job.scheduledAt || job.createdAt || job.nextAttemptAt;
       const maxAgeMinutes = safeResumeMaxAgeMinutes();
       if (
         replayReference &&

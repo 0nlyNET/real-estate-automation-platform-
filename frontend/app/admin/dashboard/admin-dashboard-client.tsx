@@ -16,6 +16,7 @@ import {
   UserPlus,
 } from "lucide-react"
 import { apiFetch } from "@/lib/api"
+import { launchProgress, nextReadinessStep, unmappedReadinessChecks } from "@/lib/launch-readiness"
 import { cn } from "@/lib/utils"
 import { useAdminSession } from "@/app/admin/admin-access-guard"
 import { NotificationCenter } from "@/components/admin/notification-center"
@@ -484,22 +485,23 @@ const clientTabs: Array<{ id: ClientTab; label: string; ownerOnly?: boolean }> =
 ]
 
 type LaunchStepStatus = "Complete" | "Action Required" | "Waiting on Client" | "Waiting on Admin" | "Failed" | "Blocked"
-type LaunchStep = { id: string; label: string; owner: "Admin" | "Client" | "System"; status: LaunchStepStatus; action: string; cta: string; view?: AdminView; tab?: ClientTab; special?: "invite" | "copy-client-link" | "test" | "activate" }
+type LaunchStep = { id: string; label: string; owner: "Admin" | "Client" | "System"; keys: string[]; status: LaunchStepStatus; action: string; cta: string; disabledReason?: string; view?: AdminView; tab?: ClientTab; special?: "invite" | "copy-client-link" | "test" | "activate" }
 const launchStepDefinitions: Array<Omit<LaunchStep, "status" | "action"> & { keys: string[] }> = [
   { id: "account", label: "Client/account created", owner: "System", keys: [], cta: "Open client", view: "clients", tab: "overview" },
   { id: "invitation", label: "Invitation accepted", owner: "Client", keys: [], cta: "Resend invite", special: "invite" },
   { id: "email_verified", label: "Email verified", owner: "Client", keys: [], cta: "Copy client link", special: "copy-client-link" },
   { id: "billing", label: "Payment / Stripe active", owner: "Client", keys: ["billing", "billing_evidence"], cta: "Open billing", view: "clients", tab: "billing" },
-  { id: "intake", label: "Intake and business information complete", owner: "Client", keys: ["business_identity", "contacts", "service_scope", "lead_handling", "target_launch_date", "timezone", "quiet_hours", "brand", "consent_policy"], cta: "Open intake", view: "clients", tab: "setup" },
+  { id: "intake", label: "Intake and business information complete", owner: "Client", keys: ["business_identity", "contacts", "controlled_test_destinations", "service_scope", "lead_handling", "target_launch_date", "provider_owner", "timezone", "quiet_hours", "brand", "consent_policy"], cta: "Open intake", view: "clients", tab: "setup" },
   { id: "ai", label: "AI configuration approved", owner: "Admin", keys: [], cta: "Review AI", view: "settings" },
-  { id: "lead_source", label: "Lead source connected", owner: "Admin", keys: ["intake_api"], cta: "Configure source", view: "clients", tab: "setup" },
-  { id: "email", label: "Email configured and tested", owner: "Admin", keys: ["sendgrid", "sendgrid_provider_approval"], cta: "Configure / test", view: "clients", tab: "setup" },
+  { id: "lead_source", label: "Lead source connected", owner: "Admin", keys: ["intake_api", "meta", "intake_api_test"], cta: "Configure source", view: "clients", tab: "setup" },
+  { id: "email", label: "Email configured and tested", owner: "Admin", keys: ["sendgrid", "sendgrid_provider_approval", "email_template"], cta: "Configure / test", view: "clients", tab: "setup" },
   { id: "calendar", label: "Calendar connected and tested", owner: "Admin", keys: ["booking_provider"], cta: "Configure / test", view: "clients", tab: "setup" },
-  { id: "integrations", label: "Required integrations connected", owner: "System", keys: ["twilio", "sendgrid", "booking_provider", "crm_appointment_event"], cta: "Review integrations", view: "clients", tab: "setup" },
-  { id: "test_lead", label: "Test lead received", owner: "Admin", keys: ["intake_api_test", "test_lead"], cta: "Send test lead", special: "test" },
-  { id: "ai_test", label: "AI response tested", owner: "System", keys: ["test_lead"], cta: "Open conversations", view: "clients", tab: "conversations" },
-  { id: "manual_reply", label: "Manual conversation reply tested", owner: "Admin", keys: ["inbound_email"], cta: "Open conversations", view: "clients", tab: "conversations" },
-  { id: "appointment", label: "Appointment workflow tested", owner: "System", keys: ["appointment_uat"], cta: "Open appointments", view: "clients", tab: "appointments" },
+  { id: "integrations", label: "Required integrations connected", owner: "System", keys: ["twilio", "twilio_provider_approval", "sms_template", "sendgrid", "booking_provider"], cta: "Review integrations", view: "clients", tab: "setup" },
+  { id: "safety", label: "Safety prerequisites verified", owner: "Admin", keys: ["usage_limits", "disaster_recovery", "legal_review", "tenant_safety"], cta: "Review safety", view: "clients", tab: "setup" },
+  { id: "test_lead", label: "Test lead received", owner: "Admin", keys: ["testing_started", "test_lead"], cta: "Send test lead", special: "test" },
+  { id: "outbound_test", label: "Outbound automation tested", owner: "System", keys: ["test_lead"], cta: "Open conversations", view: "clients", tab: "conversations" },
+  { id: "inbound_reply", label: "Inbound replies tested", owner: "Admin", keys: ["inbound_email", "inbound_sms", "stop"], cta: "Open conversations", view: "clients", tab: "conversations" },
+  { id: "appointment", label: "Appointment workflow tested", owner: "System", keys: ["appointment_uat", "crm_appointment_event"], cta: "Open appointments", view: "clients", tab: "appointments" },
   { id: "notifications", label: "Notifications tested", owner: "System", keys: ["appointment_uat"], cta: "Review test", view: "clients", tab: "appointments" },
   { id: "approval", label: "Launch approval", owner: "Admin", keys: ["client_approval", "operator_approval", "global_pause"], cta: "Review / activate", special: "activate" },
 ]
@@ -620,6 +622,7 @@ export function AdminDashboardClient({
   const [technicalEvidence, setTechnicalEvidence] = useState<Record<string, Record<string, string>>>({})
   const [testSmsRecipient, setTestSmsRecipient] = useState("")
   const [testEmailRecipient, setTestEmailRecipient] = useState("")
+  const [testingBusy, setTestingBusy] = useState(false)
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
 
   const [showCreateClient, setShowCreateClient] = useState(false)
@@ -776,6 +779,11 @@ export function AdminDashboardClient({
       if (requestId === clientRequest.current) setClientDetailsLoading(false)
     }
   }, [isOwner])
+
+  useEffect(() => {
+    setTestSmsRecipient("")
+    setTestEmailRecipient("")
+  }, [initialTenantId])
 
   useEffect(() => {
     if (!initialTenantId) {
@@ -996,6 +1004,7 @@ export function AdminDashboardClient({
 
   function runLaunchStep(step: LaunchStep) {
     if (!selectedTenant) return
+    if (step.disabledReason) { setNotice(step.disabledReason); return }
     if (step.special === "invite") return void resendSelectedInvitation()
     if (step.special === "copy-client-link") return void copyClientOnboardingLink()
     if (step.special === "test") return void startTesting()
@@ -1018,7 +1027,8 @@ export function AdminDashboardClient({
   }
 
   async function startTesting() {
-    if (!selectedTenant) return
+    if (!selectedTenant || !isOwner || !readiness?.testingReady || testingBusy) return
+    setTestingBusy(true)
     try {
       await apiFetch(`/admin/tenants/${selectedTenant.id}/testing/run`, {
         method: "POST",
@@ -1036,11 +1046,13 @@ export function AdminDashboardClient({
         ),
       )
       setSelectedTenant((current) =>
-        current ? { ...current, lifecycleStatus: "TESTING" } : current,
+        current?.id === selectedTenant.id ? { ...current, lifecycleStatus: "TESTING" } : current,
       )
       setNotice("The controlled lead entered the real queue. Provider callbacks and replies will record evidence automatically.")
     } catch (cause) {
       setError(messageFor(cause, "Testing mode could not be started"))
+    } finally {
+      setTestingBusy(false)
     }
   }
 
@@ -1518,16 +1530,28 @@ export function AdminDashboardClient({
     const items = readiness.required.filter((item) => definition.keys.includes(item.key))
     let status = launchStatus(items, definition.owner)
     let action = items.find((item) => !item.passed)?.nextAction || items.find((item) => !item.passed)?.statusMessage || "Verified from saved workspace state."
+    if (definition.keys.length && !items.length) { status = "Complete"; action = "Not required by the selected service scope." }
     if (definition.id === "account") status = "Complete"
     if (definition.id === "invitation") { status = selectedOwnerUser?.passwordConfigured && !selectedOwnerUser.mustChangePassword ? "Complete" : "Waiting on Client"; action = status === "Complete" ? "The workspace owner accepted the invitation." : "Ask the workspace owner to accept the latest invitation and choose a password." }
     if (definition.id === "email_verified") { status = selectedOwnerUser?.isEmailVerified ? "Complete" : "Waiting on Client"; action = status === "Complete" ? "The workspace owner email is verified." : "The workspace owner must use the verification or invitation email." }
     if (definition.id === "ai") { status = selectedAi?.configurationApprovalStatus === "approved" ? "Complete" : "Waiting on Admin"; action = status === "Complete" ? "The saved AI configuration is approved." : "Review and approve this client’s AI policy and knowledge before testing." }
     if (definition.id === "email" && !readiness.enabledServices.email) { status = "Complete"; action = "Email is not required by the selected service scope." }
     if (definition.id === "calendar" && !readiness.enabledServices.booking) { status = "Complete"; action = "Calendar booking is not required by the selected service scope." }
-    return { ...definition, status, action }
+    const ownerOnly = definition.special === "invite" || definition.special === "test" || definition.tab === "billing" || definition.view === "settings"
+    const disabledReason = ownerOnly && !isOwner ? "Platform owner access is required for this action." : definition.special === "test" && (!readiness.testingReady || testingBusy) ? "Complete the testing prerequisites before starting another test." : undefined
+    return { ...definition, status, action: disabledReason || action, disabledReason }
   }) : []
-  const onboardingPercent = launchSteps.length ? Math.round((launchSteps.filter((step) => step.status === "Complete").length / launchSteps.length) * 100) : 0
-  const nextLaunchStep = launchSteps.find((step) => step.status !== "Complete")
+  // Keep new backend prerequisites visible even when the guided mapping changes.
+  for (const item of unmappedReadinessChecks(readiness?.required || [], launchStepDefinitions)) {
+    launchSteps.splice(Math.max(0, launchSteps.length - 1), 0, {
+      id: `readiness:${item.key}`, keys: [item.key], label: item.label,
+      owner: item.responsibleParty === "client" ? "Client" : "Admin",
+      status: launchStatus([item], "Admin"), action: item.nextAction || item.statusMessage,
+      cta: "Review prerequisite", view: "clients", tab: "setup",
+    })
+  }
+  const onboardingPercent = launchProgress(launchSteps, readiness?.ready === true)
+  const nextLaunchStep = nextReadinessStep(launchSteps, readiness?.testingBlockers || [])
   const selectedSuspendedBy =
     selectedTenant?.serviceSuspendedById === me.userId ? me.email : operatorName(selectedTenant?.serviceSuspendedById)
 
@@ -2128,7 +2152,7 @@ export function AdminDashboardClient({
                       </Button>
                       <Button
                         variant="outline"
-                        disabled={!readiness?.testingReady || selectedTenant.lifecycleStatus === "TESTING"}
+                        disabled={!readiness?.testingReady || testingBusy || selectedTenant.lifecycleStatus === "TESTING"}
                         onClick={() => void startTesting()}
                       >
                         {selectedTenant.lifecycleStatus === "TESTING" ? "Testing mode active" : "Start controlled testing"}
@@ -2801,21 +2825,21 @@ export function AdminDashboardClient({
                 <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0"><div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Client launch workspace</div><h2 className="mt-1 truncate text-2xl font-semibold">{selectedTenant.name}</h2>
                     <div className="mt-3 flex flex-wrap gap-2"><StatusBadge value={selectedTenant.serviceState?.label || label(selectedTenant.lifecycleStatus)} tone={selectedTenant.serviceState?.state === "suspended" ? "danger" : selectedTenant.lifecycleStatus === "ACTIVE" ? "success" : "neutral"} /><StatusBadge value={`Billing: ${label(selectedTenant.status)}`} tone={readiness.required.find((item) => item.key === "billing")?.passed ? "success" : "warning"} /><StatusBadge value={`${onboardingPercent}% onboarded`} tone={onboardingPercent === 100 ? "success" : "neutral"} /><StatusBadge value={readiness.ready ? "Launch ready" : "Not launch ready"} tone={readiness.ready ? "success" : "warning"} /></div>
-                    <p className="mt-4 text-sm"><span className="font-medium">Current blocker:</span> {nextLaunchStep?.action || "All required launch checks pass."}</p></div>
-                  {nextLaunchStep ? <Button className="w-full shrink-0 lg:w-auto" onClick={() => runLaunchStep(nextLaunchStep)}>Next step: {nextLaunchStep.cta}<ArrowRight className="ml-2 h-4 w-4" /></Button> : null}
+                    <p className="mt-4 text-sm"><span className="font-medium">Current blocker:</span> {nextLaunchStep?.action || (readiness.ready ? "All required launch checks pass." : "Review the remaining launch prerequisites.")}</p></div>
+                  {nextLaunchStep ? <Button className="w-full shrink-0 lg:w-auto" disabled={Boolean(nextLaunchStep.disabledReason)} onClick={() => runLaunchStep(nextLaunchStep)}>Next step: {nextLaunchStep.cta}<ArrowRight className="ml-2 h-4 w-4" /></Button> : null}
                 </div>
                 <div className="mt-5 flex flex-wrap gap-2 border-t pt-4">{!selectedOwnerUser?.passwordConfigured && isOwner ? <Button size="sm" variant="outline" onClick={() => void resendSelectedInvitation()}>Resend invite</Button> : null}<Button size="sm" variant="outline" onClick={() => void copyClientOnboardingLink()}>Copy client link</Button><Button size="sm" variant="outline" onClick={() => switchView("clients", selectedTenant.id, "overview")}>Open client workspace</Button><Button size="sm" variant="outline" onClick={() => switchView("clients", selectedTenant.id, "setup")}>Configure integrations</Button>{isOwner ? <Button size="sm" variant="outline" onClick={() => switchView("clients", selectedTenant.id, "billing")}>Open billing</Button> : null}{selectedTenant.serviceState?.state === "suspended" && isOwner ? <Button size="sm" variant="outline" onClick={() => setServiceAction("restore")}>Restore services</Button> : null}{selectedTenant.lifecycleStatus === "ACTIVE" && selectedTenant.serviceState?.state !== "suspended" && isOwner ? <Button size="sm" variant="destructive" onClick={() => setServiceAction("suspend")}>Suspend services</Button> : null}</div>
               </CardContent></Card>
               {clientDetailsError ? <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{clientDetailsError}</div> : null}
               <Card><CardHeader><CardTitle>Guided setup</CardTitle><p className="text-sm text-muted-foreground">Complete the first non-complete step; every status is derived from persisted account, billing, provider, or readiness state.</p></CardHeader><CardContent className="space-y-2">
-                {launchSteps.map((step, index) => <div key={step.id} className={cn("grid gap-3 rounded-md border p-4 md:grid-cols-[2rem_minmax(0,1fr)_9rem_auto] md:items-center", nextLaunchStep?.id === step.id && "border-primary bg-primary/5")}><div className="flex h-7 w-7 items-center justify-center rounded-full border text-xs font-semibold">{step.status === "Complete" ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : index + 1}</div><div className="min-w-0"><div className="font-medium">{step.label}</div><div className="mt-1 text-sm text-muted-foreground">{step.action}</div><div className="mt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Responsible: {step.owner}</div></div><StatusBadge value={step.status} tone={step.status === "Complete" ? "success" : step.status === "Failed" || step.status === "Blocked" ? "danger" : "warning"} /><Button size="sm" variant={nextLaunchStep?.id === step.id ? "default" : "outline"} disabled={step.status === "Complete" && step.id !== "account"} onClick={() => runLaunchStep(step)}>{step.cta}</Button></div>)}
+                {launchSteps.map((step, index) => <div key={step.id} className={cn("grid gap-3 rounded-md border p-4 md:grid-cols-[2rem_minmax(0,1fr)_9rem_auto] md:items-center", nextLaunchStep?.id === step.id && "border-primary bg-primary/5")}><div className="flex h-7 w-7 items-center justify-center rounded-full border text-xs font-semibold">{step.status === "Complete" ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : index + 1}</div><div className="min-w-0"><div className="font-medium">{step.label}</div><div className="mt-1 text-sm text-muted-foreground">{step.action}</div><div className="mt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Responsible: {step.owner}</div></div><StatusBadge value={step.status} tone={step.status === "Complete" ? "success" : step.status === "Failed" || step.status === "Blocked" ? "danger" : "warning"} /><Button size="sm" variant={nextLaunchStep?.id === step.id ? "default" : "outline"} disabled={Boolean(step.disabledReason) || (step.status === "Complete" && step.id !== "account")} onClick={() => runLaunchStep(step)}>{step.cta}</Button></div>)}
               </CardContent></Card>
               <Card><CardHeader><CardTitle>First-client integrations</CardTitle><p className="text-sm text-muted-foreground">Connected and tested are separate; failed tests remain visible.</p></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {[["SendGrid", "sendgrid", readiness.enabledServices.email], ["Twilio", "twilio", readiness.enabledServices.sms], ["Calendar", "booking_provider", readiness.enabledServices.booking], ["Lead intake", "intake_api", true], ["Appointment CRM", "crm_appointment_event", readiness.enabledServices.booking]].map(([provider, key, required]) => { const item = readiness.required.find((check) => check.key === key) || readiness.optional?.find((check) => check.key === key); const failed = Boolean(item && !item.passed && /failed|rejected|blocked/i.test(item.statusMessage)); return <div key={String(key)} className="rounded-md border p-4"><div className="flex items-center justify-between gap-2"><div className="font-medium">{provider}</div><StatusBadge value={!required ? "Not required" : item?.passed ? "Connected" : failed ? "Failed" : "Action required"} tone={!required || item?.passed ? "success" : failed ? "danger" : "warning"} /></div><div className="mt-3 text-xs text-muted-foreground">Test status: {!required ? "Not required" : item?.passed ? "Verified" : item?.statusMessage || "Not tested"}</div>{required ? <Button className="mt-3 w-full" size="sm" variant="outline" onClick={() => switchView("clients", selectedTenant.id, "setup")}>Configure / test</Button> : null}</div> })}
               </CardContent></Card>
               <Card className={readiness.ready ? "border-emerald-500/40" : "border-amber-500/40"}><CardHeader><CardTitle>Launch readiness</CardTitle><p className="text-sm text-muted-foreground">Activation remains enforced by the existing backend readiness and billing gates.</p></CardHeader><CardContent className="space-y-4"><div className="grid gap-3 sm:grid-cols-3"><DefinitionRow label="Critical blockers" value={String(readiness.blockers.length)} compact /><DefinitionRow label="Warnings" value={String(readiness.optional?.filter((item) => !item.passed).length || 0)} compact /><DefinitionRow label="Passed checks" value={`${readiness.required.filter((item) => item.passed).length}/${readiness.required.length}`} compact /></div>{readiness.blockers.length ? <div className="space-y-2">{readiness.blockers.map((item) => <div key={item.key} className="rounded-md bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"><div className="font-medium">{item.label}</div><div className="mt-1">{item.nextAction || item.statusMessage}</div></div>)}</div> : <div className="flex items-center gap-2 text-sm text-emerald-700"><CheckCircle2 className="h-4 w-4" />All required launch checks pass.</div>}{isOwner ? <Button disabled={!readiness.ready || selectedTenant.serviceState?.state === "suspended" || selectedTenant.lifecycleStatus === "ACTIVE"} onClick={() => void changeService("activate")}>{selectedTenant.lifecycleStatus === "ACTIVE" ? "Services active" : "Activate services"}</Button> : null}</CardContent></Card>
             </div>
-          ) : <Card><CardContent className="p-6"><EmptyState title="Choose a client" description="Their complete launch workspace will appear here." /></CardContent></Card>}
+          ) : clientDetailsError ? <Card><CardContent className="space-y-3 p-6"><p role="alert" className="text-sm text-destructive">{clientDetailsError}</p><Button onClick={() => selectedTenant && void loadClientCore(selectedTenant)}>Retry client details</Button></CardContent></Card> : <Card><CardContent className="p-6"><EmptyState title="Choose a client" description="Their complete launch workspace will appear here." /></CardContent></Card>}
         </div>
       ) : null}
 

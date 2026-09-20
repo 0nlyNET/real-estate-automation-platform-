@@ -38,10 +38,12 @@ export class TestingService implements OnModuleInit {
     input: { smsRecipient?: string; emailRecipient?: string },
   ) {
     const onboarding = await this.onboarding.getOrCreate(tenantId);
-    const phone = input.smsRecipient
-      ? normalizePhoneE164(input.smsRecipient)
-      : null;
-    const email = String(input.emailRecipient || '').trim().toLowerCase() || null;
+    const phone = normalizePhoneE164(String(
+      input.smsRecipient ?? onboarding.contacts?.controlledTestPhone ?? '',
+    ));
+    const email = String(
+      input.emailRecipient ?? onboarding.contacts?.controlledTestEmail ?? onboarding.contacts?.accountOwner ?? '',
+    ).trim().toLowerCase() || null;
     if (onboarding.smsEnabled && !phone) {
       throw new BadRequestException('A valid controlled SMS recipient is required');
     }
