@@ -162,6 +162,7 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
           status: 'active',
           currentStepIndex: 0,
           nextRunAt,
+          scheduledRunAt: nextRunAt,
         }),
       );
     } catch (error: any) {
@@ -478,6 +479,12 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async processDueEnrollments(limit = CLAIM_LIMIT) {
+    // Preserve the original due time while globally paused. Moving it forward
+    // would make an old step appear fresh after resume and defeat stale-work
+    // rejection below.
+    if (process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true') {
+      return { claimed: 0 };
+    }
     const ids = await this.claimDueEnrollments(Math.min(Math.max(limit, 1), 100));
     for (const id of ids) {
       try {
@@ -527,6 +534,14 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
       relations: ['sequence', 'lead'],
     });
     if (!enrollment) return;
+    const scheduledRunAt = enrollment.scheduledRunAt || enrollment.nextRunAt
+      ? new Date(enrollment.scheduledRunAt || enrollment.nextRunAt!)
+      : null;
+    // Preserve the original due time across entitlement holds and retries.
+    if (!enrollment.scheduledRunAt && scheduledRunAt) {
+      enrollment.scheduledRunAt = scheduledRunAt;
+      await this.enrollmentRepository.save(enrollment);
+    }
     const sequence = await this.sequenceRepository.findOne({
       where: { id: enrollment.sequenceId, tenantId: enrollment.tenantId },
       relations: ['steps'],
@@ -577,6 +592,21 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const step = steps[stepIndex];
+    const resumeMaxAgeMinutes = safeResumeMaxAgeMinutes();
+    if (
+      scheduledRunAt &&
+      Date.now() - scheduledRunAt.getTime() > resumeMaxAgeMinutes * 60_000
+    ) {
+      await this.createSkippedMessage(
+        lead,
+        step,
+        enrollment,
+        'STALE_AUTOMATION',
+        `Sequence step is more than ${resumeMaxAgeMinutes} minutes overdue and was not replayed`,
+      );
+      await this.advanceEnrollment(enrollment, sequence, stepIndex);
+      return;
+    }
     if (step.approvalStatus !== 'approved') {
       await this.createSkippedMessage(lead, step, enrollment, 'UNAPPROVED_TEMPLATE', 'Template is not approved');
       enrollment.status = 'paused';
@@ -720,6 +750,7 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
         enrollment.currentStepIndex,
       );
     }
+    enrollment.scheduledRunAt = enrollment.nextRunAt || null;
     enrollment.lockedAt = null;
     enrollment.lockedBy = null;
     await this.enrollmentRepository.save(enrollment);
@@ -794,6 +825,11 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
       );
     }
   }
+}
+
+function safeResumeMaxAgeMinutes(): number {
+  const configured = Number(process.env.AUTOMATION_RESUME_MAX_AGE_MINUTES || 15);
+  return Number.isFinite(configured) && configured > 0 ? configured : 15;
 }
 
 function renderTemplate(template: string, vars: Record<string, string>) {

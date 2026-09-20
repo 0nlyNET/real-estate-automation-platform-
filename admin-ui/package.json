@@ -25,7 +25,9 @@
     "typescript": "^5"
   },
   "overrides": {
+    "@humanfs/node": "0.16.8",
+    "js-yaml": "4.3.2",
     "postcss": "$postcss",
-    "sharp": "0.35.3"
+    "sharp": "0.35.4"
   }
 }

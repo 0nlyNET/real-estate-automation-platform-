@@ -1,3 +1,4 @@
+import { AutomationScheduledDueTime1789862400001 } from './migrations/202609200001-automation-scheduled-due-time';
 import { FirstClientPayment1788652800001 } from './migrations/202609060001-first-client-payment';
 import { readFileSync } from "fs";
 import { resolve } from "path";
@@ -220,6 +221,7 @@ describe("deployed legacy schema reproduction", () => {
     await new MultiProviderScheduling1787011200002().up(queryRunner);
     await new AssistantConversationReliability1787875200001().up(queryRunner);
     await new FirstClientPayment1788652800001().up(queryRunner);
+    await new AutomationScheduledDueTime1789862400001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
@@ -349,6 +351,7 @@ describe("deployed legacy schema reproduction", () => {
     await new MultiProviderScheduling1787011200002().up(queryRunner);
     await new AssistantConversationReliability1787875200001().up(queryRunner);
     await new FirstClientPayment1788652800001().up(queryRunner);
+    await new AutomationScheduledDueTime1789862400001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
@@ -361,6 +364,7 @@ describe("deployed legacy schema reproduction", () => {
 
     const rollbackRunner = dataSource.createQueryRunner();
     await rollbackRunner.connect();
+    await new AutomationScheduledDueTime1789862400001().down(rollbackRunner);
     await new FirstClientPayment1788652800001().down(rollbackRunner);
     await new AssistantConversationReliability1787875200001().down(rollbackRunner);
     await new MultiProviderScheduling1787011200002().down(rollbackRunner);

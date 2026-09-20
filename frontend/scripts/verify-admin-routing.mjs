@@ -148,10 +148,10 @@ for (const column of ["Lead", "Source", "Stage", "Communication", "Next action",
 assert.equal(
   (
     dashboard.match(
-      /label: "(?:Client\/account created|Invitation accepted|Email verified|Payment \/ Stripe active|Intake and business information complete|AI configuration approved|Lead source connected|Email configured and tested|Calendar connected and tested|Required integrations connected|Test lead received|AI response tested|Manual conversation reply tested|Appointment workflow tested|Notifications tested|Launch approval)"/g,
+      /label: "(?:Client\/account created|Invitation accepted|Email verified|Payment \/ Stripe active|Intake and business information complete|AI configuration approved|Lead source connected|Email configured and tested|Calendar connected and tested|Required integrations connected|Safety prerequisites verified|Test lead received|Outbound automation tested|Inbound replies tested|Appointment workflow tested|Notifications tested|Launch approval)"/g,
     ) || []
   ).length,
-  16,
+  17,
   "onboarding must expose the complete guided launch sequence",
 )
 for (const status of ["Action Required", "Waiting on Client", "Waiting on Admin", "Failed", "Blocked", "Complete"]) {

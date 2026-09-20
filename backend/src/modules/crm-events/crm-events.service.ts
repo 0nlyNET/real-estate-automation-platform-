@@ -15,6 +15,7 @@ import { OperationsService } from '../operations/operations.service';
 import { IntegrationDeliveryEvent } from './integration-delivery-event.entity';
 import { TenantWebhookSubscription } from './tenant-webhook-subscription.entity';
 import { OnboardingService } from '../onboarding/onboarding.service';
+import { EntitlementService } from '../entitlements/entitlement.service';
 
 export const CRM_EVENT_TYPES = [
   'lead.created',
@@ -42,20 +43,89 @@ export class CrmEventsService implements OnModuleInit {
     private readonly jobs: DurableJobsService,
     private readonly operations: OperationsService,
     @Optional() private readonly onboarding?: OnboardingService,
+    @Optional() private readonly entitlements?: EntitlementService,
   ) {}
 
   onModuleInit() {
-    this.jobs.register('integration.webhook_delivery', async (job) => {
-      const deliveryId = String(job.payload.deliveryId || '');
-      if (!deliveryId) throw new Error('Webhook delivery job is missing deliveryId');
-      try {
-        await this.deliver(deliveryId);
-      } catch (error: any) {
-        if (job.attemptCount >= job.maxAttempts) {
-          await this.markExhausted(deliveryId, error);
+    this.jobs.register(
+      "integration.webhook_delivery",
+      async (job) => {
+        const deliveryId = String(job.payload.deliveryId || "");
+        if (!deliveryId)
+          throw new Error("Webhook delivery job is missing deliveryId");
+        if (!job.tenantId || !this.entitlements)
+          throw new Error(
+            "Webhook delivery requires tenant entitlement checks",
+          );
+        const delivery = await this.deliveries.findOne({
+          where: { id: deliveryId, tenantId: job.tenantId },
+        });
+        if (!delivery)
+          throw new NotFoundException(
+            "Webhook delivery not found in this workspace",
+          );
+        if (delivery.status === "delivered") return;
+        const data = delivery.payload?.data;
+        const controlledTest = Boolean(
+          data &&
+          typeof data === "object" &&
+          "testRunId" in data &&
+          typeof data.testRunId === "string" &&
+          data.testRunId,
+        );
+        const decision = await this.entitlements.evaluate(
+          delivery.tenantId,
+          "deliver_integration_webhook",
+          new Date(),
+          { controlledTest },
+        );
+        if (!decision.allowed) {
+          await this.cancelDelivery(
+            delivery,
+            `Cancelled before delivery: ${decision.reasons.join("; ")}`,
+          );
+          return;
         }
-        throw error;
-      }
+        try {
+          await this.deliver(deliveryId);
+        } catch (error: any) {
+          if (job.attemptCount >= job.maxAttempts) {
+            await this.markExhausted(deliveryId, error);
+          }
+          throw error;
+        }
+      },
+      async (job, reason) => {
+        if (!job.tenantId)
+          throw new Error("Webhook cancellation is missing tenantId");
+        const delivery = await this.deliveries.findOne({
+          where: {
+            id: String(job.payload.deliveryId || ""),
+            tenantId: job.tenantId,
+          },
+        });
+        if (delivery && delivery.status !== "delivered")
+          await this.cancelDelivery(delivery, reason);
+      },
+    );
+  }
+
+  private async cancelDelivery(
+    delivery: IntegrationDeliveryEvent,
+    reason: string,
+  ) {
+    delivery.status = "failed";
+    delivery.lastError = sanitizeOperationalText(reason, 1_000);
+    await this.deliveries.save(delivery);
+    await this.operations.createTask({
+      tenantId: delivery.tenantId,
+      category: "integration_delivery",
+      title: "CRM webhook delivery cancelled before sending",
+      description: delivery.lastError,
+      priority: "high",
+      relatedEntityType: "integration_delivery_event",
+      relatedEntityId: delivery.id,
+      dedupeOpen: true,
     });
   }
 

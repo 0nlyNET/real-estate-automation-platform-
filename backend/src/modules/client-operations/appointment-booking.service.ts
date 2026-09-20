@@ -25,6 +25,7 @@ import { AuditService } from '../audit/audit.service';
 import { CrmEventsService } from '../crm-events/crm-events.service';
 import { DurableJob } from '../durable-jobs/durable-job.entity';
 import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
+import { EntitlementService } from '../entitlements/entitlement.service';
 import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { LeadStageEvent } from '../leads/lead-stage-event.entity';
@@ -62,95 +63,161 @@ export class AppointmentBookingService implements OnModuleInit {
     private readonly audit: AuditService,
     @Optional() private readonly onboarding?: OnboardingService,
     @Optional() private readonly providers?: BookingProviderRegistry,
+    @Optional() private readonly entitlements?: EntitlementService,
   ) {}
 
   onModuleInit() {
-    this.durableJobs.register('appointment.post_commit', async (job) => {
-      const appointmentId = String(job.payload.appointmentId || '');
-      if (!appointmentId) throw new Error('Appointment post-commit job is missing appointmentId');
-      try {
-        await this.runPostCommit(appointmentId);
-      } catch (error) {
-        if (job.attemptCount >= job.maxAttempts) {
-          await this.operations.createTask({
-            tenantId: job.tenantId,
-            category: 'appointment_workflow',
-            title: 'Appointment post-booking actions need attention',
-            description:
-              'The provider appointment and internal appointment exist, but agent notification, CRM publication, or UAT evidence could not be completed after retries.',
-            priority: 'high',
-            relatedEntityType: 'appointment',
-            relatedEntityId: appointmentId,
-            dedupeOpen: true,
-          });
+    this.durableJobs.register(
+      "appointment.post_commit",
+      async (job) => {
+        const appointmentId = String(job.payload.appointmentId || "");
+        if (!appointmentId)
+          throw new Error(
+            "Appointment post-commit job is missing appointmentId",
+          );
+        try {
+          await this.runPostCommit(appointmentId);
+        } catch (error) {
+          if (job.attemptCount >= job.maxAttempts) {
+            await this.operations.createTask({
+              tenantId: job.tenantId,
+              category: "appointment_workflow",
+              title: "Appointment post-booking actions need attention",
+              description:
+                "The provider appointment and internal appointment exist, but agent notification, CRM publication, or UAT evidence could not be completed after retries.",
+              priority: "high",
+              relatedEntityType: "appointment",
+              relatedEntityId: appointmentId,
+              dedupeOpen: true,
+            });
+          }
+          throw error;
         }
-        throw error;
-      }
-    });
-    this.durableJobs.register('appointment.reconcile_create', async (job) => {
-      try {
-        await this.create(
-          String(job.tenantId || ''),
-          {
-            leadId: String(job.payload.leadId || ''),
-            startsAt: String(job.payload.startsAt || ''),
-            endsAt: String(job.payload.endsAt || '') || undefined,
-            notes: String(job.payload.notes || '') || undefined,
-            idempotencyKey: String(job.payload.idempotencyKey || ''),
-            meetingMode: (String(job.payload.meetingMode || '') || undefined) as
-              | AppointmentMode
+      },
+      (job, reason) => this.cancelStaleAppointmentWork(job, reason),
+    );
+    this.durableJobs.register(
+      "appointment.reconcile_create",
+      async (job) => {
+        try {
+          const tenantId = String(job.tenantId || "");
+          if (!tenantId || !this.entitlements)
+            throw new Error(
+              "Booking reconciliation requires tenant entitlement checks",
+            );
+          const lead = await this.leads.findOne({
+            where: { id: String(job.payload.leadId || ""), tenantId },
+          });
+          if (!lead)
+            throw new NotFoundException("Lead not found in this workspace");
+          const decision = await this.entitlements.evaluate(
+            tenantId,
+            "create_automated_appointment",
+            new Date(),
+            { controlledTest: Boolean(lead.testRunId) },
+          );
+          if (!decision.allowed) {
+            await this.operations.createTask({
+              tenantId,
+              category: "appointment_workflow",
+              title: "An uncertain booking was cancelled before reconciliation",
+              description: `Current workspace safety checks failed: ${decision.reasons.join("; ")}`,
+              priority: "high",
+              relatedEntityType: "lead",
+              relatedEntityId: String(job.payload.leadId || ""),
+              dedupeOpen: true,
+            });
+            return;
+          }
+          await this.create(
+            tenantId,
+            {
+              leadId: String(job.payload.leadId || ""),
+              startsAt: String(job.payload.startsAt || ""),
+              endsAt: String(job.payload.endsAt || "") || undefined,
+              notes: String(job.payload.notes || "") || undefined,
+              idempotencyKey: String(job.payload.idempotencyKey || ""),
+              meetingMode: (String(job.payload.meetingMode || "") ||
+                undefined) as AppointmentMode | undefined,
+            },
+            undefined,
+            String(job.payload.source || "manual") as Appointment["source"],
+            String(job.payload.resourceId || job.payload.calendarId || "") ||
+              undefined,
+            (String(job.payload.provider || "") || undefined) as
+              | BookingProviderName
               | undefined,
-          },
-          undefined,
-          String(job.payload.source || 'manual') as Appointment['source'],
-          String(job.payload.resourceId || job.payload.calendarId || '') || undefined,
-          (String(job.payload.provider || '') || undefined) as
-            | BookingProviderName
-            | undefined,
-        );
-      } catch (error) {
-        if (job.attemptCount >= job.maxAttempts) {
-          await this.operations.createTask({
-            tenantId: String(job.tenantId || ''),
-            category: 'appointment_workflow',
-            title: 'An uncertain provider booking could not be reconciled',
-            description:
-              'No internal appointment was confirmed. Review the deterministic provider record and contact the lead before attempting another booking.',
-            priority: 'critical',
-            relatedEntityType: 'lead',
-            relatedEntityId: String(job.payload.leadId || ''),
-            dedupeOpen: true,
-          });
+          );
+        } catch (error) {
+          if (job.attemptCount >= job.maxAttempts) {
+            await this.operations.createTask({
+              tenantId: String(job.tenantId || ""),
+              category: "appointment_workflow",
+              title: "An uncertain provider booking could not be reconciled",
+              description:
+                "No internal appointment was confirmed. Review the deterministic provider record and contact the lead before attempting another booking.",
+              priority: "critical",
+              relatedEntityType: "lead",
+              relatedEntityId: String(job.payload.leadId || ""),
+              dedupeOpen: true,
+            });
+          }
+          throw error;
         }
-        throw error;
-      }
-    });
-    this.durableJobs.register('appointment.reconcile_calendar', async (job) => {
-      const appointmentId = String(job.payload.appointmentId || '');
-      if (!appointmentId) throw new Error('Calendar reconciliation job is missing appointmentId');
+      },
+      (job, reason) => this.cancelStaleAppointmentWork(job, reason),
+    );
+    this.durableJobs.register("appointment.reconcile_calendar", async (job) => {
+      const appointmentId = String(job.payload.appointmentId || "");
+      if (!appointmentId)
+        throw new Error("Calendar reconciliation job is missing appointmentId");
       try {
         return await this.reconcile(appointmentId);
       } catch (error: any) {
         const syncErrorCode = String(
-          error?.response?.code || error?.code || 'CALENDAR_RECONCILIATION_FAILED',
+          error?.response?.code ||
+            error?.code ||
+            "CALENDAR_RECONCILIATION_FAILED",
         ).slice(0, 100);
         await this.appointments.update(
-          { id: appointmentId, tenantId: String(job.tenantId || '') },
-          { syncStatus: 'needs_attention', syncErrorCode },
+          { id: appointmentId, tenantId: String(job.tenantId || "") },
+          { syncStatus: "needs_attention", syncErrorCode },
         );
         await this.operations.createTask({
-          tenantId: String(job.tenantId || ''),
-          category: 'appointment_workflow',
-          title: 'A provider appointment needs reconciliation',
+          tenantId: String(job.tenantId || ""),
+          category: "appointment_workflow",
+          title: "A provider appointment needs reconciliation",
           description:
-            'RealtyTechAI could not verify that the provider record and internal appointment still match. Restore provider access and review the appointment before relying on it.',
-          priority: 'high',
-          relatedEntityType: 'appointment',
+            "RealtyTechAI could not verify that the provider record and internal appointment still match. Restore provider access and review the appointment before relying on it.",
+          priority: "high",
+          relatedEntityType: "appointment",
           relatedEntityId: appointmentId,
           dedupeOpen: true,
         });
         throw error;
       }
+    });
+  }
+
+  private async cancelStaleAppointmentWork(job: DurableJob, reason: string) {
+    if (!job.tenantId)
+      throw new Error("Appointment cancellation is missing tenantId");
+    const appointmentId = String(job.payload.appointmentId || "");
+    if (appointmentId) {
+      await this.appointments.update(
+        { id: appointmentId, tenantId: job.tenantId },
+        { syncStatus: "needs_attention", syncErrorCode: "STALE_AUTOMATION" },
+      );
+    }
+    await this.operations.createTask({
+      tenantId: job.tenantId,
+      category: "appointment_workflow",
+      title: "Overdue appointment work requires reconciliation",
+      description: reason,
+      priority: "high",
+      relatedEntityType: appointmentId ? "appointment" : "lead",
+      relatedEntityId: appointmentId || String(job.payload.leadId || ""),
+      dedupeOpen: true,
     });
   }
 

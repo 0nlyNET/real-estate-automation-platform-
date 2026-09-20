@@ -205,6 +205,23 @@ describe("MessageSafetyService", () => {
     expect(result.ruleIds).toContain(ruleId);
   });
 
+  it("blocks an overdue automated message instead of replaying it on resume", async () => {
+    const item = harness({
+      job: { createdAt: new Date("2026-08-06T15:44:59.000Z") },
+    });
+    const result = await item.service.evaluateMessageSafety(item.input);
+
+    expect(result).toMatchObject({
+      allowed: false,
+      ruleIds: expect.arrayContaining(["STALE_AUTOMATION"]),
+    });
+    expect(item.job).toMatchObject({
+      status: "blocked",
+      errorCode: "SAFETY_GUARDRAIL",
+    });
+    expect(item.leadEventRepository.save).toHaveBeenCalled();
+  });
+
   it.each([
     ["missing", { timeZone: "" }, "TIME_ZONE_MISSING"],
     ["invalid", { timeZone: "Mars/Olympus" }, "TIME_ZONE_INVALID"],
@@ -357,5 +374,17 @@ describe("MessageSafetyService", () => {
     await expect(
       item.service.verifyMessageSafety(item.lead.id, item.tenant.id),
     ).resolves.toBe(true);
+  });
+  it("does not refresh an old message's replay age when its retry time changes", async () => {
+    const item = harness({
+      job: {
+        createdAt: new Date("2026-08-01T00:00:00Z"),
+        nextAttemptAt: new Date(),
+        scheduledAt: undefined,
+      },
+    });
+    const result = await item.service.evaluateMessageSafety(item.input);
+    expect(result.allowed).toBe(false);
+    expect(result.ruleIds).toContain("STALE_AUTOMATION");
   });
 });

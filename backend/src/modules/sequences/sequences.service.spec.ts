@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Sequence } from './sequence.entity';
+import { SequenceEnrollment } from './sequence-enrollment.entity';
 import { SequenceStep } from './sequence-step.entity';
 import { SequencesService } from './sequences.service';
 
@@ -140,5 +141,57 @@ describe('sequence template approval gates', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(enrollmentRepo.findOne).not.toHaveBeenCalled();
     expect(sequenceRepo.save).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('skips overdue sequence work after an entitlement hold: %s', async (held) => {
+    const lead: any = { id: 'lead-1', tenantId: 'tenant-1', fullName: 'Jordan', communicationStatus: 'active', stage: 'new' };
+    const step: any = { id: 'step-1', channel: 'sms', template: 'Lakeview Realty: Hi {{firstName}}. Reply STOP to opt out.', templateVersion: 1, approvalStatus: 'approved', active: true, offsetMinutes: 0 };
+    const sequence: any = { id: 'sequence-1', tenantId: 'tenant-1', active: true, steps: [step] };
+    const enrollment = Object.assign(new SequenceEnrollment(), {
+      id: 'enrollment-1', tenantId: 'tenant-1', leadId: lead.id,
+      sequenceId: sequence.id, status: 'active', currentStepIndex: 0,
+      nextRunAt: new Date(Date.now() - 16 * 60_000), lockedBy: 'worker', createdAt: new Date(),
+    });
+    const enrollmentRepo = {
+      findOne: jest.fn().mockResolvedValue(enrollment),
+      save: jest.fn(async (value) => value),
+      update: jest.fn(async (_where, values) => Object.assign(enrollment, values)),
+    };
+    const entitlement = {
+      evaluate: jest.fn().mockResolvedValue({ allowed: !held, reasons: held ? ['billing paused'] : [] }),
+    };
+    const messageRepo = { create: jest.fn((value) => value), save: jest.fn(async (value) => value) };
+    const eventRepo = { create: jest.fn((value) => value), save: jest.fn(async (value) => value) };
+    const service = new SequencesService(
+      {} as any,
+      { findOne: jest.fn().mockResolvedValue(sequence) } as any,
+      enrollmentRepo as any,
+      {} as any,
+      messageRepo as any,
+      eventRepo as any,
+      {} as any,
+      {} as any,
+      { findOne: jest.fn().mockResolvedValue(lead) } as any,
+      {} as any,
+      entitlement as any,
+      {} as any,
+    );
+
+    if (held) {
+      await (service as any).runOneEnrollment(enrollment.id);
+      expect(messageRepo.save).not.toHaveBeenCalled();
+      expect(enrollment.nextRunAt!.getTime()).toBeGreaterThan(Date.now());
+      expect(enrollment.scheduledRunAt!.getTime()).toBeLessThan(Date.now() - 15 * 60_000);
+      entitlement.evaluate.mockResolvedValue({ allowed: true, reasons: [] });
+    }
+
+    await (service as any).runOneEnrollment(enrollment.id);
+
+    expect(messageRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'skipped', errorCode: 'STALE_AUTOMATION', leadId: lead.id,
+    }));
+    expect(eventRepo.save).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'sequence_step_skipped' }));
+    expect(enrollment.status).toBe('completed');
+    expect(messageRepo.save).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'queued' }));
   });
 });

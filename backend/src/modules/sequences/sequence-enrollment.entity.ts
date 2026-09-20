@@ -31,6 +31,9 @@ export class SequenceEnrollment extends BaseEntity {
   @Column({ name: 'next_run_at', type: 'timestamptz', nullable: true })
   nextRunAt?: Date;
 
+  @Column({ name: 'scheduled_run_at', type: 'timestamptz', nullable: true })
+  scheduledRunAt?: Date | null;
+
   @Column({ name: 'stopped_reason', type: 'varchar', nullable: true })
   stoppedReason?: 'reply' | 'manual' | 'other' | 'opt_out' | 'service_suspended';
 
