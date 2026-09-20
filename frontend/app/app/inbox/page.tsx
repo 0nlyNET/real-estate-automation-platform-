@@ -11,12 +11,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
 import { AiConversationControls } from "@/components/ai/conversation-controls"
 import { fetchMe, type Me } from "@/lib/me"
+import { useConversationReadState, type ConversationReadState } from "@/components/ai/use-conversation-read-state"
 
 type ThreadRow = {
   leadId: string | null
   leadName?: string | null
   leadPhone?: string | null
   leadEmail?: string | null
+  leadSource?: string | null
+  aiStatus?: "AI Active" | "Human Takeover" | "AI Paused" | "Needs Attention"
+  aiStatusReason?: string | null
+  isUnread?: boolean
+  unreadCount?: number
+  unreadVersion?: number
+  markedUnread?: boolean
   lastMessageBody?: string | null
   lastMessageAt?: string | null
   temperature?: string
@@ -54,6 +62,7 @@ type ThreadPage = {
 }
 
 type MessagePage = {
+  readState: ConversationReadState
   items: Msg[]
   hasOlder: boolean
   nextBefore: string | null
@@ -140,6 +149,7 @@ export default function InboxPage() {
   const [hasMoreThreads, setHasMoreThreads] = useState(false)
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Msg[]>([])
+  const [readState, setReadState] = useState<ConversationReadState | null>(null)
   const [enrollments, setEnrollments] = useState<Enrollment[]>([])
   const [loadedLeadId, setLoadedLeadId] = useState<string | null>(null)
   const [hasOlderMessages, setHasOlderMessages] = useState(false)
@@ -285,6 +295,7 @@ export default function InboxPage() {
       } else if (messagePage?.nextChanges) {
         messageCursors.current.changes = messagePage.nextChanges
       }
+      setReadState(messagePage.readState)
       setLoadedLeadId(leadId)
       setConversationError("")
     } catch (cause) {
@@ -336,6 +347,18 @@ export default function InboxPage() {
 
   const activeThread = threads.find((item) => item.leadId === activeLeadId)
   const visibleMessages = loadedLeadId === activeLeadId ? messages : []
+  const updateReadState = useCallback((state: ConversationReadState) => {
+    // Discard an in-flight list snapshot taken before this write completed.
+    threadRequestVersion.current += 1
+    setThreads((current) => current.map((thread) =>
+      thread.leadId === state.leadId && (thread.unreadVersion || 0) <= state.unreadVersion
+        ? { ...thread, ...state } : thread))
+    if (activeLeadIdRef.current === state.leadId) setReadState(state)
+  }, [])
+  const { markUnread, markVisibleRead, readBusy, readError } = useConversationReadState({
+    leadId: loadedLeadId === activeLeadId ? activeLeadId : null,
+    messages: visibleMessages, readState, viewport: messageViewportRef, onUpdated: updateReadState,
+  })
   const visibleEnrollments = loadedLeadId === activeLeadId ? enrollments : []
   const currentEnrollment = visibleEnrollments.find((item) => item.status === "active") || visibleEnrollments.find((item) => item.status === "paused") || visibleEnrollments[0]
   const canManageAny = me?.role === "owner" || me?.role === "admin"
@@ -442,27 +465,50 @@ export default function InboxPage() {
 
   return (
     <PageShell title="Conversations" subtitle="Read the full history, reply, and know what to say next.">
-      {threadError || conversationError || actionError ? <div role="alert" className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-300">{threadError || conversationError || actionError}</div> : null}
+      {threadError || conversationError || actionError || readError ? <div role="alert" className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-300">{threadError || conversationError || actionError || readError}</div> : null}
       {notice ? <div role="status" className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-300">{notice}</div> : null}
       <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
-        <Card>
+        <Card className="min-w-0">
           <CardHeader><CardTitle>People</CardTitle><div className="flex gap-2"><Button size="sm" variant={scope === "shared" ? "default" : "outline"} onClick={() => { setThreadTake(50); setScope("shared") }}>Shared</Button><Button size="sm" variant={scope === "mine" ? "default" : "outline"} onClick={() => { setThreadTake(50); setScope("mine") }}>Assigned to me</Button></div></CardHeader>
           <CardContent className="p-0">
             {loading ? <div className="p-4 text-sm text-muted-foreground">Loading conversations…</div> : null}
             <div className="max-h-[680px] divide-y overflow-y-auto">
-              {threads.map((thread) => <button key={thread.leadId} type="button" onClick={() => { activeLeadIdRef.current = thread.leadId; channelLeadRef.current = thread.leadId; setActiveLeadId(thread.leadId); setSendChannel(thread.leadEmail ? "email" : "sms") }} className={`w-full p-4 text-left hover:bg-muted/60 ${activeLeadId === thread.leadId ? "bg-muted" : ""}`}><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{thread.leadName || "Lead"}</span>{thread.temperature ? <Badge variant={thread.temperature === "hot" ? "destructive" : "secondary"}>{thread.temperature}</Badge> : null}</div><div className="mt-1 truncate text-xs text-muted-foreground">{thread.lastMessageBody || "No message"}</div>{thread.status ? <div className="mt-1 text-[11px] text-muted-foreground">{statusLabel(thread.status)}</div> : null}</button>)}
+              {threads.map((thread) => (
+                <button key={thread.leadId} type="button" data-testid={`thread-${thread.leadId}`}
+                  aria-current={activeLeadId === thread.leadId ? "true" : undefined}
+                  onClick={() => { activeLeadIdRef.current = thread.leadId; channelLeadRef.current = thread.leadId; setActiveLeadId(thread.leadId); setSendChannel(thread.leadEmail ? "email" : "sms") }}
+                  className={`w-full min-w-0 p-4 text-left hover:bg-muted/60 ${activeLeadId === thread.leadId ? "bg-muted" : ""}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`truncate text-sm ${thread.isUnread ? "font-bold" : "font-medium"}`}>{thread.leadName?.trim() || thread.leadEmail || "Lead"}</span>
+                    {thread.isUnread ? <Badge aria-label="Unread" variant="default">{thread.unreadCount || "Unread"}</Badge> : null}
+                  </div>
+                  {thread.leadEmail ? <div className="mt-1 truncate text-xs text-muted-foreground">{thread.leadEmail}</div> : null}
+                  {thread.leadPhone ? <div className="mt-1 truncate text-xs text-muted-foreground">{thread.leadPhone}</div> : null}
+                  {thread.leadSource ? <div className="mt-1 truncate text-xs text-muted-foreground">Source: {thread.leadSource}</div> : null}
+                  <div className="mt-2 truncate text-xs text-muted-foreground">{thread.lastMessageBody || "No message"}</div>
+                  {thread.lastMessageAt ? <time dateTime={thread.lastMessageAt} className="mt-1 block text-[11px] text-muted-foreground">{new Date(thread.lastMessageAt).toLocaleString()}</time> : null}
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {thread.aiStatus ? <Badge title={thread.aiStatusReason || undefined} variant={thread.aiStatus === "Needs Attention" ? "destructive" : "outline"}>{thread.aiStatus}</Badge> : null}
+                    {thread.temperature ? <Badge variant={thread.temperature === "hot" ? "destructive" : "secondary"}>{thread.temperature}</Badge> : null}
+                  </div>
+                  {thread.status ? <div className="mt-1 text-[11px] text-muted-foreground">{statusLabel(thread.status)}</div> : null}
+                </button>
+              ))}
               {hasMoreThreads ? <div className="p-3"><Button type="button" size="sm" variant="outline" className="w-full" onClick={() => setThreadTake((current) => Math.min(current + 50, 200))}>Load more conversations</Button></div> : null}
               {!loading && !threads.length ? <div className="p-8 text-center text-sm text-muted-foreground">No conversations yet.</div> : null}
             </div>
           </CardContent>
         </Card>
 
-        <div className="space-y-4">
-          {activeThread ? <Card><CardContent className="p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{activeThread.leadName}</h2><Badge variant="outline">{activeThread.readiness?.replaceAll("_", " ") || "qualifying"}</Badge>{!canAct ? <Badge variant="secondary">Shared read-only</Badge> : null}</div><p className="mt-2 text-sm">{activeThread.conversationSummary || activeThread.temperatureReason || "Qualification is still in progress."}</p>{activeThread.blocker ? <p className="mt-1 text-sm text-muted-foreground">Current blocker: {activeThread.blocker}</p> : null}</div><div className="flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/leads/${activeThread.leadId}`}><UserRoundCheck className="mr-2 h-4 w-4" />Lead details</Link></Button><Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void requestPersonalFollowUp()}><UserRoundCheck className="mr-2 h-4 w-4" />Add to Today</Button>{currentEnrollment ? currentEnrollment.status === "active" ? <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("pause")}><Pause className="mr-2 h-4 w-4" />Pause follow-up</Button> : <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("resume")}><Play className="mr-2 h-4 w-4" />Resume follow-up</Button> : null}</div></div>{activeThread.talkingPoints?.length ? <details className="mt-3 rounded-lg bg-muted p-3 text-sm"><summary className="cursor-pointer font-medium">Suggested talking points</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{activeThread.talkingPoints.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}</CardContent></Card> : null}
+        <div className="min-w-0 space-y-4">
+          {activeThread ? <Card><CardContent className="p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{activeThread.leadName?.trim() || activeThread.leadEmail || "Lead"}</h2><Badge variant="outline">{activeThread.readiness?.replaceAll("_", " ") || "qualifying"}</Badge>{!canAct ? <Badge variant="secondary">Shared read-only</Badge> : null}</div><div className="mt-2 space-y-1 break-all text-sm text-muted-foreground">{activeThread.leadEmail ? <p>{activeThread.leadEmail}</p> : null}{activeThread.leadPhone ? <p>{activeThread.leadPhone}</p> : null}{activeThread.leadSource ? <p>Source: {activeThread.leadSource}</p> : null}</div>{activeThread.aiStatus ? <div className="mt-2"><Badge variant={activeThread.aiStatus === "Needs Attention" ? "destructive" : "outline"}>{activeThread.aiStatus}</Badge>{activeThread.aiStatusReason ? <p className="mt-1 text-xs text-muted-foreground">{activeThread.aiStatusReason}</p> : null}</div> : null}<p className="mt-2 text-sm">{activeThread.conversationSummary || activeThread.temperatureReason || "Qualification is still in progress."}</p>{activeThread.blocker ? <p className="mt-1 text-sm text-muted-foreground">Current blocker: {activeThread.blocker}</p> : null}</div><div className="flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/leads/${activeThread.leadId}`}><UserRoundCheck className="mr-2 h-4 w-4" />Lead details</Link></Button><Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void requestPersonalFollowUp()}><UserRoundCheck className="mr-2 h-4 w-4" />Add to Today</Button>{currentEnrollment ? currentEnrollment.status === "active" ? <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("pause")}><Pause className="mr-2 h-4 w-4" />Pause follow-up</Button> : <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("resume")}><Play className="mr-2 h-4 w-4" />Resume follow-up</Button> : null}</div></div>{activeThread.talkingPoints?.length ? <details className="mt-3 rounded-lg bg-muted p-3 text-sm"><summary className="cursor-pointer font-medium">Suggested talking points</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{activeThread.talkingPoints.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}</CardContent></Card> : null}
 
           {activeLeadId && canAct ? (
             <AiConversationControls
+              key={activeLeadId}
               leadId={activeLeadId}
+              aiStatus={activeThread?.aiStatus}
+              aiStatusReason={activeThread?.aiStatusReason}
               onChanged={() =>
                 Promise.all([loadConversation(activeLeadId, "initial"), loadThreads()]).then(
                   () => undefined,
@@ -472,7 +518,7 @@ export default function InboxPage() {
           ) : null}
 
           <Card className="gap-0 overflow-hidden py-0">
-            <CardHeader className="border-b py-4"><CardTitle>Messages</CardTitle></CardHeader>
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b py-4"><CardTitle>Messages</CardTitle>{activeLeadId ? <div className="flex gap-2"><Button size="sm" variant="outline" disabled={readBusy || loadedLeadId !== activeLeadId} onClick={() => void markUnread()}>Mark unread</Button>{activeThread?.markedUnread ? <Button size="sm" variant="outline" disabled={readBusy} onClick={markVisibleRead}>Mark read</Button> : null}</div> : null}</CardHeader>
             <CardContent className="px-0">
               <div
                 ref={messageViewportRef}
@@ -494,6 +540,7 @@ export default function InboxPage() {
                 {visibleMessages.map((message) => (
                   <div
                     key={message.id}
+                    data-message-id={message.id}
                     className={`max-w-[88%] rounded-lg px-3 py-2 text-sm ${message.direction === "outbound" ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}
                   >
                     <div className="whitespace-pre-wrap">{message.body}</div>

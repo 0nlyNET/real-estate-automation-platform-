@@ -1,3 +1,4 @@
+import { ConversationReadState1789862400002 } from './migrations/202609200002-conversation-read-state';
 import { AutomationScheduledDueTime1789862400001 } from './migrations/202609200001-automation-scheduled-due-time';
 import { FirstClientPayment1788652800001 } from './migrations/202609060001-first-client-payment';
 import { readFileSync } from "fs";
@@ -145,7 +146,7 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 60,
+      expectedTables: 61,
       actualTables: 12,
       missingTables: [
         "account_invitations",
@@ -165,6 +166,7 @@ describe("deployed legacy schema reproduction", () => {
         "compliance_events",
         "compliance_optouts",
         "conversation_ai_states",
+        "conversation_read_states",
         "durable_jobs",
         "integration_delivery_events",
         "integration_ingress_events",
@@ -222,12 +224,13 @@ describe("deployed legacy schema reproduction", () => {
     await new AssistantConversationReliability1787875200001().up(queryRunner);
     await new FirstClientPayment1788652800001().up(queryRunner);
     await new AutomationScheduledDueTime1789862400001().up(queryRunner);
+    await new ConversationReadState1789862400002().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 60,
-      actualTables: 60,
+      expectedTables: 61,
+      actualTables: 61,
       missingTables: [],
       missingColumns: [],
     });
@@ -352,12 +355,13 @@ describe("deployed legacy schema reproduction", () => {
     await new AssistantConversationReliability1787875200001().up(queryRunner);
     await new FirstClientPayment1788652800001().up(queryRunner);
     await new AutomationScheduledDueTime1789862400001().up(queryRunner);
+    await new ConversationReadState1789862400002().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 60,
-      actualTables: 60,
+      expectedTables: 61,
+      actualTables: 61,
       missingTables: [],
       missingColumns: [],
     });

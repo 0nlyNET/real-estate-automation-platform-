@@ -58,6 +58,7 @@ import { AssistantRun } from '../modules/ai/assistant-run.entity';
 import { CalendarConnection } from '../modules/calendar/calendar-connection.entity';
 import { CalendarOAuthState } from '../modules/calendar/calendar-oauth-state.entity';
 import { BookingWebhookReceipt } from '../modules/calendar/booking-webhook-receipt.entity';
+import { ConversationReadState } from '../modules/messaging/conversation-read-state.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -120,4 +121,5 @@ export const databaseEntities = [
   CalendarConnection,
   CalendarOAuthState,
   BookingWebhookReceipt,
+  ConversationReadState,
 ] as const;

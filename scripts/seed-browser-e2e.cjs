@@ -9,6 +9,9 @@ const {
 } = require('../backend/dist/database/database-options');
 const { Tenant } = require('../backend/dist/modules/tenants/tenant.entity');
 const { User } = require('../backend/dist/modules/users/user.entity');
+const { Lead } = require('../backend/dist/modules/leads/lead.entity');
+const { Message } = require('../backend/dist/modules/messaging/message.entity');
+const { ConversationAiState } = require('../backend/dist/modules/ai/conversation-ai-state.entity');
 
 async function seed() {
   const url = new URL(process.env.DATABASE_URL);
@@ -100,11 +103,39 @@ async function seed() {
         mustChangePassword: true,
       }),
     );
+    const conversationTenant = await tenants.save(tenants.create({
+      name: 'Browser Conversations', plan: 'service', status: 'active', lifecycleStatus: 'ACTIVE',
+      paymentConfirmedAt: new Date(), stripeSubscriptionId: 'sub_browser_conversations',
+      paidSubscriptionId: 'sub_browser_conversations',
+    }));
+    for (const email of ['browser-conversations@example.test', 'browser-peer@example.test']) {
+      await users.save(users.create({ email, role: 'owner', tenantId: conversationTenant.id,
+        passwordHash, isActive: true, isEmailVerified: true, mustChangePassword: false }));
+    }
+    const leads = source.getRepository(Lead);
+    const conversationLead = await leads.save(leads.create({ tenantId: conversationTenant.id,
+      fullName: '', email: 'conversation-lead@example.test', phone: '+15555550199', source: 'Website form',
+    }));
+    const foreignLead = await leads.save(leads.create({ tenantId: clientTenant.id,
+      fullName: 'Another workspace lead', email: 'foreign-lead@example.test',
+    }));
+    const messages = source.getRepository(Message);
+    for (let i = 0; i < 65; i += 1) {
+      await messages.save(messages.create({ leadId: conversationLead.id, channel: 'email',
+        direction: 'inbound', body: `Synthetic conversation message ${i + 1}`, status: 'received',
+        createdAt: new Date(Date.now() - (65 - i) * 1000),
+      }));
+    }
+    // Keep the fixture pause explicit; this suite must never call live providers.
+    await source.getRepository(ConversationAiState).save({ tenantId: conversationTenant.id,
+      leadId: conversationLead.id, ownershipStatus: 'paused', aiPausedReason: 'Synthetic browser test',
+    });
     const fixtureDirectory = join(__dirname, '../frontend/.e2e');
     mkdirSync(fixtureDirectory, { recursive: true });
     writeFileSync(
       join(fixtureDirectory, 'accounts.json'),
-      JSON.stringify({ password, tenantId: pendingTenant.id }),
+      JSON.stringify({ password, tenantId: pendingTenant.id, conversationLeadId: conversationLead.id,
+        conversationTenantId: conversationTenant.id, foreignLeadId: foreignLead.id }),
       { mode: 0o600 },
     );
     console.log(

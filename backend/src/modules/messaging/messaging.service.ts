@@ -188,9 +188,10 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     const hasMore = rows.length > pageSize;
     const items = rows.slice(0, pageSize).map((message) => ({
       leadId: message.lead?.id || null,
-      leadName: message.lead?.fullName || null,
+      leadName: message.lead?.fullName?.trim() || message.lead?.email || 'Lead',
       leadEmail: message.lead?.email || null,
       leadPhone: message.lead?.phone || null,
+      leadSource: message.lead?.source || message.lead?.originalSource || message.lead?.sourceSystem || null,
       assignedToUserId: message.lead?.assignedToUserId || null,
       isAssignedToViewer:
         Boolean(ctx?.userId) && message.lead?.assignedToUserId === ctx?.userId,

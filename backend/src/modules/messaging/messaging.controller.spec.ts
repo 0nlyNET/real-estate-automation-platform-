@@ -16,20 +16,38 @@ function harness(lead: any = null) {
   const leads = {
     findOne: jest.fn().mockResolvedValue(lead),
   };
+  const conversationInbox = {
+    readStates: jest.fn().mockResolvedValue([]),
+    aiSummaries: jest.fn().mockResolvedValue(new Map()),
+    markRead: jest.fn().mockResolvedValue({}),
+    markUnread: jest.fn().mockResolvedValue({}),
+  };
   const controller = new MessagingController(
     messaging as any,
     inbox as any,
     compliance as any,
     {} as any,
     leads as any,
+    conversationInbox as any,
   );
-  return { controller, messaging, inbox, compliance, leads };
+  return { controller, messaging, inbox, compliance, leads, conversationInbox };
 }
 
 describe('MessagingController client inbox boundaries', () => {
   const tenantId = '00000000-0000-4000-8000-000000000001';
   const leadId = '00000000-0000-4000-8000-000000000010';
   const requestId = '00000000-0000-4000-8000-000000000020';
+
+  it('uses authenticated identity for personal read writes, never identity supplied in the body', async () => {
+    const h = harness();
+    const request = { user: { tenantId, sub: 'viewer', role: 'read_only' } };
+    await h.controller.markRead(request, leadId, {
+      messageId: requestId, unreadVersion: 3, userId: 'victim', tenantId: 'foreign',
+    } as any);
+    expect(h.conversationInbox.markRead).toHaveBeenCalledWith(tenantId, 'viewer', leadId, requestId, 3);
+    await h.controller.markUnread(request, leadId);
+    expect(h.conversationInbox.markUnread).toHaveBeenCalledWith(tenantId, 'viewer', leadId);
+  });
 
   it('defaults to a real email reply when a lead has both contact channels', async () => {
     const h = harness({ id: leadId, tenantId, email: 'lead@example.com', phone: '+15555550100' });
