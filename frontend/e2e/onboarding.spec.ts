@@ -40,10 +40,8 @@ test("owner sees honest readiness, disabled testing, and a responsive workspace 
   })
   await login(page, "browser-owner@example.test")
   await openOnboarding(page)
-  await expect(
-    page.getByText("Not launch ready", { exact: true }),
-  ).toBeVisible()
-  await expect(page.getByText("100% onboarded", { exact: true })).toHaveCount(0)
+  await expect(page.getByText(/^Not launch ready$/i)).toBeVisible()
+  await expect(page.getByText(/^100% onboarded$/i)).toHaveCount(0)
   await expect(
     page.getByText("Inbound replies tested", { exact: true }),
   ).toBeVisible()

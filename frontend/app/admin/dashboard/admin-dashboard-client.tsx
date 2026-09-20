@@ -2807,8 +2807,8 @@ export function AdminDashboardClient({
       ) : null}
 
       {view === "onboarding" ? (
-        <div className="grid gap-5 xl:grid-cols-[18rem_minmax(0,1fr)]">
-          <Card className="h-fit">
+        <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[18rem_minmax(0,1fr)]">
+          <Card className="h-fit min-w-0">
             <CardHeader><CardTitle>Client launches</CardTitle><p className="text-sm text-muted-foreground">Select a workspace; progress is saved by the backend.</p></CardHeader>
             <CardContent className="space-y-2">
               {onboardingClients.length ? onboardingClients.map((tenant) => (
