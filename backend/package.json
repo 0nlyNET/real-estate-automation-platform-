@@ -74,9 +74,9 @@
   },
   "overrides": {
     "js-yaml": "4.3.2",
-    "multer": "2.2.0",
+    "multer": "2.4.0",
     "@istanbuljs/load-nyc-config": {
-      "js-yaml": "3.15.1"
+      "js-yaml": "3.15.2"
     },
     "typeorm": {
       "minimatch": "10.2.5",
