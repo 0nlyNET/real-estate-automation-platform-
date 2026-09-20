@@ -25,6 +25,7 @@ import { SendDecision } from './send-decision.entity';
 import { SendDecisionService } from './send-decision.service';
 import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
 import { TestRun } from '../testing/test-run.entity';
+import { ConversationInboxService } from './conversation-inbox.service';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { TestRun } from '../testing/test-run.entity';
   ],
   controllers: [MessagingController],
   providers: [
+    ConversationInboxService,
     MessagingService,
     InboxSendService,
     MessageSafetyService,

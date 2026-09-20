@@ -125,7 +125,7 @@ assert.doesNotMatch(inboxPreview, /lastMessagePreview|unreadCount/)
 
 const conversationControls = read("components/ai/conversation-controls.tsx")
 assert.match(conversationControls, /Take Over/)
-assert.match(conversationControls, /Return to AI/)
+assert.match(conversationControls, /Resume AI/)
 assert.match(conversationControls, /window\.confirm/)
 assert.match(conversationControls, /drafts\/\$\{draft\.id\}\/approve/)
 assert.match(conversationControls, /drafts\/\$\{draft\.id\}\/edit-and-send/)

@@ -59,8 +59,12 @@ function ownershipLabel(status: ConversationAiView["ownershipStatus"]) {
 export function AiConversationControls({
   leadId,
   onChanged,
+  aiStatus,
+  aiStatusReason,
 }: {
   leadId: string
+  aiStatus?: "AI Active" | "Human Takeover" | "AI Paused" | "Needs Attention"
+  aiStatusReason?: string | null
   onChanged?: () => void | Promise<void>
 }) {
   const [conversation, setConversation] =
@@ -146,7 +150,7 @@ export function AiConversationControls({
                   : "outline"
               }
             >
-              {ownershipLabel(conversation.ownershipStatus)}
+              {aiStatus || ownershipLabel(conversation.ownershipStatus)}
             </Badge>
           ) : null}
         </div>
@@ -167,13 +171,13 @@ export function AiConversationControls({
         ) : null}
         {conversation ? (
           <>
-            {conversation.aiPausedReason || conversation.escalationReason ? (
+            {aiStatusReason || conversation.aiPausedReason || conversation.escalationReason ? (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
                 <div className="flex items-center gap-2 font-medium">
                   <ShieldAlert className="h-4 w-4" /> Human attention required
                 </div>
                 <p className="mt-1 text-muted-foreground">
-                  {conversation.escalationReason ||
+                  {aiStatusReason || conversation.escalationReason ||
                     conversation.aiPausedReason}
                 </p>
               </div>
@@ -212,7 +216,7 @@ export function AiConversationControls({
                   disabled={Boolean(busy)}
                   onClick={returnToAi}
                 >
-                  <Play /> {busy === "return" ? "Returning…" : "Return to AI"}
+                  <Play /> {busy === "return" ? "Returning…" : "Resume AI"}
                 </Button>
               ) : null}
             </div>

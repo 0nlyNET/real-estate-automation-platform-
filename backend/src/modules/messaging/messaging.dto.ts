@@ -3,6 +3,8 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  IsInt,
+  Min,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -28,4 +30,13 @@ export class SendMessageDto {
 export class SendBookingLinkDto {
   @IsUUID()
   leadId!: string;
+}
+
+export class MarkConversationReadDto {
+  @IsUUID()
+  messageId!: string;
+
+  @IsInt()
+  @Min(0)
+  unreadVersion!: number;
 }

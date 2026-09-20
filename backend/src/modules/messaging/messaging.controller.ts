@@ -20,7 +20,8 @@ import { ComplianceService } from '../compliance/compliance.service';
 import { Lead } from '../leads/lead.entity';
 import { UserRole } from '../../common/rbac';
 import { RolesGuard, RequireRole } from '../../common/guards/roles.guard';
-import { SendBookingLinkDto, SendMessageDto } from './messaging.dto';
+import { MarkConversationReadDto, SendBookingLinkDto, SendMessageDto } from './messaging.dto';
+import { ConversationInboxService } from './conversation-inbox.service';
 import { SettingsService } from '../settings/settings.service';
 import { isSafeBookingUrl } from '../../common/booking-link';
 
@@ -34,6 +35,7 @@ export class MessagingController {
     private readonly settingsService: SettingsService,
     @InjectRepository(Lead)
     private readonly leadRepository: Repository<Lead>,
+    private readonly conversationInbox: ConversationInboxService,
   ) {}
 
   @Get('threads')
@@ -47,7 +49,7 @@ export class MessagingController {
     const tenantId = req.user?.tenantId;
     if (!tenantId) throw new ForbiddenException('Missing tenant');
 
-    return this.messagingService.listThreads(
+    const page = await this.messagingService.listThreads(
       tenantId,
       parsePageInteger(take, 'take', 50, 1, 200),
       parsePageInteger(skip, 'skip', 0, 0, 100_000),
@@ -58,6 +60,17 @@ export class MessagingController {
       },
       includeMeta === '1' || includeMeta === 'true',
     );
+    const items = Array.isArray(page) ? page : page.items;
+    const leadIds = items.flatMap((item) => item.leadId ? [item.leadId] : []);
+    const [reads, ai] = await Promise.all([
+      this.conversationInbox.readStates(tenantId, req.user?.sub, leadIds),
+      this.conversationInbox.aiSummaries(tenantId, leadIds),
+    ]);
+    const enriched = items.map((item) => ({ ...item,
+      ...reads.find((row) => row.leadId === item.leadId),
+      ...ai.get(item.leadId!),
+    }));
+    return Array.isArray(page) ? enriched : { ...page, items: enriched };
   }
 
   @Get('threads/:leadId')
@@ -73,7 +86,7 @@ export class MessagingController {
     if (!tenantId) throw new ForbiddenException('Missing tenant');
     if (!leadId?.trim()) throw new BadRequestException('leadId is required');
 
-    return this.messagingService.getThreadMessages(
+    const page = await this.messagingService.getThreadMessages(
       tenantId,
       leadId.trim(),
       {
@@ -87,6 +100,19 @@ export class MessagingController {
         changedAfter: changedAfter?.trim() || undefined,
       },
     );
+    if (Array.isArray(page)) return page;
+    const [readState] = await this.conversationInbox.readStates(tenantId, req.user?.sub, [leadId.trim()]);
+    return { ...page, readState };
+  }
+
+  @Post('threads/:leadId/read')
+  async markRead(@Req() req: any, @Param('leadId') leadId: string, @Body() body: MarkConversationReadDto) {
+    return this.conversationInbox.markRead(req.user?.tenantId, req.user?.sub, leadId, body?.messageId, body?.unreadVersion);
+  }
+
+  @Post('threads/:leadId/unread')
+  async markUnread(@Req() req: any, @Param('leadId') leadId: string) {
+    return this.conversationInbox.markUnread(req.user?.tenantId, req.user?.sub, leadId);
   }
 
   @Post('send')
