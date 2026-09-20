@@ -64,7 +64,8 @@ export class MessagingController {
     const leadIds = items.flatMap((item) => item.leadId ? [item.leadId] : []);
     const [reads, ai] = await Promise.all([
       this.conversationInbox.readStates(tenantId, req.user?.sub, leadIds),
-      this.conversationInbox.aiSummaries(tenantId, leadIds),
+      this.conversationInbox.aiSummaries(tenantId, items.flatMap((item) =>
+        item.leadId ? [{ leadId: item.leadId, channel: item.channel }] : [])),
     ]);
     const enriched = items.map((item) => ({ ...item,
       ...reads.find((row) => row.leadId === item.leadId),

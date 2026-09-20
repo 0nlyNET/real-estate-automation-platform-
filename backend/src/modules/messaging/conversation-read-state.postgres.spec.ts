@@ -136,7 +136,7 @@ describePostgres("durable per-user conversation reads on PostgreSQL", () => {
       service.markRead(tenant, user, lead, third, 0),
     ]);
     expect(await service.markRead(tenant, user, lead, first, 0)).toMatchObject({
-      lastReadMessageId: third,
+      lastReadMessageId: second,
       unreadCount: 0,
     });
   });
@@ -154,7 +154,32 @@ describePostgres("durable per-user conversation reads on PostgreSQL", () => {
     });
     expect(await service.markRead(tenant, user, lead, third, 1)).toMatchObject({
       isUnread: false,
-      lastReadMessageId: third,
+      lastReadMessageId: second,
+    });
+  });
+
+  it("never reads unseen inbound messages through a later visible outbound reply", async () => {
+    await service.markRead(tenant, user, lead, first, 0);
+    // The second inbound arrived outside the rendered snapshot, before the
+    // outbound reply. Only that reply has now been appended to the browser.
+    expect(await service.markRead(tenant, user, lead, third, 0)).toMatchObject({
+      lastReadMessageId: first,
+      unreadCount: 1,
+      isUnread: true,
+    });
+    await service.markUnread(tenant, user, lead);
+    expect(await service.markRead(tenant, user, lead, third, 1)).toMatchObject({
+      lastReadMessageId: first,
+      markedUnread: false,
+      unreadCount: 1,
+    });
+    // Outbound-only conversations still support manual unread/read toggling.
+    await source.query("DELETE FROM messages WHERE direction = 'inbound'");
+    await service.markUnread(tenant, peer, lead);
+    expect(await service.markRead(tenant, peer, lead, third, 1)).toMatchObject({
+      lastReadMessageId: null,
+      markedUnread: false,
+      isUnread: false,
     });
   });
 

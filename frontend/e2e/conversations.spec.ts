@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type BrowserContext, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -7,13 +7,22 @@ const requireBackend = createRequire(join(process.cwd(), '../backend/package.jso
 const { Client } = requireBackend('pg')
 const accounts = () => JSON.parse(readFileSync(join(process.cwd(), '.e2e/accounts.json'), 'utf8'))
 const origin = { origin: 'http://127.0.0.1:3400' }
+const sessions = new Map<string, Awaited<ReturnType<BrowserContext['cookies']>>>()
 
 async function login(page: Page, email = 'browser-conversations@example.test') {
+  // These tests exercise Conversations. Reuse each worker's real login cookies
+  // to stay within the production login limit shared by the browser suite.
+  const cookies = sessions.get(email)
+  if (cookies) {
+    await page.context().addCookies(cookies)
+    return
+  }
   await page.goto('/login')
   await page.getByLabel('Email', { exact: true }).fill(email)
   await page.getByLabel('Password', { exact: true }).fill(accounts().password)
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page).toHaveURL(/\/app\//)
+  sessions.set(email, await page.context().cookies())
 }
 
 async function state(page: Page) {
@@ -62,6 +71,21 @@ test('Conversations preserves a message arriving between rendering and read ackn
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath('conversations.png'), fullPage: true })
 
+    // Simulate a successful send response without contacting a provider. The
+    // reply is newer than the unseen inbound and is appended directly by the UI.
+    const outbound = (await db.query(`INSERT INTO messages ("leadId",channel,direction,body,status)
+      VALUES ($1,'email','outbound','Synthetic manual reply after the unseen inbound','sent')
+      RETURNING id,channel,direction,body,status,created_at AS "createdAt"`, [leadId])).rows[0]
+    await page.route('**/messaging/send', async (route) => {
+      await route.fulfill({ json: { status: outbound.status, message: outbound } })
+    })
+    await page.getByPlaceholder('Write an email reply…').fill(outbound.body)
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await expect(page.locator(`[data-message-id="${outbound.id}"]`)).toBeVisible()
+    await page.waitForTimeout(500)
+    expect((await state(page)).unreadCount).toBe(1)
+    expect((await state(page)).lastReadMessageId).not.toBe(outbound.id)
+
     await page.getByRole('button', { name: 'Mark unread', exact: true }).click()
     await expect.poll(async () => (await state(page)).markedUnread).toBe(true)
     await page.goto('/app/leads')
@@ -97,4 +121,30 @@ test('Conversations API rejects foreign leads, forged watermark ownership, and m
   expect((await page.request.post(`/api/backend/messaging/threads/${conversationLeadId}/read`, {
     headers: origin, data: {},
   })).status()).toBe(400)
+})
+
+test('a stale read response cannot clear a newer mark-unread from another tab', async ({ page }) => {
+  await login(page)
+  const leadId = accounts().conversationLeadId
+  let readRequests = 0
+  await page.route(`**/messaging/threads/${leadId}/read`, async (route) => {
+    readRequests += 1
+    if (readRequests === 1) {
+      const unread = await page.request.post(`/api/backend/messaging/threads/${leadId}/unread`, { headers: origin })
+      expect(unread.status()).toBe(201)
+    }
+    await route.continue()
+  })
+  const firstRead = page.waitForResponse((response) => response.url().endsWith(`/threads/${leadId}/read`))
+  await page.goto('/app/inbox')
+  await page.locator('[data-message-id]').last().scrollIntoViewIfNeeded()
+  await firstRead
+  await expect(page.getByRole('button', { name: 'Mark read', exact: true })).toBeVisible()
+  // Allow observer notifications and their 200ms debounce to settle. A broken
+  // client retries with the returned version and silently clears the marker.
+  await page.waitForTimeout(1500)
+  expect((await state(page)).markedUnread).toBe(true)
+  expect(readRequests).toBe(1)
+  await page.getByRole('button', { name: 'Mark read', exact: true }).click()
+  await expect.poll(async () => (await state(page)).markedUnread).toBe(false)
 })

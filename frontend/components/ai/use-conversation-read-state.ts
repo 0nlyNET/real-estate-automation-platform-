@@ -14,7 +14,7 @@ export type ConversationReadState = {
 
 export function useConversationReadState({ leadId, messages, readState, viewport, onUpdated }: {
   leadId: string | null
-  messages: { id: string }[]
+  messages: { id: string; direction: "inbound" | "outbound" }[]
   readState: ConversationReadState | null
   viewport: RefObject<HTMLDivElement | null>
   onUpdated: (state: ConversationReadState) => void
@@ -30,14 +30,18 @@ export function useConversationReadState({ leadId, messages, readState, viewport
 
   useEffect(() => {
     active.current = leadId
+    if (leadId) versions.current.delete(leadId)
     suppressed.current = null
     visibleMessage.current = null
     return () => { active.current = null }
   }, [leadId])
 
   useEffect(() => {
-    if (readState) versions.current.set(readState.leadId,
-      Math.max(versions.current.get(readState.leadId) || 0, readState.unreadVersion))
+    if (!readState) return
+    const previous = versions.current.get(readState.leadId)
+    if (previous !== undefined && readState.markedUnread && readState.unreadVersion > previous &&
+        active.current === readState.leadId) suppressed.current = readState.leadId
+    versions.current.set(readState.leadId, Math.max(previous || 0, readState.unreadVersion))
   }, [readState])
 
   const acknowledge = useCallback((messageId: string) => {
@@ -57,6 +61,9 @@ export function useConversationReadState({ leadId, messages, readState, viewport
         const state = await apiFetch<ConversationReadState>(`/messaging/threads/${leadId}/read`, {
           method: "POST", body: { messageId, unreadVersion },
         })
+        // Another tab may have marked unread while this request was in flight.
+        // Do not automatically retry the same old view with its newer version.
+        if (state.markedUnread && state.unreadVersion > unreadVersion) suppressed.current = leadId
         versions.current.set(leadId, Math.max(versions.current.get(leadId) || 0, state.unreadVersion))
         onUpdated(state)
         setReadError("")
@@ -74,13 +81,17 @@ export function useConversationReadState({ leadId, messages, readState, viewport
     let readTimer: ReturnType<typeof setTimeout> | undefined
     const markVisible = () => {
       clearTimeout(readTimer)
-      const latest = [...messages].reverse().find((message) => {
+      const visibleMessages = [...messages].reverse().filter((message) => {
         if (!visible.has(message.id)) return false
         const bounds = root.querySelector<HTMLElement>(`[data-message-id="${message.id}"]`)?.getBoundingClientRect()
         // An explicit observer root may itself be outside the browser viewport.
         return bounds && bounds.bottom > 0 && bounds.top < window.innerHeight &&
           bounds.right > 0 && bounds.left < window.innerWidth
       })
+      // Sending a reply does not prove that earlier inbound messages were seen.
+      // Outbound-only views may clear a manual marker, but the server never
+      // advances the inbound read boundary through an outbound message.
+      const latest = visibleMessages.find((message) => message.direction === "inbound") || visibleMessages[0]
       visibleMessage.current = latest?.id || null
       // Coalesce scrolling into one acknowledgement of the settled viewport.
       if (latest) readTimer = setTimeout(() => acknowledge(latest.id), 200)

@@ -12,6 +12,7 @@ import { BrokerageKnowledge } from "../ai/brokerage-knowledge.entity";
 import { PlatformAiControl } from "../ai/platform-ai-control.entity";
 import { AiRun } from "../ai/ai-run.entity";
 import { LeadHandoff } from "../client-operations/lead-handoff.entity";
+import { Lead } from "../leads/lead.entity";
 
 export type InboxAiStatus =
   | "AI Active"
@@ -110,16 +111,19 @@ export class ConversationInboxService {
       // Compare and copy in PostgreSQL: never use server-now, the thread's
       // newest message, or a client timestamp. Older concurrent reads cannot
       // move the watermark backwards; mark-unread invalidates old requests.
+      // Outbound replies can clear a manual marker but cannot prove that any
+      // preceding inbound message was visible in the client's snapshot.
       await manager.query(
         `
         UPDATE conversation_read_states r
-        SET last_read_at = m.created_at, last_read_message_id = m.id,
+        SET last_read_at = CASE WHEN m.direction = 'inbound' THEN m.created_at ELSE r.last_read_at END,
+            last_read_message_id = CASE WHEN m.direction = 'inbound' THEN m.id ELSE r.last_read_message_id END,
             marked_unread = false, updated_at = now()
         FROM messages m
         WHERE r.tenant_id = $1 AND r.user_id = $2 AND r.lead_id = $3
           AND m.id = $4 AND m."leadId" = r.lead_id
           AND r.unread_version = $5
-          AND (r.last_read_at IS NULL OR
+          AND (m.direction = 'outbound' OR r.last_read_at IS NULL OR
             (r.last_read_at, r.last_read_message_id) <= (m.created_at, m.id))
       `,
         [tenantId, userId, leadId, messageId, unreadVersion],
@@ -159,13 +163,17 @@ export class ConversationInboxService {
     );
   }
 
-  async aiSummaries(tenantId: string, leadIds: string[]) {
+  async aiSummaries(
+    tenantId: string,
+    threads: { leadId: string; channel: string }[],
+  ) {
+    const leadIds = threads.map((thread) => thread.leadId);
     if (!leadIds.length)
       return new Map<
         string,
         { aiStatus: InboxAiStatus; aiStatusReason: string | null }
       >();
-    const [states, settings, knowledge, platform, entitlement, runs, handoffs] =
+    const [states, settings, knowledge, platform, leads, runs, handoffs] =
       await Promise.all([
         this.source
           .getRepository(ConversationAiState)
@@ -179,7 +187,10 @@ export class ConversationInboxService {
         this.source
           .getRepository(PlatformAiControl)
           .findOne({ where: { id: "global" } }),
-        this.entitlements.evaluate(tenantId, "start_automation"),
+        this.source.getRepository(Lead).find({
+          where: { tenantId, id: In(leadIds) },
+          select: { id: true, testRunId: true },
+        }),
         this.source
           .getRepository(AiRun)
           .createQueryBuilder("run")
@@ -190,18 +201,41 @@ export class ConversationInboxService {
           .addOrderBy("run.createdAt", "DESC")
           .addOrderBy("run.id", "DESC")
           .getMany(),
-        this.source
-          .getRepository(LeadHandoff)
-          .find({
-            where: {
-              tenantId,
-              leadId: In(leadIds),
-              status: In(["open", "opened", "snoozed"]),
-            },
-          }),
+        this.source.getRepository(LeadHandoff).find({
+          where: {
+            tenantId,
+            leadId: In(leadIds),
+            status: In(["open", "opened", "snoozed"]),
+          },
+        }),
       ]);
+    // Match runtime preflight's channel action and persisted controlled-test
+    // context. Cache the four possible decisions within this inbox request.
+    const decisions = new Map<
+      string,
+      ReturnType<EntitlementService["evaluate"]>
+    >();
+    const entitlements = await Promise.all(
+      threads.map(({ leadId, channel }) => {
+        const controlledTest = Boolean(
+          leads.find((lead) => lead.id === leadId)?.testRunId,
+        );
+        const action =
+          channel === "sms" ? "send_automated_sms" : "send_automated_email";
+        const key = `${action}:${controlledTest}`;
+        if (!decisions.has(key))
+          decisions.set(
+            key,
+            this.entitlements.evaluate(tenantId, action, new Date(), {
+              controlledTest,
+            }),
+          );
+        return decisions.get(key)!;
+      }),
+    );
     return new Map(
-      leadIds.map((leadId) => {
+      threads.map(({ leadId }, index) => {
+        const entitlement = entitlements[index];
         const state = states.find((row) => row.leadId === leadId);
         const run = runs.find((row) => row.leadId === leadId);
         const handoff = handoffs.find((row) => row.leadId === leadId);

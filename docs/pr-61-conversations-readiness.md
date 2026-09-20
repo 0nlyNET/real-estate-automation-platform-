@@ -8,6 +8,8 @@ Reconstructed from `main` at `8fb5b87a71bb529407a25378017768049b66af54`, which c
 - Durable read state keyed by tenant, lead, and authenticated user. Shared-thread readers can change their own read state; existing reply and takeover ownership checks remain intact.
 - The browser acknowledges a message actually visible in the message viewport. It never acknowledges the newer thread-list preview or uses the current time as a read boundary.
 - The API validates the user's tenant and the watermark message's lead. PostgreSQL compares `(created_at, id)` without losing timestamp precision and only advances the watermark. Mark-unread increments a version so old page requests cannot undo it.
+- Only visible inbound messages advance the inbound read boundary. A later outbound reply cannot clear an unseen inbound message; outbound-only conversations still support manual unread/read toggling. An open tab preserves a newer manual unread marker set in another tab.
+- AI status uses the same channel entitlement action and persisted controlled-test context as runtime preflight, including suspension and global pause checks.
 - Read/unread writes do not send messages, call OpenAI, resume jobs, or change conversation ownership.
 - Global pause, stale jobs, suspension, replay guards, SendGrid handlers, AI generation and outbound provider submission code are unchanged.
 
@@ -50,14 +52,14 @@ These findings describe actual code usage, not deployed values. No secret values
 
 Local validation completed:
 
-- Backend: 125 suites / 664 tests passed; 12 tests across four database-conditional suites are deferred to CI when `TEST_POSTGRES_URL` is absent.
-- The six new read-state/migration tests also passed separately against embedded PostgreSQL (PGlite).
+- Backend: 125 suites / 665 tests passed; 13 tests across four database-conditional suites are deferred to CI when `TEST_POSTGRES_URL` is absent.
+- The seven new read-state/migration tests also passed separately against embedded PostgreSQL (PGlite).
 - All 27 migrations applied to a fresh embedded PostgreSQL database; latest migration rollback/reapply passed.
-- Ten desktop/mobile browser tests passed through the actual frontend, API, and test database, including the existing onboarding tests. The local harness used Chromium 153, UTC clocks, and a serialized connection pool for PGlite. Repository CI uses native PostgreSQL 15 and the standard Playwright browser.
+- Twelve desktop/mobile browser tests passed through the actual frontend, API, and test database, including the existing onboarding tests. The local harness used Chromium 153, UTC clocks, and a serialized connection pool for PGlite. Repository CI uses native PostgreSQL 15 and the standard Playwright browser. `npm run test:e2e` starts a fresh API/frontend for each device project so the expanded suite respects the unchanged production login/session rate limits.
 - Backend/frontend type checks and builds, all frontend verification scripts, backend/frontend lint, archived admin UI build/lint, secret/workflow/production-artifact checks passed. Frontend lint has 46 existing warnings and zero errors.
 - Backend, frontend and archived admin dependency audits each reported zero vulnerabilities.
 
-Automated coverage includes identity fallback, per-user persistence, tenant and message ownership, out-of-order reads, timestamp ties/microseconds, a post-render arrival, mark-unread versus delayed read requests, migration rollback/rerun, desktop/mobile inbox behavior, and existing onboarding/automation/email regressions. Browser fixtures use a disposable local database and synthetic users; global automation is paused. They do not exercise a live SendGrid/OpenAI round trip.
+Automated coverage includes identity fallback, per-user persistence, tenant and message ownership, out-of-order reads, timestamp ties/microseconds, a post-render arrival followed by a reply, mark-unread versus delayed requests from another tab, controlled-test AI status, migration rollback/rerun, desktop/mobile inbox behavior, and existing onboarding/automation/email regressions. Browser fixtures use a disposable local database and synthetic users; global automation is paused. The reply race uses a simulated provider-send response and a persisted test message. These tests do not exercise a live SendGrid/OpenAI round trip. See the PR for final native PostgreSQL and browser CI results.
 
 No staging/provider credentials or deployment connection were available in this session. Before activating the first client:
 

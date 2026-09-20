@@ -4,6 +4,7 @@ import { WorkspaceAiSettings } from "../ai/workspace-ai-settings.entity";
 import { BrokerageKnowledge } from "../ai/brokerage-knowledge.entity";
 import { PlatformAiControl } from "../ai/platform-ai-control.entity";
 import { LeadHandoff } from "../client-operations/lead-handoff.entity";
+import { Lead } from "../leads/lead.entity";
 
 describe("authoritative inbox AI status", () => {
   const previousKey = process.env.OPENAI_API_KEY;
@@ -14,6 +15,8 @@ describe("authoritative inbox AI status", () => {
   let run: any;
   let handoff: any;
   let entitlement: any;
+  let lead: any;
+  let evaluate: jest.Mock;
   let service: ConversationInboxService;
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "test-only-ai-key";
@@ -29,6 +32,7 @@ describe("authoritative inbox AI status", () => {
     run = null;
     handoff = null;
     entitlement = { allowed: true, reasons: [] };
+    lead = { id: "lead", testRunId: null };
     const query: any = {};
     for (const method of [
       "distinctOn",
@@ -46,9 +50,11 @@ describe("authoritative inbox AI status", () => {
             ? state
               ? [state]
               : []
-            : entity === LeadHandoff && handoff
-              ? [handoff]
-              : [],
+            : entity === Lead
+              ? [lead]
+              : entity === LeadHandoff && handoff
+                ? [handoff]
+                : [],
         ),
         findOne: jest.fn(async () =>
           entity === WorkspaceAiSettings
@@ -62,10 +68,8 @@ describe("authoritative inbox AI status", () => {
         createQueryBuilder: () => query,
       }),
     };
-    service = new ConversationInboxService(
-      source as any,
-      { evaluate: jest.fn(async () => entitlement) } as any,
-    );
+    evaluate = jest.fn(async () => entitlement);
+    service = new ConversationInboxService(source as any, { evaluate } as any);
   });
   afterEach(() => {
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
@@ -75,7 +79,42 @@ describe("authoritative inbox AI status", () => {
     else process.env.GLOBAL_AUTOMATIONS_DISABLED = previousPause;
   });
   const status = async (service: ConversationInboxService) =>
-    (await service.aiSummaries("tenant", ["lead"])).get("lead")?.aiStatus;
+    (
+      await service.aiSummaries("tenant", [
+        { leadId: "lead", channel: "email" },
+      ])
+    ).get("lead")?.aiStatus;
+
+  it("matches runtime entitlement for controlled test leads without granting it to real leads", async () => {
+    evaluate.mockImplementation(async (_tenant, _action, _now, options) => ({
+      allowed: options?.controlledTest === true,
+      reasons: options?.controlledTest
+        ? []
+        : ["Workspace lifecycle is TESTING"],
+    }));
+    expect(await status(service)).toBe("AI Paused");
+    lead.testRunId = "persisted-test-run";
+    expect(await status(service)).toBe("AI Active");
+    expect(evaluate).toHaveBeenLastCalledWith(
+      "tenant",
+      "send_automated_email",
+      expect.any(Date),
+      { controlledTest: true },
+    );
+    await service.aiSummaries("tenant", [{ leadId: "lead", channel: "sms" }]);
+    expect(evaluate).toHaveBeenLastCalledWith(
+      "tenant",
+      "send_automated_sms",
+      expect.any(Date),
+      { controlledTest: true },
+    );
+    entitlement = {
+      allowed: false,
+      reasons: ["Workspace lifecycle is SUSPENDED"],
+    };
+    evaluate.mockImplementation(async () => entitlement);
+    expect(await status(service)).toBe("AI Paused");
+  });
 
   it("reports active only when configured, approved and entitled", async () => {
     expect(await status(service)).toBe("AI Active");
