@@ -147,7 +147,7 @@ export default function OnboardingPage() {
     setMessage("")
     const accountOwner = String(data.contacts.accountOwner || "").trim()
     const normalized: RecordData = {
-      ...data,
+      businessIdentity: data.businessIdentity,
       contacts: {
         ...data.contacts,
         billingContact: data.contacts.billingContact || accountOwner,
@@ -162,6 +162,8 @@ export default function OnboardingPage() {
         reportingFrequency: data.serviceScope.reportingFrequency || "weekly",
         includedChannels: [data.smsEnabled ? "sms" : null, data.emailEnabled ? "email" : null].filter(Boolean),
       },
+      leadHandling: data.leadHandling,
+      brandCommunication: data.brandCommunication,
       consentConfiguration: {
         ...data.consentConfiguration,
         consentPolicyVersion: data.consentConfiguration.consentPolicyVersion || "client-onboarding-v1",
@@ -171,6 +173,10 @@ export default function OnboardingPage() {
         providerAccountOwner: "RealtyTechAI managed platform",
         authorizationStatus: data.integrationConfiguration.authorizationStatus || "client authorized setup",
       },
+      smsEnabled: data.smsEnabled,
+      emailEnabled: data.emailEnabled,
+      bookingEnabled: data.bookingEnabled,
+      targetLaunchDate: data.targetLaunchDate || null,
     }
     try {
       await apiFetch("/onboarding", { method: "PUT", body: normalized })
