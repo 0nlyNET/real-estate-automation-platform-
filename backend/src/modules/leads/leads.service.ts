@@ -889,6 +889,26 @@ export class LeadsService {
     return lead;
   }
 
+  async listLeadEvents(
+    tenantId: string | undefined,
+    leadId: string,
+    take = 50,
+  ): Promise<LeadEvent[]> {
+    if (!tenantId) throw new Error('Missing tenant');
+
+    const lead = await this.leadsRepository.findOne({
+      where: { id: leadId, tenantId },
+    });
+    if (!lead) throw new NotFoundException('Lead not found');
+
+    const takeNum = Math.min(Math.max(take || 50, 1), 200);
+    return this.leadEventsRepository.find({
+      where: { lead: { id: lead.id } } as any,
+      order: { createdAt: 'DESC' } as any,
+      take: takeNum,
+    });
+  }
+
   async assignLead(params: { tenantId: string | undefined; leadId: string; assignedToUserId?: string | null; assignedToTeamId?: string | null; assignedToLabel?: string | null }) {
     if (!params.tenantId) throw new Error('Missing tenant');
     const lead = await this.leadsRepository.findOne({ where: { id: params.leadId, tenantId: params.tenantId } });

@@ -84,6 +84,20 @@ export class LeadsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get("leads/:id/events")
+  leadEvents(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Query("take") take?: string,
+  ) {
+    return this.leadsService.listLeadEvents(
+      req.user?.tenantId,
+      id,
+      take ? parseInt(take, 10) : 50,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get("leads/:id")
   getOne(@Req() req: any, @Param("id") id: string) {
     return this.leadsService.getLeadById(req.user?.tenantId, id, {

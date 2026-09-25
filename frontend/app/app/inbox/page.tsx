@@ -72,6 +72,12 @@ type MessagePage = {
 
 type Enrollment = { id: string; status: "active" | "paused" | "stopped" | "completed"; sequence?: { name: string } | null }
 
+type LeadEligibility = {
+  leadId: string
+  sms: { allowed: boolean; code?: string }
+  email: { allowed: boolean; code?: string }
+}
+
 type SendResult = {
   status: Msg["status"]
   duplicate?: boolean
@@ -148,6 +154,7 @@ export default function InboxPage() {
   const [threadTake, setThreadTake] = useState(50)
   const [hasMoreThreads, setHasMoreThreads] = useState(false)
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null)
+  const [eligibility, setEligibility] = useState<LeadEligibility | null>(null)
   const [messages, setMessages] = useState<Msg[]>([])
   const [readState, setReadState] = useState<ConversationReadState | null>(null)
   const [enrollments, setEnrollments] = useState<Enrollment[]>([])
@@ -345,7 +352,22 @@ export default function InboxPage() {
     return () => window.clearInterval(interval)
   }, [activeLeadId, loadConversation])
 
+  useEffect(() => {
+    if (!activeLeadId) {
+      setEligibility(null)
+      return
+    }
+    let cancelled = false
+    apiFetch<LeadEligibility>(`/compliance/leads/${activeLeadId}/eligibility`)
+      .then((result) => { if (!cancelled) setEligibility(result) })
+      .catch(() => { if (!cancelled) setEligibility(null) })
+    return () => { cancelled = true }
+  }, [activeLeadId])
+
   const activeThread = threads.find((item) => item.leadId === activeLeadId)
+  const consentBlocked = [eligibility?.sms, eligibility?.email].some(
+    (channel) => channel?.code === "MISSING_AFFIRMATIVE_CONSENT",
+  )
   const visibleMessages = loadedLeadId === activeLeadId ? messages : []
   const updateReadState = useCallback((state: ConversationReadState) => {
     // Discard an in-flight list snapshot taken before this write completed.
@@ -501,7 +523,7 @@ export default function InboxPage() {
         </Card>
 
         <div className="min-w-0 space-y-4">
-          {activeThread ? <Card><CardContent className="p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{activeThread.leadName?.trim() || activeThread.leadEmail || "Lead"}</h2><Badge variant="outline">{activeThread.readiness?.replaceAll("_", " ") || "qualifying"}</Badge>{!canAct ? <Badge variant="secondary">Shared read-only</Badge> : null}</div><div className="mt-2 space-y-1 break-all text-sm text-muted-foreground">{activeThread.leadEmail ? <p>{activeThread.leadEmail}</p> : null}{activeThread.leadPhone ? <p>{activeThread.leadPhone}</p> : null}{activeThread.leadSource ? <p>Source: {activeThread.leadSource}</p> : null}</div>{activeThread.aiStatus ? <div className="mt-2"><Badge variant={activeThread.aiStatus === "Needs Attention" ? "destructive" : "outline"}>{activeThread.aiStatus}</Badge>{activeThread.aiStatusReason ? <p className="mt-1 text-xs text-muted-foreground">{activeThread.aiStatusReason}</p> : null}</div> : null}<p className="mt-2 text-sm">{activeThread.conversationSummary || activeThread.temperatureReason || "Qualification is still in progress."}</p>{activeThread.blocker ? <p className="mt-1 text-sm text-muted-foreground">Current blocker: {activeThread.blocker}</p> : null}</div><div className="flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/leads/${activeThread.leadId}`}><UserRoundCheck className="mr-2 h-4 w-4" />Lead details</Link></Button><Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void requestPersonalFollowUp()}><UserRoundCheck className="mr-2 h-4 w-4" />Add to Today</Button>{currentEnrollment ? currentEnrollment.status === "active" ? <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("pause")}><Pause className="mr-2 h-4 w-4" />Pause follow-up</Button> : <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("resume")}><Play className="mr-2 h-4 w-4" />Resume follow-up</Button> : null}</div></div>{activeThread.talkingPoints?.length ? <details className="mt-3 rounded-lg bg-muted p-3 text-sm"><summary className="cursor-pointer font-medium">Suggested talking points</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{activeThread.talkingPoints.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}</CardContent></Card> : null}
+          {activeThread ? <Card><CardContent className="p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{activeThread.leadName?.trim() || activeThread.leadEmail || "Lead"}</h2><Badge variant="outline">{activeThread.readiness?.replaceAll("_", " ") || "qualifying"}</Badge>{consentBlocked ? <Badge variant="outline">Automated follow-up paused — no consent on file</Badge> : null}{!canAct ? <Badge variant="secondary">Shared read-only</Badge> : null}</div><div className="mt-2 space-y-1 break-all text-sm text-muted-foreground">{activeThread.leadEmail ? <p>{activeThread.leadEmail}</p> : null}{activeThread.leadPhone ? <p>{activeThread.leadPhone}</p> : null}{activeThread.leadSource ? <p>Source: {activeThread.leadSource}</p> : null}</div>{activeThread.aiStatus ? <div className="mt-2"><Badge variant={activeThread.aiStatus === "Needs Attention" ? "destructive" : "outline"}>{activeThread.aiStatus}</Badge>{activeThread.aiStatusReason ? <p className="mt-1 text-xs text-muted-foreground">{activeThread.aiStatusReason}</p> : null}</div> : null}<p className="mt-2 text-sm">{activeThread.conversationSummary || activeThread.temperatureReason || "Qualification is still in progress."}</p>{activeThread.blocker ? <p className="mt-1 text-sm text-muted-foreground">Current blocker: {activeThread.blocker}</p> : null}</div><div className="flex flex-wrap gap-2"><Button asChild size="sm" variant="outline"><Link href={`/app/leads/${activeThread.leadId}`}><UserRoundCheck className="mr-2 h-4 w-4" />Lead details</Link></Button><Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void requestPersonalFollowUp()}><UserRoundCheck className="mr-2 h-4 w-4" />Add to Today</Button>{currentEnrollment ? currentEnrollment.status === "active" ? <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("pause")}><Pause className="mr-2 h-4 w-4" />Pause follow-up</Button> : <Button size="sm" variant="outline" disabled={busy || !canAct} onClick={() => void changeFollowUp("resume")}><Play className="mr-2 h-4 w-4" />Resume follow-up</Button> : null}</div></div>{activeThread.talkingPoints?.length ? <details className="mt-3 rounded-lg bg-muted p-3 text-sm"><summary className="cursor-pointer font-medium">Suggested talking points</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">{activeThread.talkingPoints.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}</CardContent></Card> : null}
 
           {activeLeadId && canAct ? (
             <AiConversationControls

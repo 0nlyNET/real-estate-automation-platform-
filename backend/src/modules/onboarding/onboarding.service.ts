@@ -1434,6 +1434,21 @@ export class OnboardingService {
       },
     );
 
+    // Informational notice (never a launch blocker): the fail-closed consent
+    // model stays in force at runtime, so provider-ingested leads sit paused
+    // until affirmative consent is recorded for the lead. This item simply
+    // makes sure the operator learns that before launch.
+    add(
+      'provider_lead_consent_notice',
+      'Leads ingested from providers (Zillow, Realtor.com, etc.) are blocked from automated follow-up until affirmative consent is recorded for the lead',
+      true,
+      false,
+      {
+        category: 'client_information',
+        responsibleParty: 'platform',
+      },
+    );
+
     const blockers = items.filter((item) => item.required && !item.passed);
     const remainingActions = {
       clientInformation: blockers.filter(

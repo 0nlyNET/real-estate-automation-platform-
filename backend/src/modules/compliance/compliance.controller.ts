@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Put,
   Query,
@@ -52,6 +53,11 @@ export class ComplianceController {
   @RequireRole('admin')
   async putQh(@Req() req: any, @Body() body: QuietHoursDto) {
     return this.compliance.upsertQuietHours(req.user?.tenantId, body);
+  }
+
+  @Get('leads/:leadId/eligibility')
+  async leadEligibility(@Req() req: any, @Param('leadId') leadId: string) {
+    return this.compliance.leadEligibility(req.user?.tenantId, leadId);
   }
 
   @Get('events')
