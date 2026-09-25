@@ -96,8 +96,10 @@ export default function ManagedIntegrations() {
   )
 
   const encryptionBlocked = platform !== null && platform.encryptionReady === false
+  // Render the server-provided reason verbatim; the literal server-only
+  // variable name must never appear in client source (CI secret scan).
   const encryptionBlockReason =
-    "Credential encryption is not configured on the backend — set INTEGRATIONS_ENCRYPTION_KEY and redeploy before saving provider keys."
+    platform?.encryptionIssue ?? 'Credential encryption is not configured on the backend.'
 
   const loadTenant = useCallback(async (id: string) => {
     if (!id) {
