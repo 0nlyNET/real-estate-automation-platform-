@@ -9,6 +9,7 @@ export type AdminView =
   | "health"
   | "audit"
   | "settings"
+  | "operations-ai"
 
 export type AdminNavigationItem = {
   id: AdminView
@@ -45,6 +46,10 @@ export function normalizeAdminView(value?: string | null): AdminView {
   if (!value) return "overview"
   const alias = legacyViewAliases[value]
   if (alias) return alias
+  // "operations-ai" is a valid dashboard view reached by deep link. It is
+  // intentionally absent from the nav lists: the nav keeps linking to the
+  // standalone /admin/assistant route, which renders the same view.
+  if (value === "operations-ai") return "operations-ai"
   const item = [...primaryAdminNavigation, ...secondaryAdminNavigation].find((candidate) => candidate.id === value)
   return item?.id || "overview"
 }

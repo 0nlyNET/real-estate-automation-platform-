@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs"
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
 
 const chat = read("components/ai/restricted-assistant-chat.tsx")
+const adminAssistantView = read("components/ai/operations-assistant-view.tsx")
 const adminPage = read("app/admin/assistant/page.tsx")
 const clientPage = read("app/app/assistant/page.tsx")
 const dashboard = read("app/admin/dashboard/admin-dashboard-client.tsx")
@@ -11,9 +12,14 @@ const proxy = read("proxy.ts")
 const api = read("lib/api.ts")
 
 // Both user journeys must enter the same tested request/response component.
-assert.match(adminPage, /endpoint="\/admin\/ai\/operations-assistant"/)
-assert.match(adminPage, /statusEndpoint="\/admin\/ai\/provider-test"/)
-assert.match(adminPage, /session\.platformRole === "super_admin"/)
+assert.match(adminAssistantView, /endpoint="\/admin\/ai\/operations-assistant"/)
+assert.match(adminAssistantView, /statusEndpoint="\/admin\/ai\/provider-test"/)
+assert.match(adminAssistantView, /session\.platformRole === "super_admin"/)
+assert.match(
+  adminPage,
+  /OperationsAssistantView/,
+  "the standalone assistant route must reuse the shared assistant view instead of duplicating it",
+)
 assert.match(clientPage, /endpoint="\/ai\/client-assistant"/)
 assert.match(clientPage, /statusEndpoint="\/ai\/client-assistant\/status"/)
 assert.match(clientPage, /Conversation history is encrypted and bound to your user and workspace/)

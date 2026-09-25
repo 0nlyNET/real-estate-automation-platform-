@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils"
 import { useAdminSession } from "@/app/admin/admin-access-guard"
 import { NotificationCenter } from "@/components/admin/notification-center"
 import { ServiceControlDialog } from "@/components/admin/service-control-dialog"
+import { OperationsAssistantView } from "@/components/ai/operations-assistant-view"
 import { secondaryAdminNavigation, type AdminView } from "@/components/admin/admin-navigation"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -457,6 +458,9 @@ const viewDataSections: Record<AdminView, DataSection[]> = {
   health: ["health", "ai", "clients"],
   audit: ["audit"],
   settings: ["ai", "access"],
+  // The assistant needs no dashboard data sections; it talks to its own
+  // endpoints through the shared OperationsAssistantView.
+  "operations-ai": [],
 }
 
 const ownerViews = new Set(secondaryAdminNavigation.map((item) => item.id))
@@ -472,6 +476,7 @@ const titleByView: Record<AdminView, { title: string; description: string }> = {
   health: { title: "System health", description: "Operational provider and delivery status in plain language." },
   audit: { title: "Audit log", description: "Recorded administrative changes for this platform account." },
   settings: { title: "Settings", description: "Messaging, AI controls, booking, and staff access." },
+  "operations-ai": { title: "Operations AI", description: "Diagnose exceptions and request bounded, auditable recovery actions." },
 }
 
 const clientTabs: Array<{ id: ClientTab; label: string; ownerOnly?: boolean }> = [
@@ -3460,6 +3465,8 @@ export function AdminDashboardClient({
           ) : null}
         </div>
       ) : null}
+
+      {view === "operations-ai" ? <OperationsAssistantView /> : null}
 
       {view === "settings" && isOwner ? (
         <Tabs defaultValue="automation" className="space-y-5">
