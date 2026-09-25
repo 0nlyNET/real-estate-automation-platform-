@@ -34,14 +34,34 @@ type SendGridPlatformPayload = {
   error: string | null;
 };
 
-function encryptionKey(): Buffer {
+const ENCRYPTION_KEY_ISSUE =
+  'INTEGRATIONS_ENCRYPTION_KEY is missing or invalid. Set it as a backend environment variable ' +
+  '(Railway: backend service -> Variables) to the base64 encoding of 32 random bytes, then redeploy ' +
+  'before saving provider keys.';
+
+function encryptionReadiness(): { ready: boolean; issue: string | null } {
   const raw = String(process.env.INTEGRATIONS_ENCRYPTION_KEY || '').trim();
-  if (!raw) throw new Error('INTEGRATIONS_ENCRYPTION_KEY is missing');
-  const key = Buffer.from(raw, 'base64');
-  if (key.length !== 32) {
-    throw new Error('INTEGRATIONS_ENCRYPTION_KEY must decode to 32 bytes');
+  if (!raw) return { ready: false, issue: ENCRYPTION_KEY_ISSUE };
+  if (Buffer.from(raw, 'base64').length !== 32) {
+    return { ready: false, issue: ENCRYPTION_KEY_ISSUE };
   }
-  return key;
+  return { ready: true, issue: null };
+}
+
+function assertEncryptionReady(): void {
+  const { ready, issue } = encryptionReadiness();
+  if (!ready) {
+    // 4xx, never a 500: the operator can fix this without a deploy of new code.
+    throw new BadRequestException(issue as string);
+  }
+}
+
+function encryptionKey(): Buffer {
+  assertEncryptionReady();
+  return Buffer.from(
+    String(process.env.INTEGRATIONS_ENCRYPTION_KEY || '').trim(),
+    'base64',
+  );
 }
 
 function encryptPayload(payload: unknown): string {
@@ -110,6 +130,8 @@ export class PlatformIntegrationsService {
     provider: ManagedMessagingProvider,
     payload: TwilioPlatformPayload | SendGridPlatformPayload,
   ) {
+    // Fail loud (4xx) before any DB write when the encryption key is not configured.
+    assertEncryptionReady();
     let row = await this.platformRow(provider);
     if (!row) {
       row = this.platformCredentials.create({ provider, encryptedValue: encryptPayload(payload) });
@@ -133,6 +155,8 @@ export class PlatformIntegrationsService {
     payload: Record<string, unknown>,
     routingKey: string | null,
   ) {
+    // Fail loud (4xx) before any DB write when the encryption key is not configured.
+    assertEncryptionReady();
     let row = await this.tenantRow(tenantId, provider);
     if (!row) {
       row = this.tenantCredentials.create({
@@ -171,7 +195,10 @@ export class PlatformIntegrationsService {
     const sendgrid = sendgridRow
       ? (decryptIntegrationPayload(sendgridRow.encryptedValue) as SendGridPlatformPayload)
       : null;
+    const { ready, issue } = encryptionReadiness();
     return {
+      encryptionReady: ready,
+      encryptionIssue: issue,
       twilio: {
         configured: Boolean(twilio?.configured),
         connected: Boolean(twilio?.connected),
@@ -204,6 +231,8 @@ export class PlatformIntegrationsService {
   }
 
   async savePlatformTwilio(dto: { accountSid: string; authToken: string }) {
+    // Fail loud (4xx) before any DB read/write or partial state change.
+    assertEncryptionReady();
     const previous = (await this.platformPayload('twilio')) as TwilioPlatformPayload | null;
     const accountSid = String(dto.accountSid || '').trim();
     const authToken = String(dto.authToken || '').trim();
@@ -239,6 +268,8 @@ export class PlatformIntegrationsService {
   }
 
   async savePlatformSendGrid(dto: { apiKey: string }) {
+    // Fail loud (4xx) before any DB read/write or partial state change.
+    assertEncryptionReady();
     const apiKey = String(dto.apiKey || '').trim();
     if (!apiKey.startsWith('SG.')) {
       throw new BadRequestException('A valid SendGrid API key is required');
@@ -712,6 +743,8 @@ export class PlatformIntegrationsService {
   }
 
   async removePlatformProvider(provider: ManagedMessagingProvider) {
+    // Fail loud (4xx) before any DB write: the tenant-row rewrite below encrypts.
+    assertEncryptionReady();
     const row = await this.platformRow(provider);
     if (row) await this.platformCredentials.remove(row);
     if (provider === 'twilio' && this.messagingResources) {

@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { ProviderConfigService } from './provider-config.service';
 import { EmailIdentityService } from './email-identity.service';
 import { decryptIntegrationPayload } from './integrations.service';
@@ -142,5 +143,103 @@ describe('platform-managed tenant messaging assignments', () => {
     });
     expect(JSON.stringify(summary)).not.toContain('AC-sub');
     expect(JSON.stringify(summary)).not.toMatch(/authToken|apiKey|encrypted/i);
+  });
+});
+
+describe('platform credential-save encryption guard', () => {
+  const VALID_KEY = Buffer.alloc(32, 7).toString('base64');
+
+  function makeService() {
+    const platformCredentials = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((values: Record<string, unknown>) => values),
+      save: jest.fn(async (row: unknown) => row),
+    };
+    const tenantCredentials = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((values: Record<string, unknown>) => values),
+      save: jest.fn(async (row: unknown) => row),
+    };
+    const service = new PlatformIntegrationsService(
+      platformCredentials as any,
+      tenantCredentials as any,
+    );
+    return { service, platformCredentials, tenantCredentials };
+  }
+
+  async function withKey(value: string | undefined, run: () => Promise<void>) {
+    const original = process.env.INTEGRATIONS_ENCRYPTION_KEY;
+    try {
+      if (value === undefined) delete process.env.INTEGRATIONS_ENCRYPTION_KEY;
+      else process.env.INTEGRATIONS_ENCRYPTION_KEY = value;
+      await run();
+    } finally {
+      if (original === undefined) delete process.env.INTEGRATIONS_ENCRYPTION_KEY;
+      else process.env.INTEGRATIONS_ENCRYPTION_KEY = original;
+    }
+  }
+
+  it('rejects platform SendGrid saves with a 4xx naming INTEGRATIONS_ENCRYPTION_KEY when the key is missing', async () => {
+    await withKey(undefined, async () => {
+      const { service, platformCredentials } = makeService();
+      await expect(service.savePlatformSendGrid({ apiKey: 'SG.test-key' })).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.savePlatformSendGrid({ apiKey: 'SG.test-key' })).rejects.toThrow(
+        /INTEGRATIONS_ENCRYPTION_KEY/,
+      );
+      expect(platformCredentials.save).not.toHaveBeenCalled();
+      expect(platformCredentials.create).not.toHaveBeenCalled();
+    });
+  });
+
+  it('rejects platform Twilio saves with a 4xx naming INTEGRATIONS_ENCRYPTION_KEY when the key is invalid', async () => {
+    await withKey('invalid', async () => {
+      const { service, platformCredentials } = makeService();
+      await expect(
+        service.savePlatformTwilio({ accountSid: 'AC1234567890', authToken: 'token' }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.savePlatformTwilio({ accountSid: 'AC1234567890', authToken: 'token' }),
+      ).rejects.toThrow(/INTEGRATIONS_ENCRYPTION_KEY/);
+      expect(platformCredentials.save).not.toHaveBeenCalled();
+      expect(platformCredentials.create).not.toHaveBeenCalled();
+    });
+  });
+
+  it('rejects tenant credential saves with a 4xx before any DB write when the key is missing', async () => {
+    await withKey(undefined, async () => {
+      const { service, tenantCredentials } = makeService();
+      await expect(
+        (service as any).saveTenantPayload('tenant-1', 'sendgrid', { configured: true }, null),
+      ).rejects.toThrow(/INTEGRATIONS_ENCRYPTION_KEY/);
+      expect(tenantCredentials.save).not.toHaveBeenCalled();
+      expect(tenantCredentials.create).not.toHaveBeenCalled();
+    });
+  });
+
+  it('reports encryptionReady=false with an issue string in the platform summary when the key is invalid', async () => {
+    await withKey('invalid', async () => {
+      const summary = await makeService().service.platformSummary();
+      expect(summary.encryptionReady).toBe(false);
+      expect(summary.encryptionIssue).toMatch(/INTEGRATIONS_ENCRYPTION_KEY/);
+    });
+  });
+
+  it('reports encryptionReady=true and saves normally when the key is valid', async () => {
+    await withKey(VALID_KEY, async () => {
+      const { service, platformCredentials } = makeService();
+      const summary = await service.platformSummary();
+      expect(summary.encryptionReady).toBe(true);
+      expect(summary.encryptionIssue).toBeNull();
+      await service.savePlatformSendGrid({ apiKey: 'SG.test-key' });
+      expect(platformCredentials.save).toHaveBeenCalled();
+      const saved = platformCredentials.save.mock.calls[0][0] as { encryptedValue: string };
+      expect(saved.encryptedValue).toMatch(/^v1:/);
+      expect(decryptIntegrationPayload(saved.encryptedValue)).toMatchObject({
+        apiKey: 'SG.test-key',
+        configured: true,
+      });
+    });
   });
 });
