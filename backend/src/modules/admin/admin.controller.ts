@@ -17,6 +17,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { DataSource } from 'typeorm';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthService } from '../auth/auth.service';
 import { AdminService } from './admin.service';
@@ -74,6 +75,7 @@ export class AdminController {
     private readonly serviceControl: ServiceControlService,
     private readonly platformIntegrations: PlatformIntegrationsService,
     private readonly limits: LimitsService,
+    private readonly dataSource: DataSource,
     @Optional() private readonly provisioning?: TenantProvisioningService,
     @Optional() private readonly twilioProvisioning?: TwilioProvisioningService,
     @Optional() private readonly testing?: TestingService,
@@ -715,5 +717,59 @@ export class AdminController {
       },
       expiresInSeconds: 15 * 60,
     };
+  }
+
+  // TEMPORARY: Permanent tenant deletion for stale test data cleanup.
+  // Protected tenants are hardcoded and cannot be deleted via this endpoint.
+  // REMOVE THIS ENDPOINT after the cleanup is complete.
+  @Delete('tenants/:tenantId/permanent')
+  @UseGuards(PlatformAdminGuard)
+  async permanentDeleteTenant(
+    @Param('tenantId') tenantId: string,
+    @Req() req: any,
+  ) {
+    const PROTECTED_TENANT_IDS = [
+      'c2d3b240-7b15-491a-acf7-d26ea0f6d907', // TEST - Launch Rehearsal
+      'dd11ce21-fb97-4610-814a-9ad528d96ebf', // The Row Properties Inc.
+    ];
+    if (PROTECTED_TENANT_IDS.includes(tenantId)) {
+      throw new ForbiddenException('This tenant is protected from deletion');
+    }
+
+    const existing = await this.dataSource.query(
+      'SELECT id, name FROM tenants WHERE id = $1',
+      [tenantId],
+    );
+    if (!existing.length) {
+      throw new NotFoundException('Tenant not found');
+    }
+    const tenantName = existing[0].name;
+
+    // Delete RESTRICT-blocked child rows first, then the tenant
+    // (all other tenant FKs are ON DELETE CASCADE or SET NULL).
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        'DELETE FROM lead_ingestion_events WHERE tenant_id = $1',
+        [tenantId],
+      );
+      await manager.query(
+        'DELETE FROM twilio_inbound_messages WHERE tenant_id = $1',
+        [tenantId],
+      );
+      await manager.query('DELETE FROM tenants WHERE id = $1', [tenantId]);
+    });
+
+    await this.audit.record({
+      tenantId,
+      actorId: req.user?.sub ?? 'unknown',
+      actorEmail: req.user?.email ?? null,
+      action: 'tenant.permanent_delete',
+      method: 'DELETE',
+      path: `/admin/tenants/${tenantId}/permanent`,
+      statusCode: 200,
+      metadata: { tenantId, tenantName },
+    });
+
+    return { deleted: true, tenantId, tenantName };
   }
 }
