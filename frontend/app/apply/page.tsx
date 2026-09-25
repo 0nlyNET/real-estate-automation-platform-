@@ -156,7 +156,7 @@ export default function ApplyPage() {
                   <select required name="requested_service" defaultValue="" className="w-full rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground">
                     <option value="" disabled>Requested service</option>
                     <option value="managed-pilot">Managed paid pilot</option>
-                    <option value="sms-email-follow-up">SMS and email follow-up</option>
+                    <option value="email-follow-up">Email follow-up</option>
                     <option value="lead-intake-routing">Lead intake and routing</option>
                     <option value="consultation">Fit consultation</option>
                   </select>

@@ -14,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 const included = [
   "Lead-source connection and intake routing",
-  "Approved SMS and email follow-up workflows",
+  "Approved email follow-up workflows",
   "Reply, consent, quiet-hour, and opt-out controls",
   "Booking-link delivery and appointment follow-up",
   "Simple lead status and conversation visibility",

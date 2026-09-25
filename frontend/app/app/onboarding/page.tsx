@@ -34,7 +34,7 @@ type ReadinessItem = {
   statusMessage: string
   nextAction?: string | null
 }
-type Readiness = { ready: boolean; state: string; activationStatus: string; blockers: ReadinessItem[]; required: ReadinessItem[]; optional: ReadinessItem[] }
+type Readiness = { ready: boolean; state: string; activationStatus: string; blockers: ReadinessItem[]; required: ReadinessItem[] }
 type Settings = { timeZone: string; quietHoursStart: string; quietHoursEnd: string; bookingLink?: string }
 
 const empty: RecordData = {
@@ -173,7 +173,7 @@ export default function OnboardingPage() {
         providerAccountOwner: "RealtyTechAI managed platform",
         authorizationStatus: data.integrationConfiguration.authorizationStatus || "client authorized setup",
       },
-      smsEnabled: data.smsEnabled,
+      smsEnabled: false, // SMS channel disabled until separately ready
       emailEnabled: data.emailEnabled,
       bookingEnabled: data.bookingEnabled,
       targetLaunchDate: data.targetLaunchDate || null,
@@ -244,40 +244,17 @@ export default function OnboardingPage() {
                     <Field label="Website" type="url" value={data.businessIdentity.website} onChange={(value) => field("businessIdentity", "website", value)} />
                     <Field label="Areas you serve (comma-separated)" value={listValue("businessIdentity", "serviceAreas")} onChange={(value) => csv("businessIdentity", "serviceAreas", value)} />
                     <Field label="Best account-owner email" type="email" value={data.contacts.accountOwner} onChange={(value) => field("contacts", "accountOwner", value)} />
-                    <Field label="Controlled SMS test phone" value={data.contacts.controlledTestPhone} onChange={(value) => field("contacts", "controlledTestPhone", value)} />
                     <Field label="Controlled email test recipient" type="email" value={data.contacts.controlledTestEmail || data.contacts.accountOwner} onChange={(value) => field("contacts", "controlledTestEmail", value)} />
                     <Field label="Billing email (if different)" type="email" value={data.contacts.billingContact} onChange={(value) => field("contacts", "billingContact", value)} />
                     <Field label="Time zone" value={settings.timeZone} onChange={(value) => setSettings((current) => ({ ...current, timeZone: value }))} />
                   </div>
-                  {data.smsEnabled ? (
-                    <div className="space-y-4 rounded-lg border p-4">
-                      <div><div className="font-medium">Texting business verification</div><p className="text-sm text-muted-foreground">Required by mobile carriers only when text messages are enabled. Enter the legal information exactly as registered with the IRS; RealtyTechAI handles the provider setup.</p></div>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <Field label="Legal business type" value={data.businessIdentity.businessType} onChange={(value) => field("businessIdentity", "businessType", value)} placeholder="LLC, Corporation, Partnership" />
-                        <Field label="EIN" value={data.businessIdentity.ein} onChange={(value) => field("businessIdentity", "ein", value)} placeholder="12-3456789" />
-                        <Field label="Company type" value={data.businessIdentity.companyType} onChange={(value) => field("businessIdentity", "companyType", value)} placeholder="private, public, non-profit, or government" />
-                        <Field label="Street address" value={data.businessIdentity.businessAddress} onChange={(value) => field("businessIdentity", "businessAddress", value)} />
-                        <Field label="City" value={data.businessIdentity.city} onChange={(value) => field("businessIdentity", "city", value)} />
-                        <Field label="State / region" value={data.businessIdentity.region} onChange={(value) => field("businessIdentity", "region", value)} placeholder="NY" />
-                        <Field label="Postal code" value={data.businessIdentity.postalCode} onChange={(value) => field("businessIdentity", "postalCode", value)} />
-                        <Field label="Country code" value={data.businessIdentity.country || "US"} onChange={(value) => field("businessIdentity", "country", value)} placeholder="US" />
-                        {String(data.businessIdentity.companyType || "").toLowerCase() === "public" ? <><Field label="Stock exchange" value={data.businessIdentity.stockExchange} onChange={(value) => field("businessIdentity", "stockExchange", value)} /><Field label="Stock ticker" value={data.businessIdentity.stockTicker} onChange={(value) => field("businessIdentity", "stockTicker", value)} /><Field label="Brand contact email" type="email" value={data.businessIdentity.brandContactEmail} onChange={(value) => field("businessIdentity", "brandContactEmail", value)} /></> : null}
-                        <Field label="Representative first name" value={data.contacts.firstName} onChange={(value) => field("contacts", "firstName", value)} />
-                        <Field label="Representative last name" value={data.contacts.lastName} onChange={(value) => field("contacts", "lastName", value)} />
-                        <Field label="Representative business email" type="email" value={data.contacts.email || data.contacts.accountOwner} onChange={(value) => field("contacts", "email", value)} />
-                        <Field label="Representative phone" value={data.contacts.phone} onChange={(value) => field("contacts", "phone", value)} />
-                        <Field label="Representative position" value={data.contacts.jobPosition} onChange={(value) => field("contacts", "jobPosition", value)} placeholder="Owner, CEO, Director, VP" />
-                        <Field label="Representative title" value={data.contacts.businessTitle} onChange={(value) => field("contacts", "businessTitle", value)} placeholder="Broker Owner" />
-                      </div>
-                    </div>
-                  ) : null}
                   <p className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">We use the account owner as the setup, support, approval, and escalation contact unless you tell us otherwise later.</p>
                 </>
               ) : null}
 
               {step === 1 ? (
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Where leads come from (comma-separated)" value={listValue("serviceScope", "leadSources")} onChange={(value) => csv("serviceScope", "leadSources", value)} placeholder="Website, Realtor.com, CRM" />
+                  <Field label="Where leads come from (comma-separated)" value={listValue("serviceScope", "leadSources")} onChange={(value) => csv("serviceScope", "leadSources", value)} placeholder="Realtor.com, Zillow, Zapier, manual entry" />
                   <Field label="Expected leads per month" type="number" value={data.serviceScope.expectedLeadVolume} onChange={(value) => field("serviceScope", "expectedLeadVolume", value)} />
                   <Field label="Who should receive new leads?" value={data.leadHandling.routingRules} onChange={(value) => field("leadHandling", "routingRules", value)} placeholder="Round robin between Alex and Jordan" />
                   <Field label="Business hours" value={data.leadHandling.businessHours} onChange={(value) => field("leadHandling", "businessHours", value)} placeholder="Mon–Fri 8 AM–7 PM" />
@@ -290,8 +267,7 @@ export default function OnboardingPage() {
 
               {step === 2 ? (
                 <>
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <Choice label="Text messages" checked={data.smsEnabled} onChange={(value) => setData((current) => ({ ...current, smsEnabled: value }))} description="RealtyTechAI manages delivery using your approved brokerage identity" />
+                  <div className="grid gap-3 md:grid-cols-2">
                     <Choice label="Email" checked={data.emailEnabled} onChange={(value) => setData((current) => ({ ...current, emailEnabled: value }))} description="RealtyTechAI manages the verified sending service for you" />
                     <Choice label="Appointment booking" checked={data.bookingEnabled} onChange={(value) => setData((current) => ({ ...current, bookingEnabled: value }))} description="Checks and books verified times through the appointment provider you select" />
                   </div>
@@ -299,31 +275,12 @@ export default function OnboardingPage() {
                     <Field label="Brand or team name" value={data.brandCommunication.brandName} onChange={(value) => field("brandCommunication", "brandName", value)} />
                     <Field label="How should messages sound?" value={data.brandCommunication.brandVoice} onChange={(value) => field("brandCommunication", "brandVoice", value)} placeholder="Warm, concise, helpful" />
                     <Field label="Message signature" value={data.brandCommunication.requiredSignature} onChange={(value) => field("brandCommunication", "requiredSignature", value)} placeholder="— Alex at Lakeview Realty" />
-                    {data.smsEnabled ? <Field label="Approved texting number or identity" value={data.brandCommunication.approvedPhoneIdentity} onChange={(value) => field("brandCommunication", "approvedPhoneIdentity", value)} /> : null}
                     {data.emailEnabled ? <Field label="Approved sender email" type="email" value={data.brandCommunication.approvedEmailIdentity} onChange={(value) => field("brandCommunication", "approvedEmailIdentity", value)} /> : null}
                     {data.bookingEnabled ? <Field label="Optional fallback booking link" type="url" value={settings.bookingLink} onChange={(value) => setSettings((current) => ({ ...current, bookingLink: value }))} placeholder="Used only if calendar access is unavailable" /> : null}
                     <Field label="How do people agree to be contacted?" value={data.consentConfiguration.consentCollectionMethod} onChange={(value) => field("consentConfiguration", "consentCollectionMethod", value)} placeholder="Checkbox on our website lead form" />
                     <Field label="How do you handle opt-outs?" value={data.consentConfiguration.optOutProcess} onChange={(value) => field("consentConfiguration", "optOutProcess", value)} placeholder="Honor STOP and unsubscribe immediately" />
                   </div>
                   <div className="space-y-2"><Label htmlFor="consent-copy">Exact consent language shown on your lead form</Label><Textarea id="consent-copy" value={String(data.consentConfiguration.exactConsentLanguage || "")} onChange={(event) => field("consentConfiguration", "exactConsentLanguage", event.target.value)} /></div>
-                  {data.smsEnabled ? (
-                    <div className="space-y-4 rounded-lg border p-4">
-                      <div><div className="font-medium">Carrier texting registration</div><p className="text-sm text-muted-foreground">Mobile carriers require these exact examples and public URLs. RealtyTechAI submits and monitors the registration for you.</p></div>
-                      <div className="space-y-2"><Label htmlFor="campaign-description">Campaign description (40–4096 characters)</Label><Textarea id="campaign-description" value={String(data.consentConfiguration.campaignDescription || "")} onChange={(event) => field("consentConfiguration", "campaignDescription", event.target.value)} /></div>
-                      <div className="space-y-2"><Label htmlFor="message-flow">Detailed opt-in flow (40–2048 characters)</Label><Textarea id="message-flow" value={String(data.consentConfiguration.messageFlow || "")} onChange={(event) => field("consentConfiguration", "messageFlow", event.target.value)} /></div>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <Field label="Sample SMS 1" value={data.consentConfiguration.sampleMessage} onChange={(value) => field("consentConfiguration", "sampleMessage", value)} />
-                        <Field label="Sample SMS 2" value={data.consentConfiguration.sampleMessage2} onChange={(value) => field("consentConfiguration", "sampleMessage2", value)} />
-                        <Field label="Public terms URL" type="url" value={data.consentConfiguration.termsUrl} onChange={(value) => field("consentConfiguration", "termsUrl", value)} />
-                        <Field label="Public privacy URL" type="url" value={data.consentConfiguration.privacyUrl} onChange={(value) => field("consentConfiguration", "privacyUrl", value)} />
-                        <Field label="Opt-in reply (if using START)" value={data.consentConfiguration.optInMessage} onChange={(value) => field("consentConfiguration", "optInMessage", value)} />
-                        <Field label="Opt-out reply (if self-managed)" value={data.consentConfiguration.optOutMessage} onChange={(value) => field("consentConfiguration", "optOutMessage", value)} />
-                        <Field label="Help reply (if self-managed)" value={data.consentConfiguration.helpMessage} onChange={(value) => field("consentConfiguration", "helpMessage", value)} />
-                        <Field label="A2P use case" value={data.consentConfiguration.a2pUseCase || "LOW_VOLUME"} onChange={(value) => field("consentConfiguration", "a2pUseCase", value)} />
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2"><Choice label="Messages may contain links" checked={data.consentConfiguration.hasEmbeddedLinks === true} onChange={(value) => field("consentConfiguration", "hasEmbeddedLinks", value)} /><Choice label="Messages may contain phone numbers" checked={data.consentConfiguration.hasEmbeddedPhone === true} onChange={(value) => field("consentConfiguration", "hasEmbeddedPhone", value)} /></div>
-                    </div>
-                  ) : null}
                   <div className="grid gap-3 md:grid-cols-2">
                     <Choice label="We use only leads we own or are authorized to contact" checked={data.consentConfiguration.sourceOwnership === "authorized"} onChange={(value) => field("consentConfiguration", "sourceOwnership", value ? "authorized" : "")} />
                     <Choice label="We will not upload purchased or cold lists" checked={data.consentConfiguration.purchasedOrColdListsExcluded === true} onChange={(value) => field("consentConfiguration", "purchasedOrColdListsExcluded", value)} />
@@ -351,7 +308,7 @@ export default function OnboardingPage() {
                   </div>
                   <Card className="border-primary/30 bg-primary/5">
                     <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources and appointment provider</div><p className="mt-1 text-sm text-muted-foreground">Connect your website or supported lead source, then connect, choose, test, and activate Google Calendar, Microsoft Outlook, or Calendly. RealtyTechAI manages SMS and email delivery for you.</p></div></div>
+                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources and appointment provider</div><p className="mt-1 text-sm text-muted-foreground">Connect a supported lead source (Realtor.com, Zillow/Realtor ingestion, Zapier, or manual entry), then connect, choose, test, and activate Google Calendar. RealtyTechAI manages email delivery for you.</p></div></div>
                       <Button asChild type="button"><Link href="/app/integrations">Open connections</Link></Button>
                     </CardContent>
                   </Card>
@@ -365,9 +322,6 @@ export default function OnboardingPage() {
                   </div>
                   {readiness?.blockers?.length ? (
                     <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">See remaining review checks ({readiness.blockers.length})</summary><div className="mt-3 grid gap-2 md:grid-cols-2">{readiness.blockers.map((item) => <div key={item.key} className="flex gap-2 rounded-md border p-3 text-sm text-muted-foreground"><Circle className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block font-medium text-foreground">What: {item.label}</span><span className="mt-1 block text-xs">Why: {item.statusMessage}</span>{item.nextAction ? <span className="mt-1 block text-xs">How to fix: {item.nextAction}</span> : null}<span className="mt-1 block text-xs">Owner: {item.responsibleParty === "client" ? "you" : item.responsibleParty === "provider" ? "external provider" : "RealtyTechAI"}</span></span></div>)}</div></details>
-                  ) : null}
-                  {readiness?.optional?.length ? (
-                    <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">Important information ({readiness.optional.length})</summary><div className="mt-3 grid gap-2 md:grid-cols-2">{readiness.optional.map((item) => <div key={item.key} className="flex gap-2 rounded-md border p-3 text-sm text-muted-foreground"><Circle className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block font-medium text-foreground">{item.label}</span>{item.nextAction ? <span className="mt-1 block text-xs">Next: {item.nextAction}</span> : null}<span className="mt-1 block text-xs">Owner: {item.responsibleParty === "client" ? "you" : item.responsibleParty === "provider" ? "external provider" : "RealtyTechAI"}</span></span></div>)}</div></details>
                   ) : null}
                 </>
               ) : null}

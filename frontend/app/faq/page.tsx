@@ -5,12 +5,7 @@ export default function FAQPage() {
 
       <div className="space-y-2">
         <h2 className="text-base font-semibold">Do I need to connect Twilio or SendGrid?</h2>
-        <p className="text-sm text-muted-foreground">No. RealtyTechAI manages SMS and email delivery. You provide your approved brokerage identity and contact details.</p>
-      </div>
-
-      <div className="space-y-2">
-        <h2 className="text-base font-semibold">Why aren’t my texts sending?</h2>
-        <p className="text-sm text-muted-foreground">Confirm your service is active and your brokerage messaging details are approved. If payment failed, update your card in Billing.</p>
+        <p className="text-sm text-muted-foreground">No. RealtyTechAI manages email delivery. You provide your approved brokerage identity and contact details.</p>
       </div>
 
       <div className="space-y-2">
