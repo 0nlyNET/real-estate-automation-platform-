@@ -231,6 +231,56 @@ describe('AuthService session and account-recovery controls', () => {
     await service.verifyEmail('token-2');
     expect(mail.sendWelcomeEmail).toHaveBeenCalledTimes(1);
   });
+
+  describe('password-reset timing oracle mitigation', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+      jest.restoreAllMocks();
+    });
+
+    it('returns an identical response for unknown and known emails without leaking existence', async () => {
+      const user = { id: 'user-1', tenantId: 'tenant-1', email: 'owner@example.test' };
+      const known = setup(user);
+      const unknown = setup(null);
+
+      const knownPromise = known.service.requestPasswordReset(user.email);
+      await jest.runAllTimersAsync();
+      const knownResult = await knownPromise;
+
+      const unknownPromise = unknown.service.requestPasswordReset('stranger@example.test');
+      await jest.runAllTimersAsync();
+      const unknownResult = await unknownPromise;
+
+      expect(knownResult).toEqual(unknownResult);
+      expect(unknownResult).toEqual({
+        ok: true,
+        message: 'If that email exists, a reset link has been created.',
+      });
+      expect(JSON.stringify(unknownResult)).not.toMatch(/[a-f0-9]{64}/);
+      // The unknown-email branch must not persist tokens or send mail.
+      expect(unknown.resets.save).not.toHaveBeenCalled();
+      expect(unknown.resets.create).not.toHaveBeenCalled();
+      expect(unknown.mail.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('burns a randomized 1.5-3s timing pad on the unknown-email branch', async () => {
+      const { service } = setup(null);
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+
+      const pending = service.requestPasswordReset('stranger@example.test');
+      await jest.runAllTimersAsync();
+      await pending;
+
+      const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
+      expect(delays).toHaveLength(1);
+      expect(delays[0]).toBeGreaterThanOrEqual(1500);
+      expect(delays[0]).toBeLessThanOrEqual(3000);
+    });
+  });
 });
 
 describe('AuthService single-use invitations', () => {
