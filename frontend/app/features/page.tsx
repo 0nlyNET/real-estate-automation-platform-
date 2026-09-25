@@ -23,7 +23,7 @@ const featureCategories = [
     icon: MessageSquare,
     features: [
       "Threaded conversations across channels",
-      "SMS and email conversation history",
+      "Email conversation history",
       "Lead tagging and assignment",
       "Provider delivery status where available",
     ],
@@ -71,7 +71,7 @@ const featureCategories = [
     icon: FileText,
     features: [
       "Dynamic variable insertion",
-      "Reusable SMS and email content",
+      "Reusable email content",
       "Sequence-level message steps",
       "Centralized editing for administrators",
     ],

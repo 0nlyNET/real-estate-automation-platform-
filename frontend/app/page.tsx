@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 const capabilities = [
-  { icon: MessagesSquare, title: "Approved follow-up", text: "Human-reviewed SMS and email sequences with quiet hours, consent checks, STOP handling, and delivery states where supported." },
+  { icon: MessagesSquare, title: "Approved follow-up", text: "Human-reviewed email follow-up sequences with quiet hours, consent checks, unsubscribe handling, and delivery states." },
   { icon: Route, title: "Lead intake and routing", text: "Capture leads from configured sources, deduplicate them, assign team ownership, and keep conversation history together." },
   { icon: ClipboardCheck, title: "Supervised launch", text: "A platform operator records provider tests, controlled-lead evidence, billing status, and written approval before activation." },
 ]

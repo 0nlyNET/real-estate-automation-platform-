@@ -43,8 +43,9 @@ export default function PrivacyPage() {
             <section>
               <h2 className="text-xl font-semibold text-foreground">Service providers and disclosures</h2>
               <p className="mt-4">
-                Information may be processed by hosting, database, email, SMS, lead-source, and payment providers that
-                support an enabled workflow. We may also disclose information when required by law, to protect users or
+                Information may be processed by hosting, database, email, lead-source, and payment providers that
+                support an enabled workflow. SMS messaging is not currently offered; if it is enabled in the future, an
+                SMS provider would be included here. We may also disclose information when required by law, to protect users or
                 the service, or as part of a business transaction. We do not represent client lead data as our own.
               </p>
             </section>
@@ -64,7 +65,7 @@ export default function PrivacyPage() {
               <p className="mt-4">
                 Depending on your location and relationship to a client, you may ask to access, correct, export, or
                 delete personal information, or object to certain processing. Marketing or automated email can be
-                stopped through the unsubscribe link in the message; SMS recipients can reply STOP. Account cancellation
+                stopped through the unsubscribe link in the message. Account cancellation
                 does not by itself constitute a verified data-deletion request.
               </p>
             </section>
