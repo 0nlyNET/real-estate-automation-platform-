@@ -180,7 +180,20 @@ export default function OnboardingPage() {
     }
     try {
       await apiFetch("/onboarding", { method: "PUT", body: normalized })
-      await apiFetch("/settings/tenant", { method: "PUT", body: settings })
+      // Send only the fields UpdateTenantSettingsDto whitelists: the GET
+      // response carries read-only props (id, tenantId, bookingLinkVerifiedAt,
+      // bookingLinkStatus, bookingLinkVerificationExpiresAt,
+      // activeBookingProvider, timeZoneVerifiedAt, leadSource,
+      // leadSourceOtherLabel, intake) that forbidNonWhitelisted rejects.
+      await apiFetch("/settings/tenant", {
+        method: "PUT",
+        body: {
+          timeZone: settings.timeZone,
+          quietHoursStart: settings.quietHoursStart,
+          quietHoursEnd: settings.quietHoursEnd,
+          bookingLink: settings.bookingLink || "",
+        },
+      })
       setData(normalized)
       await load()
       setMessage("Saved. Your RealtyTechAI setup team can see these updates.")
