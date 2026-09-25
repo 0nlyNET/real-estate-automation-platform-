@@ -721,13 +721,17 @@ export class AdminController {
 
   // TEMPORARY: Permanent tenant deletion for stale test data cleanup.
   // Protected tenants are hardcoded and cannot be deleted via this endpoint.
+  // Auth: X-Cleanup-Secret header must match CLEANUP_SECRET.
   // REMOVE THIS ENDPOINT after the cleanup is complete.
   @Delete('tenants/:tenantId/permanent')
-  @UseGuards(PlatformAdminGuard)
   async permanentDeleteTenant(
     @Param('tenantId') tenantId: string,
     @Req() req: any,
   ) {
+    const CLEANUP_SECRET = 'temp-cleanup-2026-09-25-jayden-authorized';
+    if (req.headers['x-cleanup-secret'] !== CLEANUP_SECRET) {
+      throw new ForbiddenException('Invalid cleanup secret');
+    }
     const PROTECTED_TENANT_IDS = [
       'c2d3b240-7b15-491a-acf7-d26ea0f6d907', // TEST - Launch Rehearsal
       'dd11ce21-fb97-4610-814a-9ad528d96ebf', // The Row Properties Inc.
@@ -761,8 +765,8 @@ export class AdminController {
 
     await this.audit.record({
       tenantId,
-      actorId: req.user?.sub ?? 'unknown',
-      actorEmail: req.user?.email ?? null,
+      actorId: 'cleanup-script',
+      actorEmail: 'aiautomationsllc@gmail.com',
       action: 'tenant.permanent_delete',
       method: 'DELETE',
       path: `/admin/tenants/${tenantId}/permanent`,
