@@ -2,7 +2,7 @@ import { Column, Entity, Index } from "typeorm";
 import { BaseEntity } from "../../common/base.entity";
 import { LeadProvider } from "./lead-ingestion.types";
 
-export type LeadIngestionStatus = "accepted" | "failed_validation";
+export type LeadIngestionStatus = "accepted" | "deduped" | "failed_validation";
 
 @Entity({ name: "lead_ingestion_events" })
 @Index(

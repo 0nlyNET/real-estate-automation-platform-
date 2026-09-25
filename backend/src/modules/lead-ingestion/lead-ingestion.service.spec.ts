@@ -45,10 +45,21 @@ function harness(keyTenants: Record<string, string> = { "key-a": "tenant-a" }) {
       andWhere: jest.fn().mockReturnThis(),
       getOne: jest.fn().mockResolvedValue(null),
     })),
+    findOne: jest.fn(
+      async ({ where } = {}) =>
+        state.leads.find((lead) =>
+          Object.entries(where ?? {}).every(
+            ([key, value]) =>
+              (lead as unknown as Record<string, unknown>)[key] === value,
+          ),
+        ) ?? null,
+    ),
     create: jest.fn((value) => Object.assign(new Lead(), value)),
     save: jest.fn(async (value: Lead) => {
       if (!value.id) value.id = `lead-${state.leads.length + 1}`;
-      state.leads.push(value);
+      const index = state.leads.findIndex((lead) => lead.id === value.id);
+      if (index >= 0) state.leads[index] = value;
+      else state.leads.push(value);
       return value;
     }),
   };
@@ -317,5 +328,105 @@ describe("LeadIngestionService", () => {
     expect(item.state.rolledBack).toBe(true);
     expect(item.state.leads).toHaveLength(0);
     expect(item.state.events).toHaveLength(0);
+  });
+
+  it("prefers the (provider, providerLeadId) match over an email match on a different row", async () => {
+    const item = harness();
+    item.state.leads.push(
+      Object.assign(new Lead(), {
+        id: "lead-by-provider-id",
+        tenantId: "tenant-a",
+        provider: "zillow",
+        providerLeadId: "zillow-9",
+        email: "other@example.com",
+        fullName: "Provider Match",
+      }),
+      Object.assign(new Lead(), {
+        id: "lead-by-email",
+        tenantId: "tenant-a",
+        email: "jordan@example.com",
+        fullName: "Email Match",
+      }),
+    );
+
+    const result = await item.service.ingest({
+      headers: { "x-ingestion-key": "key-a", "x-lead-provider": "zillow" },
+      correlationId: "request-deterministic",
+      body: {
+        providerLeadId: "zillow-9",
+        fullName: "Jordan Buyer",
+        email: "jordan@example.com",
+      },
+    });
+
+    expect(result).toMatchObject({
+      acknowledged: true,
+      status: "accepted",
+      leadId: "lead-by-provider-id",
+    });
+    expect(item.leadRepository.findOne).toHaveBeenNthCalledWith(1, {
+      where: {
+        tenantId: "tenant-a",
+        provider: "zillow",
+        providerLeadId: "zillow-9",
+      },
+    });
+    // The email-only row must be left untouched.
+    expect(
+      item.state.leads.find((lead) => lead.id === "lead-by-email"),
+    ).toMatchObject({ fullName: "Email Match" });
+    expect(
+      item.state.leads.find((lead) => lead.id === "lead-by-provider-id"),
+    ).toMatchObject({ email: "other@example.com" });
+    expect(item.state.events).toHaveLength(1);
+  });
+
+  it("records a deduped ingestion event instead of throwing on a merge unique violation", async () => {
+    const item = harness();
+    item.state.leads.push(
+      Object.assign(new Lead(), {
+        id: "lead-existing",
+        tenantId: "tenant-a",
+        provider: "zillow",
+        providerLeadId: "zillow-7",
+        email: "jordan@example.com",
+        fullName: "Existing Lead",
+      }),
+    );
+
+    const conflict = Object.assign(
+      new Error(
+        'duplicate key value violates unique constraint "IDX_leads_tenant_phone"',
+      ),
+      { code: "23505" },
+    );
+    item.leadRepository.save.mockRejectedValueOnce(conflict);
+
+    const result = await item.service.ingest({
+      headers: { "x-ingestion-key": "key-a", "x-lead-provider": "zillow" },
+      correlationId: "request-23505",
+      body: {
+        providerLeadId: "zillow-7",
+        fullName: "Jordan Buyer",
+        email: "jordan@example.com",
+        phone: "+15551234567",
+      },
+    });
+
+    expect(result).toMatchObject({
+      acknowledged: true,
+      status: "duplicate",
+      leadId: "lead-existing",
+    });
+    expect(item.state.events).toHaveLength(1);
+    expect(item.state.events[0]).toMatchObject({
+      status: "deduped",
+      leadId: "lead-existing",
+      providerLeadId: "zillow-7",
+    });
+    // The aborted first attempt committed nothing: exactly the seeded lead
+    // plus one deduped event.
+    expect(item.state.leads).toHaveLength(1);
+    expect(item.state.leadEvents).toHaveLength(0);
   });
 });
