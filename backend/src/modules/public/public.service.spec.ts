@@ -175,4 +175,123 @@ describe('public client applications', () => {
       }),
     );
   });
+
+  it('records provider-not-configured instead of a generic failure when SendGrid is missing', async () => {
+    process.env.SALES_INBOX_EMAIL = 'operations@example.com';
+    const saves: any[] = [];
+    const applications = {
+      create: jest.fn((value) => ({ id: 'application-2', ...value })),
+      save: jest.fn(async (value) => {
+        saves.push({ ...value });
+        return value;
+      }),
+    };
+    const mail = {
+      emailProviderStatus: jest
+        .fn()
+        .mockResolvedValue({ configured: false, reason: 'SENDGRID_API_KEY missing' }),
+      sendEmail: jest.fn(),
+    };
+    const operations = { createTask: jest.fn().mockResolvedValue({ id: 'task-2' }) };
+    const notifications = { createForPlatform: jest.fn().mockResolvedValue([]) };
+    const service = new PublicService(
+      applications as any,
+      mail as any,
+      operations as any,
+      notifications as any,
+    );
+
+    await service.submitInquiry({
+      name: 'Casey Prospect',
+      email: 'casey@example.com',
+      message: 'Interested in a pilot.',
+    });
+
+    // No send attempts against a missing provider.
+    expect(mail.sendEmail).not.toHaveBeenCalled();
+    expect(saves[saves.length - 1]).toMatchObject({
+      notificationStatus: 'not_configured',
+      notificationError: expect.stringContaining('Email provider is not configured'),
+    });
+    expect(operations.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: 'application_notification_failure',
+        priority: 'high',
+        title: expect.stringContaining('Configure email provider'),
+      }),
+    );
+  });
+
+  it('attempts each alert exactly once and does not retry failed sends', async () => {
+    process.env.SALES_INBOX_EMAIL = 'operations@example.com';
+    const saves: any[] = [];
+    const applications = {
+      create: jest.fn((value) => ({ id: 'application-3', ...value })),
+      save: jest.fn(async (value) => {
+        saves.push({ ...value });
+        return value;
+      }),
+    };
+    const mail = {
+      emailProviderStatus: jest
+        .fn()
+        .mockResolvedValue({ configured: true, apiKey: 'key' }),
+      sendEmail: jest.fn().mockRejectedValue(new Error('connection refused')),
+    };
+    const operations = { createTask: jest.fn().mockResolvedValue({ id: 'task-3' }) };
+    const service = new PublicService(
+      applications as any,
+      mail as any,
+      operations as any,
+    );
+
+    await service.submitInquiry({
+      email: 'sam@example.com',
+      message: 'Hello.',
+    });
+
+    // One attempt per recipient (operator + applicant); no retry loop.
+    expect(mail.sendEmail).toHaveBeenCalledTimes(2);
+    expect(saves[saves.length - 1]).toMatchObject({ notificationStatus: 'failed' });
+  });
+
+  it('marks notifications sent when the provider is configured and both emails go through', async () => {
+    process.env.SALES_INBOX_EMAIL = 'operations@example.com';
+    const saves: any[] = [];
+    const applications = {
+      create: jest.fn((value) => ({ id: 'application-4', ...value })),
+      save: jest.fn(async (value) => {
+        saves.push({ ...value });
+        return value;
+      }),
+    };
+    const mail = {
+      emailProviderStatus: jest
+        .fn()
+        .mockResolvedValue({ configured: true, apiKey: 'key' }),
+      sendEmail: jest.fn().mockResolvedValue({ status: 'accepted' }),
+    };
+    const operations = { createTask: jest.fn().mockResolvedValue({ id: 'task-4' }) };
+    const notifications = { createForPlatform: jest.fn().mockResolvedValue([]) };
+    const service = new PublicService(
+      applications as any,
+      mail as any,
+      operations as any,
+      notifications as any,
+    );
+
+    await service.submitInquiry({
+      email: 'pat@example.com',
+      message: 'Hello.',
+    });
+
+    expect(mail.sendEmail).toHaveBeenCalledTimes(2);
+    expect(saves[saves.length - 1]).toMatchObject({
+      notificationStatus: 'sent',
+      notificationError: null,
+    });
+    expect(operations.createTask).not.toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'application_notification_failure' }),
+    );
+  });
 });

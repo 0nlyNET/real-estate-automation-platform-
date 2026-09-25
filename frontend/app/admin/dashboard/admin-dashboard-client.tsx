@@ -1346,11 +1346,13 @@ export function AdminDashboardClient({
       source: item.source || "Website",
       stage: item.status,
       communication:
-        item.notificationStatus === "failed"
-          ? "Alert failed"
-          : item.assignedOperatorId
-            ? "Assigned"
-            : "Requires response",
+        item.notificationStatus === "not_configured"
+          ? "Provider not configured"
+          : item.notificationStatus === "failed"
+            ? "Alert failed"
+            : item.assignedOperatorId
+              ? "Assigned"
+              : "Requires response",
       nextAction: item.status === "new" ? "Review and assign this inquiry." : "Continue the sales follow-up.",
       lastContact: item.updatedAt || item.createdAt,
       owner: item.assignedOperatorId || null,
@@ -1368,7 +1370,7 @@ export function AdminDashboardClient({
         if (leadFilter === "all") return true
         if (leadFilter === "new") return item.stage === "new"
         if (leadFilter === "requires_response")
-          return /requires response|urgent|hot|alert failed/i.test(
+          return /requires response|urgent|hot|alert failed|provider not configured/i.test(
             `${item.communication} ${"readinessLevel" in item.original ? item.original.readinessLevel : ""} ${"temperature" in item.original ? item.original.temperature : ""}`,
           )
         if (leadFilter === "appointment_scheduled")

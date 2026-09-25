@@ -31,6 +31,7 @@ import { AutomationScheduledDueTime1789862400001 } from './migrations/2026092000
 import { ConversationReadState1789862400002 } from './migrations/202609200002-conversation-read-state';
 import { LeadPhoneE164Backfill1790208000001 } from './migrations/202609240001-lead-phone-e164-backfill';
 import { AiFollowupTaskDedup1790294400001 } from './migrations/202609240001-ai-followup-task-dedup';
+import { ApplicationNotificationProviderState1790294400002 } from './migrations/202609240002-application-notification-provider-state';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -62,6 +63,7 @@ const databaseMigrations = [
   ConversationReadState1789862400002,
   LeadPhoneE164Backfill1790208000001,
   AiFollowupTaskDedup1790294400001,
+  ApplicationNotificationProviderState1790294400002,
 ];
 
 function migrationOptions() {
