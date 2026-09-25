@@ -254,7 +254,7 @@ export default function OnboardingPage() {
 
               {step === 1 ? (
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Where leads come from (comma-separated)" value={listValue("serviceScope", "leadSources")} onChange={(value) => csv("serviceScope", "leadSources", value)} placeholder="Realtor.com, Zillow, Zapier, manual entry" />
+                  <Field label="Where leads come from (comma-separated)" value={listValue("serviceScope", "leadSources")} onChange={(value) => csv("serviceScope", "leadSources", value)} placeholder="Realtor.com, Zapier, manual entry" />
                   <Field label="Expected leads per month" type="number" value={data.serviceScope.expectedLeadVolume} onChange={(value) => field("serviceScope", "expectedLeadVolume", value)} />
                   <Field label="Who should receive new leads?" value={data.leadHandling.routingRules} onChange={(value) => field("leadHandling", "routingRules", value)} placeholder="Round robin between Alex and Jordan" />
                   <Field label="Business hours" value={data.leadHandling.businessHours} onChange={(value) => field("leadHandling", "businessHours", value)} placeholder="Mon–Fri 8 AM–7 PM" />
@@ -308,7 +308,7 @@ export default function OnboardingPage() {
                   </div>
                   <Card className="border-primary/30 bg-primary/5">
                     <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources and appointment provider</div><p className="mt-1 text-sm text-muted-foreground">Connect a supported lead source (Realtor.com, Zillow/Realtor ingestion, Zapier, or manual entry), then connect, choose, test, and activate Google Calendar. RealtyTechAI manages email delivery for you.</p></div></div>
+                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources and appointment provider</div><p className="mt-1 text-sm text-muted-foreground">Connect a supported lead source (Realtor.com, Zapier, or manual entry), then connect, choose, test, and activate Google Calendar. RealtyTechAI manages email delivery for you.</p></div></div>
                       <Button asChild type="button"><Link href="/app/integrations">Open connections</Link></Button>
                     </CardContent>
                   </Card>
