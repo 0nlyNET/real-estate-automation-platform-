@@ -35,6 +35,8 @@ type ProviderStatus = {
 }
 
 type PlatformSummary = {
+  encryptionReady: boolean
+  encryptionIssue?: string | null
   twilio: ProviderStatus
   sendgrid: ProviderStatus
 }
@@ -92,6 +94,10 @@ export default function ManagedIntegrations() {
     () => tenants.find((item) => item.id === tenantId) || null,
     [tenantId, tenants],
   )
+
+  const encryptionBlocked = platform !== null && platform.encryptionReady === false
+  const encryptionBlockReason =
+    "Credential encryption is not configured on the backend — set INTEGRATIONS_ENCRYPTION_KEY and redeploy before saving provider keys."
 
   const loadTenant = useCallback(async (id: string) => {
     if (!id) {
@@ -325,6 +331,9 @@ export default function ManagedIntegrations() {
       {error ? (
         <Alert variant="destructive"><AlertTriangle /><AlertTitle>Action failed</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>
       ) : null}
+      {encryptionBlocked ? (
+        <Alert variant="destructive"><AlertTriangle /><AlertTitle>Credential encryption not configured</AlertTitle><AlertDescription>{encryptionBlockReason}</AlertDescription></Alert>
+      ) : null}
       {notice ? (
         <Alert><CheckCircle2 /><AlertTitle>Saved</AlertTitle><AlertDescription>{notice}</AlertDescription></Alert>
       ) : null}
@@ -340,7 +349,13 @@ export default function ManagedIntegrations() {
             {platform?.twilio.error ? <Alert variant="destructive"><AlertDescription>{platform.twilio.error}</AlertDescription></Alert> : null}
             <div className="space-y-2"><Label>Account SID</Label><Input value={twilioAccountSid} onChange={(event) => setTwilioAccountSid(event.target.value)} placeholder="AC…" autoComplete="off" /></div>
             <div className="space-y-2"><Label>Auth Token</Label><Input type="password" value={twilioAuthToken} onChange={(event) => setTwilioAuthToken(event.target.value)} autoComplete="new-password" /></div>
-            <Button onClick={savePlatformTwilio} disabled={Boolean(busy) || !twilioAccountSid || !twilioAuthToken}>Save platform Twilio</Button>
+            <Button
+              onClick={savePlatformTwilio}
+              disabled={encryptionBlocked || Boolean(busy) || !twilioAccountSid || !twilioAuthToken}
+              title={encryptionBlocked ? encryptionBlockReason : undefined}
+            >
+              Save platform Twilio
+            </Button>
             <div className="grid gap-3 border-t pt-4 sm:grid-cols-2">
               <div className="space-y-2"><Label>Sending number for test</Label><Input value={platformTwilioFrom} onChange={(event) => setPlatformTwilioFrom(event.target.value)} placeholder="+19296395472" /></div>
               <div className="space-y-2"><Label>Recipient for test</Label><Input value={platformTwilioTo} onChange={(event) => setPlatformTwilioTo(event.target.value)} placeholder="+1…" /></div>
@@ -358,7 +373,13 @@ export default function ManagedIntegrations() {
             {platform?.sendgrid.apiKey ? <p className="text-sm text-muted-foreground">Saved key: {platform.sendgrid.apiKey}</p> : null}
             {platform?.sendgrid.error ? <Alert variant="destructive"><AlertDescription>{platform.sendgrid.error}</AlertDescription></Alert> : null}
             <div className="space-y-2"><Label>SendGrid API key</Label><Input type="password" value={sendgridApiKey} onChange={(event) => setSendgridApiKey(event.target.value)} placeholder="SG.…" autoComplete="new-password" /></div>
-            <Button onClick={savePlatformSendGrid} disabled={Boolean(busy) || !sendgridApiKey}>Save platform SendGrid</Button>
+            <Button
+              onClick={savePlatformSendGrid}
+              disabled={encryptionBlocked || Boolean(busy) || !sendgridApiKey}
+              title={encryptionBlocked ? encryptionBlockReason : undefined}
+            >
+              Save platform SendGrid
+            </Button>
             <div className="grid gap-3 border-t pt-4 sm:grid-cols-2">
               <div className="space-y-2"><Label>Verified from email</Label><Input type="email" value={platformSendgridFrom} onChange={(event) => setPlatformSendgridFrom(event.target.value)} /></div>
               <div className="space-y-2"><Label>Recipient for test</Label><Input type="email" value={platformSendgridTo} onChange={(event) => setPlatformSendgridTo(event.target.value)} /></div>
