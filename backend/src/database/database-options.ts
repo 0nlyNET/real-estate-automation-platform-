@@ -30,6 +30,7 @@ import { FirstClientPayment1788652800001 } from './migrations/202609060001-first
 import { AutomationScheduledDueTime1789862400001 } from './migrations/202609200001-automation-scheduled-due-time';
 import { ConversationReadState1789862400002 } from './migrations/202609200002-conversation-read-state';
 import { LeadPhoneE164Backfill1790208000001 } from './migrations/202609240001-lead-phone-e164-backfill';
+import { ApplicationNotificationProviderState1790294400002 } from './migrations/202609240002-application-notification-provider-state';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -60,6 +61,7 @@ const databaseMigrations = [
   AutomationScheduledDueTime1789862400001,
   ConversationReadState1789862400002,
   LeadPhoneE164Backfill1790208000001,
+  ApplicationNotificationProviderState1790294400002,
 ];
 
 function migrationOptions() {
