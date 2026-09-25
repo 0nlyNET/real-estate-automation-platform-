@@ -447,7 +447,10 @@ const dataSectionLabels: Record<DataSection, string> = {
 }
 
 const viewDataSections: Record<AdminView, DataSection[]> = {
-  overview: ["overview", "clients", "tasks", "support", "leadAttention", "ai"],
+  // "connections" is loaded for the overview as well: "Clients needing
+  // attention" is derived from integration state, and an unloadable /
+  // not-yet-loaded connections section must not read as "Not configured".
+  overview: ["overview", "clients", "tasks", "support", "leadAttention", "ai", "connections"],
   clients: ["clients", "operators", "leadAttention", "connections", "handoffs"],
   leads: ["applications", "leadAttention", "operators", "clients", "handoffs", "appointments"],
   onboarding: ["clients", "operators", "connections", "ai"],
@@ -1643,7 +1646,7 @@ export function AdminDashboardClient({
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Priority summary">
               <SummaryCard
                 label="Clients needing attention"
-                value={sectionErrors.clients ? null : clientsNeedingAttention.length}
+                value={sectionErrors.clients || sectionErrors.connections ? null : clientsNeedingAttention.length}
                 onClick={() => {
                   setClientFilter("needs_attention")
                   switchView("clients")
