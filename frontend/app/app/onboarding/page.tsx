@@ -34,7 +34,7 @@ type ReadinessItem = {
   statusMessage: string
   nextAction?: string | null
 }
-type Readiness = { ready: boolean; state: string; activationStatus: string; blockers: ReadinessItem[]; required: ReadinessItem[] }
+type Readiness = { ready: boolean; state: string; activationStatus: string; blockers: ReadinessItem[]; required: ReadinessItem[]; optional: ReadinessItem[] }
 type Settings = { timeZone: string; quietHoursStart: string; quietHoursEnd: string; bookingLink?: string }
 
 const empty: RecordData = {
@@ -365,6 +365,9 @@ export default function OnboardingPage() {
                   </div>
                   {readiness?.blockers?.length ? (
                     <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">See remaining review checks ({readiness.blockers.length})</summary><div className="mt-3 grid gap-2 md:grid-cols-2">{readiness.blockers.map((item) => <div key={item.key} className="flex gap-2 rounded-md border p-3 text-sm text-muted-foreground"><Circle className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block font-medium text-foreground">What: {item.label}</span><span className="mt-1 block text-xs">Why: {item.statusMessage}</span>{item.nextAction ? <span className="mt-1 block text-xs">How to fix: {item.nextAction}</span> : null}<span className="mt-1 block text-xs">Owner: {item.responsibleParty === "client" ? "you" : item.responsibleParty === "provider" ? "external provider" : "RealtyTechAI"}</span></span></div>)}</div></details>
+                  ) : null}
+                  {readiness?.optional?.length ? (
+                    <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">Important information ({readiness.optional.length})</summary><div className="mt-3 grid gap-2 md:grid-cols-2">{readiness.optional.map((item) => <div key={item.key} className="flex gap-2 rounded-md border p-3 text-sm text-muted-foreground"><Circle className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block font-medium text-foreground">{item.label}</span>{item.nextAction ? <span className="mt-1 block text-xs">Next: {item.nextAction}</span> : null}<span className="mt-1 block text-xs">Owner: {item.responsibleParty === "client" ? "you" : item.responsibleParty === "provider" ? "external provider" : "RealtyTechAI"}</span></span></div>)}</div></details>
                   ) : null}
                 </>
               ) : null}

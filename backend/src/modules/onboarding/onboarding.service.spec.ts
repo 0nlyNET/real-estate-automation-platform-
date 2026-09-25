@@ -547,4 +547,65 @@ describe('operator-controlled workspace activation', () => {
     );
     expect(record.verifiedItems).not.toHaveProperty('activation');
   });
+
+  it('includes the provider-lead consent notice as an informational item', async () => {
+    const record = Object.assign(new OnboardingRecord(), {
+      id: 'onboarding-1',
+      tenantId: 'tenant-1',
+      businessIdentity: {},
+      contacts: {},
+      serviceScope: {},
+      leadHandling: {},
+      brandCommunication: {},
+      consentConfiguration: {},
+      integrationConfiguration: {},
+      providerTests: {},
+      verifiedItems: {},
+      smsEnabled: false,
+      emailEnabled: false,
+      bookingEnabled: false,
+      activationStatus: 'incomplete',
+    });
+    const stepsBuilder: any = {};
+    for (const method of ['innerJoin', 'where', 'andWhere', 'select', 'addSelect', 'groupBy']) {
+      stepsBuilder[method] = jest.fn(() => stepsBuilder);
+    }
+    stepsBuilder.getRawMany = jest.fn().mockResolvedValue([]);
+    const service = new OnboardingService(
+      {
+        findOne: jest.fn().mockResolvedValue(record),
+        create: jest.fn((value) => Object.assign(new OnboardingRecord(), value)),
+        save: jest.fn(async (value) => value),
+      } as any,
+      {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'tenant-1',
+          name: 'Lakeview Realty',
+          status: 'active',
+          stripeSubscriptionId: 'sub_paid',
+          paidSubscriptionId: 'sub_paid',
+          paymentConfirmedAt: new Date(),
+          lifecycleStatus: 'ONBOARDING',
+        }),
+      } as any,
+      { findOne: jest.fn().mockResolvedValue({ tenantId: 'tenant-1' }) } as any,
+      { find: jest.fn().mockResolvedValue([]) } as any,
+      { createQueryBuilder: jest.fn(() => stepsBuilder) } as any,
+      { createTask: jest.fn().mockResolvedValue({}) } as any,
+    );
+
+    const readiness = await service.readiness('tenant-1');
+    const item = readiness.optional.find(
+      (entry) => entry.key === 'provider_lead_consent_notice',
+    );
+    expect(item).toBeDefined();
+    expect(item).toMatchObject({ required: false, passed: true });
+    expect(item?.label).toContain('affirmative consent');
+    // Informational only: it must never block activation.
+    expect(
+      readiness.blockers.some(
+        (entry) => entry.key === 'provider_lead_consent_notice',
+      ),
+    ).toBe(false);
+  });
 });

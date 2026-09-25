@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -159,6 +159,30 @@ export class ComplianceService {
       };
     }
     return { allowed: true };
+  }
+
+  /**
+   * Tenant-scoped per-lead automation eligibility snapshot used by the UI to
+   * surface the fail-closed consent state. Read-only: it never records or
+   * implies consent.
+   */
+  async leadEligibility(
+    tenantId: string,
+    leadId: string,
+  ): Promise<{
+    leadId: string;
+    sms: { allowed: boolean; code?: string; reason?: string };
+    email: { allowed: boolean; code?: string; reason?: string };
+  }> {
+    const lead = await this.leadRepo.findOne({
+      where: { id: leadId, tenantId } as any,
+    });
+    if (!lead) throw new NotFoundException('Lead not found');
+    const [sms, email] = await Promise.all([
+      this.communicationEligibility(tenantId, lead, 'sms'),
+      this.communicationEligibility(tenantId, lead, 'email'),
+    ]);
+    return { leadId: lead.id, sms, email };
   }
 
   async listEvents(tenantId: string, take = 50, skip = 0) {
