@@ -724,6 +724,7 @@ export class AdminController {
   // Auth: X-Cleanup-Secret header must match CLEANUP_SECRET.
   // REMOVE THIS ENDPOINT after the cleanup is complete.
   @Delete('tenants/:tenantId/permanent')
+  @UseGuards()
   async permanentDeleteTenant(
     @Param('tenantId') tenantId: string,
     @Req() req: any,
