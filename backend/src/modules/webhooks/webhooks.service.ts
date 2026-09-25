@@ -376,6 +376,20 @@ export class WebhooksService {
     const effectiveStopKeyword = persisted.stopKeyword ?? stopKeyword;
 
     if (!persisted.leadId) {
+      if (
+        effectiveStopKeyword &&
+        persisted.processingResult === 'lead_not_found'
+      ) {
+        // M4: record the opt-out even though no lead matched, so a
+        // later-created lead with this number is never messaged.
+        await this.compliance.addOptOut(
+          tenantId,
+          'sms',
+          fromDigits,
+          'stop_keyword',
+          'twilio_inbound_sms',
+        );
+      }
       await this.operations?.createTask({
         tenantId,
         category: 'messaging_failure',
@@ -1383,6 +1397,13 @@ export class WebhooksService {
     lead.lastActivityAt = receivedAt;
     lead.nextFollowUpAt = undefined;
     lead.sequenceStatus = 'stopped';
+    if (input.stopKeyword) {
+      // M4: mirror the SMS STOP path — an inbound email STOP marks the lead
+      // as opted out so suppression applies to future outbound sends.
+      lead.communicationStatus = 'opted_out';
+      lead.optedOutAt = lead.optedOutAt || receivedAt;
+      lead.optOutSource = 'sendgrid_inbound_email';
+    }
     await leadRepository.save(lead);
     await leadEventRepository.save(
       leadEventRepository.create({
