@@ -23,8 +23,14 @@ done
 
 START_EPOCH=$(date +%s)
 WORKDIR="/tmp/rta-restore-$$"
+RESTORE_DB=""
 mkdir -p "$WORKDIR"
-cleanup() { rm -rf "$WORKDIR"; }
+cleanup() {
+  rm -rf "$WORKDIR"
+  if [ -n "$RESTORE_DB" ]; then
+    psql "$RESTORE_DATABASE_URL" -c "DROP DATABASE IF EXISTS \"$RESTORE_DB\"" > /dev/null 2>&1 || true
+  fi
+}
 trap cleanup EXIT
 
 export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
@@ -34,6 +40,13 @@ export PGPASSWORD="$(echo "$RESTORE_DATABASE_URL" | sed -n 's|.*://[^:]*:\([^@]*
 R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
 echo "[$(date -u +%FT%TZ)] Restore test starting: $BACKUP_KEY"
+
+# 0. Defensive: drop any stale restore_test_* databases from previous runs
+echo "Cleaning up stale restore-test databases..."
+for db in $(psql "$RESTORE_DATABASE_URL" -t -A -c "SELECT datname FROM pg_database WHERE datname LIKE 'restore_test_%'" 2>/dev/null); do
+  echo "  dropping stale: $db"
+  psql "$RESTORE_DATABASE_URL" -c "DROP DATABASE \"$db\"" > /dev/null 2>&1 || true
+done
 
 # 1. Download from R2
 echo "Downloading from R2..."
@@ -73,7 +86,7 @@ done
 TEST_TENANT="c2d3b240-7b15-491a-acf7-d26ea0f6d907"
 TENANT_NAME=$($PSQL -c "SELECT name FROM tenants WHERE id='$TEST_TENANT'")
 echo "  TEST tenant present: ${TENANT_NAME:-NO}"
-LEAD_MSGS=$($PSQL -c "SELECT count(*) FROM messages WHERE lead_id IN (SELECT id FROM leads WHERE tenant_id='$TEST_TENANT')")
+LEAD_MSGS=$($PSQL -c "SELECT count(*) FROM messages WHERE \"leadId\" IN (SELECT id FROM leads WHERE tenant_id='$TEST_TENANT')")
 echo "  messages on TEST-tenant leads: $LEAD_MSGS"
 if [ -z "$TENANT_NAME" ]; then
   echo "ERROR: TEST tenant missing after restore" >&2
