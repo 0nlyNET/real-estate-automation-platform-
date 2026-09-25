@@ -8,21 +8,17 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { createHash, timingSafeEqual } from "crypto";
-import {
-  Brackets,
-  DataSource,
-  EntityManager,
-  In,
-  IsNull,
-  Repository,
-} from "typeorm";
+import { DataSource, EntityManager, In, IsNull, Repository } from "typeorm";
 import { decryptString, encryptString } from "../../common/crypto-secrets";
 import { LeadEvent } from "../leads/lead-event.entity";
 import { Lead } from "../leads/lead.entity";
 import { Credential } from "../settings/credential.entity";
 import { TenantSettings } from "../settings/tenant-settings.entity";
 import { Tenant } from "../tenants/tenant.entity";
-import { LeadIngestionEvent } from "./lead-ingestion-event.entity";
+import {
+  LeadIngestionEvent,
+  LeadIngestionStatus,
+} from "./lead-ingestion-event.entity";
 import {
   IncomingLeadPayload,
   LeadIngestionResult,
@@ -108,7 +104,7 @@ export class LeadIngestionService {
       );
     }
 
-    const result = await this.dataSource.transaction((manager) =>
+    const persist = (manager: EntityManager) =>
       this.persistIngestion(manager, {
         normalized,
         validationError,
@@ -116,10 +112,27 @@ export class LeadIngestionService {
         idempotencyKey,
         correlationId,
         payloadMetadata,
-      }),
-    );
-    await this.markAuthenticatedProviderDelivery(provider, tenantId);
-    return result;
+      });
+    try {
+      const result = await this.dataSource.transaction(persist);
+      await this.markAuthenticatedProviderDelivery(provider, tenantId);
+      return result;
+    } catch (error) {
+      // A unique violation here means a concurrent write won the race (the
+      // failed statement aborted this transaction, so nothing was committed).
+      // Record the ingestion as deduped in a fresh transaction instead of
+      // surfacing a 500 that the provider would retry forever.
+      if (!isUniqueViolation(error)) throw error;
+      return this.dataSource.transaction((manager) =>
+        this.recordRaceDedupedEvent(manager, {
+          normalized,
+          fingerprint,
+          idempotencyKey,
+          correlationId,
+          payloadMetadata,
+        }),
+      );
+    }
   }
 
   private async markAuthenticatedProviderDelivery(
@@ -214,22 +227,20 @@ export class LeadIngestionService {
 
     const processedAt = new Date();
     if (input.validationError) {
-      const rejected = await eventRepository.save(
-        eventRepository.create({
-          tenantId: input.normalized.tenantId,
-          provider: input.normalized.provider,
-          providerLeadId: input.normalized.providerLeadId,
-          idempotencyKey: input.idempotencyKey,
-          ingestionFingerprint: input.fingerprint,
-          status: "failed_validation",
-          validationError: input.validationError,
-          correlationId: input.correlationId,
-          payloadMetadata: input.payloadMetadata,
-          leadId: null,
-          providerReceivedAt: input.normalized.receivedAt,
-          processedAt,
-        }),
-      );
+      const rejected = await this.saveIngestionEvent(manager, {
+        tenantId: input.normalized.tenantId,
+        provider: input.normalized.provider,
+        providerLeadId: input.normalized.providerLeadId,
+        idempotencyKey: input.idempotencyKey,
+        ingestionFingerprint: input.fingerprint,
+        status: "failed_validation",
+        validationError: input.validationError,
+        correlationId: input.correlationId,
+        payloadMetadata: input.payloadMetadata,
+        leadId: null,
+        providerReceivedAt: input.normalized.receivedAt,
+        processedAt,
+      });
       await this.markTenantIntakeReceived(
         manager,
         input.normalized.tenantId,
@@ -249,22 +260,20 @@ export class LeadIngestionService {
       input.normalized,
       input.fingerprint,
     );
-    const accepted = await eventRepository.save(
-      eventRepository.create({
-        tenantId: input.normalized.tenantId,
-        provider: input.normalized.provider,
-        providerLeadId: input.normalized.providerLeadId,
-        idempotencyKey: input.idempotencyKey,
-        ingestionFingerprint: input.fingerprint,
-        status: "accepted",
-        validationError: null,
-        correlationId: input.correlationId,
-        payloadMetadata: input.payloadMetadata,
-        leadId: lead.id,
-        providerReceivedAt: input.normalized.receivedAt,
-        processedAt,
-      }),
-    );
+    const accepted = await this.saveIngestionEvent(manager, {
+      tenantId: input.normalized.tenantId,
+      provider: input.normalized.provider,
+      providerLeadId: input.normalized.providerLeadId,
+      idempotencyKey: input.idempotencyKey,
+      ingestionFingerprint: input.fingerprint,
+      status: "accepted",
+      validationError: null,
+      correlationId: input.correlationId,
+      payloadMetadata: input.payloadMetadata,
+      leadId: lead.id,
+      providerReceivedAt: input.normalized.receivedAt,
+      processedAt,
+    });
     await manager.getRepository(LeadEvent).save(
       manager.getRepository(LeadEvent).create({
         lead,
@@ -298,34 +307,7 @@ export class LeadIngestionService {
     fingerprint: string,
   ): Promise<Lead> {
     const repository = manager.getRepository(Lead);
-    const query = repository
-      .createQueryBuilder("lead")
-      .where("lead.tenantId = :tenantId", { tenantId: payload.tenantId })
-      .andWhere(
-        new Brackets((where) => {
-          let hasCondition = false;
-          if (payload.providerLeadId) {
-            where.where(
-              "(lead.provider = :provider AND lead.providerLeadId = :providerLeadId)",
-              {
-                provider: payload.provider,
-                providerLeadId: payload.providerLeadId,
-              },
-            );
-            hasCondition = true;
-          }
-          if (payload.email) {
-            const method = hasCondition ? "orWhere" : "where";
-            where[method]("lead.email = :email", { email: payload.email });
-            hasCondition = true;
-          }
-          if (payload.phone) {
-            const method = hasCondition ? "orWhere" : "where";
-            where[method]("lead.phone = :phone", { phone: payload.phone });
-          }
-        }),
-      );
-    let lead = await query.getOne();
+    let lead = await this.findMatchingLead(repository, payload);
     const fullName =
       payload.fullName ||
       payload.email ||
@@ -388,6 +370,160 @@ export class LeadIngestionService {
     if (!lead.notes && payload.message) lead.notes = payload.message;
     lead.lastActivityAt = new Date();
     return repository.save(lead);
+  }
+
+  /**
+   * Deterministic dedup matching with an explicit preference order:
+   * (provider, providerLeadId) first, then email, then phone. Sequential
+   * tenant-scoped lookups replace the old single OR query, whose unordered
+   * result made ambiguous matches merge nondeterministically.
+   */
+  private async findMatchingLead(
+    repository: Repository<Lead>,
+    payload: IncomingLeadPayload,
+  ): Promise<Lead | null> {
+    if (payload.providerLeadId) {
+      const byProviderLeadId = await repository.findOne({
+        where: {
+          tenantId: payload.tenantId,
+          provider: payload.provider,
+          providerLeadId: payload.providerLeadId,
+        },
+      });
+      if (byProviderLeadId) return byProviderLeadId;
+    }
+    if (payload.email) {
+      const byEmail = await repository.findOne({
+        where: { tenantId: payload.tenantId, email: payload.email },
+      });
+      if (byEmail) return byEmail;
+    }
+    if (payload.phone) {
+      const byPhone = await repository.findOne({
+        where: { tenantId: payload.tenantId, phone: payload.phone },
+      });
+      if (byPhone) return byPhone;
+    }
+    return null;
+  }
+
+  private async saveIngestionEvent(
+    manager: EntityManager,
+    fields: {
+      tenantId: string;
+      provider: LeadProvider;
+      providerLeadId?: string | null;
+      idempotencyKey: string;
+      ingestionFingerprint: string;
+      status: LeadIngestionStatus;
+      validationError?: string | null;
+      correlationId: string;
+      payloadMetadata: Record<string, unknown>;
+      leadId?: string | null;
+      providerReceivedAt: Date;
+      processedAt: Date;
+    },
+  ): Promise<LeadIngestionEvent> {
+    const eventRepository = manager.getRepository(LeadIngestionEvent);
+    return eventRepository.save(eventRepository.create(fields));
+  }
+
+  /**
+   * Fallback for a 23505 (unique violation) during lead persistence: the
+   * aborted transaction committed nothing, so re-resolve the winning lead and
+   * record the ingestion as deduped instead of throwing (a 500 here made the
+   * provider retry the same payload forever).
+   */
+  private async recordRaceDedupedEvent(
+    manager: EntityManager,
+    input: {
+      normalized: IncomingLeadPayload;
+      fingerprint: string;
+      idempotencyKey: string;
+      correlationId: string;
+      payloadMetadata: Record<string, unknown>;
+    },
+  ): Promise<LeadIngestionResult> {
+    const lockKey = [
+      "lead-ingestion",
+      input.normalized.tenantId,
+      input.normalized.provider,
+      input.idempotencyKey,
+    ].join(":");
+    await manager.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      lockKey,
+    ]);
+
+    const eventRepository = manager.getRepository(LeadIngestionEvent);
+    const existing = await eventRepository.findOne({
+      where: {
+        tenantId: input.normalized.tenantId,
+        provider: input.normalized.provider,
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+    if (existing) {
+      return {
+        acknowledged: true,
+        status: "duplicate",
+        eventId: existing.id,
+        leadId: existing.leadId ?? null,
+        validationError: existing.validationError ?? null,
+      };
+    }
+
+    const lead = await this.findMatchingLead(
+      manager.getRepository(Lead),
+      input.normalized,
+    );
+    const processedAt = new Date();
+    try {
+      const event = await this.saveIngestionEvent(manager, {
+        tenantId: input.normalized.tenantId,
+        provider: input.normalized.provider,
+        providerLeadId: input.normalized.providerLeadId,
+        idempotencyKey: input.idempotencyKey,
+        ingestionFingerprint: input.fingerprint,
+        status: "deduped",
+        validationError: null,
+        correlationId: input.correlationId,
+        payloadMetadata: input.payloadMetadata,
+        leadId: lead?.id ?? null,
+        providerReceivedAt: input.normalized.receivedAt,
+        processedAt,
+      });
+      await this.markTenantIntakeReceived(
+        manager,
+        input.normalized.tenantId,
+        processedAt,
+      );
+      return {
+        acknowledged: true,
+        status: "duplicate",
+        eventId: event.id,
+        leadId: lead?.id ?? null,
+        validationError: null,
+      };
+    } catch (error) {
+      // Lost the race inserting the deduped event: the winner already recorded
+      // it, so report that event instead of throwing.
+      if (!isUniqueViolation(error)) throw error;
+      const winner = await eventRepository.findOne({
+        where: {
+          tenantId: input.normalized.tenantId,
+          provider: input.normalized.provider,
+          idempotencyKey: input.idempotencyKey,
+        },
+      });
+      if (!winner) throw error;
+      return {
+        acknowledged: true,
+        status: "duplicate",
+        eventId: winner.id,
+        leadId: winner.leadId ?? null,
+        validationError: winner.validationError ?? null,
+      };
+    }
   }
 
   private async markTenantIntakeReceived(
@@ -544,4 +680,21 @@ function normalizeCorrelationId(value: string): string {
   return /^[A-Za-z0-9_-]{8,100}$/.test(supplied)
     ? supplied
     : `ingestion-${sha256(supplied || String(Date.now())).slice(0, 24)}`;
+}
+
+/** True when the error is a Postgres unique-constraint violation (23505). */
+function isUniqueViolation(error: unknown): boolean {
+  const candidate = error as
+    | {
+        code?: unknown;
+        driverError?: { code?: unknown } | null;
+        cause?: { code?: unknown } | null;
+      }
+    | null
+    | undefined;
+  return (
+    candidate?.code === "23505" ||
+    candidate?.driverError?.code === "23505" ||
+    candidate?.cause?.code === "23505"
+  );
 }
