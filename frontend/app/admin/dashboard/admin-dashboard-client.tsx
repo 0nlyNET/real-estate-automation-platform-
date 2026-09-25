@@ -691,8 +691,25 @@ export function AdminDashboardClient({
         if (section === "health") {
           const [healthResult, setupResult, exceptionsResult] = await Promise.allSettled([
             healthCheck<SystemHealth>("/admin/system-health", "System health").then((value) => { setHealth(value); return value }),
-            healthCheck<SetupChecker>("/admin/setup-checker", "Setup checker").then((value) => { setSetupChecker(value); return value }),
-            healthCheck<OwnerExceptions>("/admin/operations/exceptions", "Operations exceptions").then((value) => { setOwnerExceptions(value); return value }),
+            healthCheck<SetupChecker>("/admin/setup-checker", "Setup checker").then((value) => {
+              // A 200 with an empty or unexpected body resolves to null at the
+              // fetch layer. Without this guard the panel would sit on its
+              // "loading" copy forever with the section marked loaded.
+              if (!value || typeof value.groups !== "object") {
+                throw new Error("Setup checker returned an unexpected response.")
+              }
+              setSetupChecker(value)
+              return value
+            }),
+            healthCheck<OwnerExceptions>("/admin/operations/exceptions", "Operations exceptions").then((value) => {
+              // Same guard as above: never leave "Exception status is loading."
+              // on screen for a resolved-but-empty response.
+              if (!value || !Array.isArray(value.exceptions)) {
+                throw new Error("Operations exceptions returned an unexpected response.")
+              }
+              setOwnerExceptions(value)
+              return value
+            }),
           ])
           const failures = [healthResult, setupResult, exceptionsResult]
             .filter((result): result is PromiseRejectedResult => result.status === "rejected")
