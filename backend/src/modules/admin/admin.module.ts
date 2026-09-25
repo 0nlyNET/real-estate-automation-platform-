@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AdminController } from './admin.controller';
-import { CleanupController } from './cleanup.controller';
 import { AdminService } from './admin.service';
 import { AuthModule } from '../auth/auth.module';
 
@@ -58,7 +57,7 @@ import { AiModule } from '../ai/ai.module';
     OffboardingModule,
     AiModule,
   ],
-  controllers: [AdminController, ClientSuspensionController, CleanupController],
+  controllers: [AdminController, ClientSuspensionController],
   providers: [AdminService],
   exports: [AdminService],
 })
