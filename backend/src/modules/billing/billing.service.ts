@@ -319,6 +319,33 @@ export class BillingService {
       );
       throw error;
     }
+    // CRITICAL: Enforce Stripe livemode isolation. Test-mode events must never
+    // mutate production billing state (this happened with The Row's $499 test
+    // trial). Live-mode events must never hit non-production environments.
+    const isProduction = process.env.NODE_ENV === 'production';
+    const eventLivemode = Boolean(event.livemode);
+    if (isProduction && !eventLivemode) {
+      this.logger.warn(
+        operationalEvent('stripe_test_event_rejected_in_production', {
+          provider: 'stripe',
+          eventId: event.id,
+          eventType: event.type,
+        }),
+      );
+      // Return 200 to Stripe (don't retry), but do not process.
+      return { received: true, rejected: 'test_mode_event_in_production' };
+    }
+    if (!isProduction && eventLivemode) {
+      this.logger.warn(
+        operationalEvent('stripe_live_event_rejected_in_non_production', {
+          provider: 'stripe',
+          eventId: event.id,
+          eventType: event.type,
+          nodeEnv: process.env.NODE_ENV,
+        }),
+      );
+      return { received: true, rejected: 'live_mode_event_in_non_production' };
+    }
     const object = event.data.object as { customer?: string | { id: string } };
     const customer = typeof object.customer === 'string' ? object.customer : object.customer?.id;
     return this.withCustomerLock(customer || event.id, () => this.processVerifiedEvent(event));
