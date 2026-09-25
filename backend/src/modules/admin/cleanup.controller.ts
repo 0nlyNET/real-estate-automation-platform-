@@ -23,7 +23,8 @@ export class CleanupController {
     @Param('tenantId') tenantId: string,
     @Req() req: any,
   ) {
-    if (req.headers['x-cleanup-secret'] !== this.CLEANUP_SECRET) {
+    const providedSecret = req.headers['x-cleanup-secret'] || req.query.secret;
+    if (providedSecret !== this.CLEANUP_SECRET) {
       throw new ForbiddenException('Invalid cleanup secret');
     }
 
