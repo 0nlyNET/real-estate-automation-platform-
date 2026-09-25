@@ -126,11 +126,15 @@ export class LeadsService {
   // Helpers
   // -------------------------
 
+  /**
+   * Canonical phone form for every lead path (intake, manual create/update,
+   * sample seeding). Uses E164 (leading '+') so dedup comparisons against
+   * provider-ingested leads (provider-payload normalizePhoneNumber) are exact
+   * string equality. Values that cannot form a valid E164 number are dropped
+   * rather than stored as bare digits.
+   */
   private normalizePhone(phone?: string): string | undefined {
-    if (!phone) return undefined;
-    let digits = String(phone).replace(/\D/g, '');
-    if (digits.length === 10) digits = `1${digits}`;
-    return digits || undefined;
+    return normalizePhoneE164(phone) ?? undefined;
   }
 
   private normalizeEmail(email?: string): string | undefined {
@@ -155,6 +159,16 @@ export class LeadsService {
     if (v === null || v === undefined) return undefined;
     const s = String(v).trim();
     return s || undefined;
+  }
+
+  private isUniqueViolation(error: unknown): boolean {
+    // Postgres unique-violation code, per the repo convention used across
+    // modules (e.g. ai-configuration.service). QueryFailedError carries the
+    // driver code on `code`; check `driverError.code` as a fallback.
+    const code =
+      String((error as any)?.code || '') ||
+      String((error as any)?.driverError?.code || '');
+    return code === '23505';
   }
 
   private normalizeStringArray(v: any): string[] | undefined {
@@ -352,7 +366,21 @@ export class LeadsService {
         lastActivityAt: new Date(),
     } as Partial<Lead>);
 
-    let saved = await this.leadsRepository.save(lead as Lead);
+    let saved: Lead;
+    try {
+      saved = await this.leadsRepository.save(lead as Lead);
+    } catch (error) {
+      // Race between the pre-check and the insert (e.g. two paths locking on
+      // different contact keys) surfaces as a unique violation on the partial
+      // tenant/email/phone indexes. Return the existing row instead of 500ing.
+      if (!this.isUniqueViolation(error)) throw error;
+      const raced = await this.findDuplicateLead({ tenantId: tenant.id, email, phone });
+      if (!raced) throw error;
+      this.logger.warn(`Lead intake hit unique constraint; returning existing lead ${raced.id}`);
+      await this.logLeadEvent(raced, 'deduped', payload as any);
+      await this.complianceService.recordLeadConsent(tenant.id, raced.id, payload.consent);
+      return raced;
+    }
     saved = await this.applyRoutingRules(saved);
 
     await this.logLeadEvent(saved, 'created', payload as any);
