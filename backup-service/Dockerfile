@@ -1,4 +1,4 @@
-FROM postgres:15-alpine
+FROM postgres:17-alpine
 
 # Install: gnupg (encryption), aws-cli (R2 S3-compatible upload), curl (heartbeat)
 RUN apk add --no-cache gnupg aws-cli curl bash
