@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, IsNull, LessThan, Repository } from 'typeorm';
+import { FindOptionsWhere, In, IsNull, LessThan, MoreThan, Repository } from 'typeorm';
 import { OperationsTask } from './operations-task.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlatformOperatorsService } from '../../common/platform-operators.service';
@@ -19,6 +19,13 @@ export type CreateOperationsTask = {
   relatedEntityId?: string | null;
   evidenceNote?: string | null;
   dedupeOpen?: boolean;
+  /**
+   * When set, at most one task per (category, relatedEntityType, relatedEntityId)
+   * is created within the trailing window of this many hours — even when the
+   * previous task was already resolved. Guards recurring triggers that would
+   * otherwise flood the queue after each resolution.
+   */
+  throttleHours?: number;
 };
 
 @Injectable()
@@ -34,16 +41,45 @@ export class OperationsService {
   ) {}
 
   async createTask(input: CreateOperationsTask) {
+    const unresolvedStatuses: OperationsTask['status'][] = [
+      'open',
+      'in_progress',
+      'blocked',
+    ];
     if (input.dedupeOpen && input.relatedEntityType && input.relatedEntityId) {
       const existing = await this.repo.findOne({
         where: {
           category: input.category,
           relatedEntityType: input.relatedEntityType,
           relatedEntityId: input.relatedEntityId,
-          status: 'open',
+          status: In(unresolvedStatuses),
         },
+        order: { createdAt: 'DESC' },
       });
       if (existing) return existing;
+    }
+
+    // Throttle recurring triggers: at most one task per (category, subject)
+    // within the trailing window, even if the previous task was resolved.
+    if (
+      input.throttleHours &&
+      input.throttleHours > 0 &&
+      input.relatedEntityType &&
+      input.relatedEntityId
+    ) {
+      const windowStart = new Date(
+        Date.now() - input.throttleHours * 3_600_000,
+      );
+      const recent = await this.repo.findOne({
+        where: {
+          category: input.category,
+          relatedEntityType: input.relatedEntityType,
+          relatedEntityId: input.relatedEntityId,
+          createdAt: MoreThan(windowStart),
+        },
+        order: { createdAt: 'DESC' },
+      });
+      if (recent) return recent;
     }
 
     if (input.assignedOperatorId) {

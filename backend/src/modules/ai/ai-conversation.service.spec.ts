@@ -477,8 +477,10 @@ describe('AI conversation workflow', () => {
     });
     expect(item.dependencies.operations.createTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        relatedEntityType: 'ai_run',
-        relatedEntityId: item.run.id,
+        relatedEntityType: 'lead',
+        relatedEntityId: item.lead.id,
+        dedupeOpen: true,
+        throttleHours: 24,
       }),
     );
     expect(item.dependencies.control.markWaitingForHuman).toHaveBeenCalledWith(

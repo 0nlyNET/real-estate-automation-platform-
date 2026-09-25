@@ -213,3 +213,114 @@ describe('OperationsService queue ordering and filters', () => {
     }
   });
 });
+
+describe('OperationsService follow-up alert dedup and throttle', () => {
+  const LEAD_1 = randomUUID();
+  const LEAD_2 = randomUUID();
+  const TENANT_1 = randomUUID();
+
+  async function buildService() {
+    const database = newDb();
+    database.public.registerFunction({
+      name: 'current_database',
+      returns: DataType.text,
+      implementation: () => 'operations_dedup_test',
+    });
+    database.public.registerFunction({
+      name: 'version',
+      returns: DataType.text,
+      implementation: () => 'PostgreSQL 16.0',
+    });
+    database.public.registerFunction({
+      name: 'uuid_generate_v4',
+      returns: DataType.uuid,
+      impure: true,
+      implementation: randomUUID,
+    });
+    const dataSource = database.adapters.createTypeormDataSource({
+      type: 'postgres',
+      entities: [OperationsTask],
+      synchronize: true,
+    });
+    await dataSource.initialize();
+    const repo = dataSource.getRepository(OperationsTask);
+    const service = new OperationsService(repo);
+    return { dataSource, repo, service };
+  }
+
+  const followUpInput = (leadId: string) => ({
+    tenantId: TENANT_1,
+    category: 'ai_provider_failure',
+    title: 'AI processing needs human follow-up',
+    description: 'AI processing was interrupted repeatedly.',
+    priority: 'high' as const,
+    relatedEntityType: 'lead',
+    relatedEntityId: leadId,
+    dedupeOpen: true,
+    throttleHours: 24,
+  });
+
+  it('creates one row when the same alert fires twice while the first is open', async () => {
+    const { dataSource, repo, service } = await buildService();
+    try {
+      const first = await service.createTask(followUpInput(LEAD_1));
+      const second = await service.createTask(followUpInput(LEAD_1));
+      expect(second.id).toBe(first.id);
+      expect(await repo.count()).toBe(1);
+    } finally {
+      await dataSource.destroy();
+    }
+  });
+
+  it('treats in_progress tasks as unresolved for dedup', async () => {
+    const { dataSource, repo, service } = await buildService();
+    try {
+      const first = await service.createTask(followUpInput(LEAD_1));
+      await service.updateTask(first.id, { status: 'in_progress' });
+      const second = await service.createTask(followUpInput(LEAD_1));
+      expect(second.id).toBe(first.id);
+      expect(await repo.count()).toBe(1);
+    } finally {
+      await dataSource.destroy();
+    }
+  });
+
+  it('throttle blocks rapid re-creation even after the first alert is resolved', async () => {
+    const { dataSource, repo, service } = await buildService();
+    try {
+      const first = await service.createTask(followUpInput(LEAD_1));
+      await service.updateTask(first.id, { status: 'resolved' });
+      const second = await service.createTask(followUpInput(LEAD_1));
+      expect(second.id).toBe(first.id);
+      expect(await repo.count()).toBe(1);
+    } finally {
+      await dataSource.destroy();
+    }
+  });
+
+  it('allows a new alert after resolution when no throttle window applies', async () => {
+    const { dataSource, repo, service } = await buildService();
+    try {
+      const input = { ...followUpInput(LEAD_1) };
+      delete (input as any).throttleHours;
+      const first = await service.createTask(input);
+      await service.updateTask(first.id, { status: 'resolved' });
+      const second = await service.createTask(input);
+      expect(second.id).not.toBe(first.id);
+      expect(await repo.count()).toBe(2);
+    } finally {
+      await dataSource.destroy();
+    }
+  });
+
+  it('dedupes per subject, not globally', async () => {
+    const { dataSource, repo, service } = await buildService();
+    try {
+      await service.createTask(followUpInput(LEAD_1));
+      await service.createTask(followUpInput(LEAD_2));
+      expect(await repo.count()).toBe(2);
+    } finally {
+      await dataSource.destroy();
+    }
+  });
+});
