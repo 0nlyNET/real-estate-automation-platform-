@@ -98,7 +98,10 @@ fi
 END_EPOCH=$(date +%s)
 RTO=$((END_EPOCH - START_EPOCH))
 BACKUP_TS=$(echo "$BACKUP_KEY" | sed -n 's/rta-prod-\(.*\)\.dump\.gpg/\1/p')
-BACKUP_EPOCH=$(date -u -d "${BACKUP_TS%Z}" +%s 2>/dev/null || date -u -j -f "%Y%m%dT%H%M%S" "$BACKUP_TS" +%s 2>/dev/null || echo 0)
+# BACKUP_TS looks like 20260925T150139Z -> reformat for GNU date
+BTS=$(echo "$BACKUP_TS" | sed -E 's/^([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z$/\1-\2-\3 \4:\5:\6/')
+BACKUP_EPOCH=$(date -u -d "$BTS" +%s 2>/dev/null || echo 0)
+if [ "$BACKUP_EPOCH" = "0" ]; then echo "WARN: could not parse backup timestamp $BACKUP_TS" >&2; fi
 RPO_AGE=$((END_EPOCH - BACKUP_EPOCH))
 echo "RPO: backup age ${RPO_AGE}s (target <=3600s)"
 echo "RTO: restore+verify ${RTO}s (target <=14400s)"
