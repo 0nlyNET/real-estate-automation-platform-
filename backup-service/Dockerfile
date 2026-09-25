@@ -5,7 +5,8 @@ RUN apk add --no-cache gnupg aws-cli curl bash
 
 WORKDIR /app
 COPY backup.sh /app/backup.sh
-RUN chmod +x /app/backup.sh
+COPY restore.sh /app/restore.sh
+RUN chmod +x /app/backup.sh /app/restore.sh
 
 # Railway cron runs this on schedule; no long-running process needed
 CMD ["/app/backup.sh"]
