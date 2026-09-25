@@ -56,11 +56,11 @@ export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
 export AWS_EC2_METADATA_DISABLED=true
 R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
-aws --only-show-errors --endpoint-url "$R2_ENDPOINT" s3 cp "$WORKDIR/$FILENAME" "s3://${R2_BUCKET}/$FILENAME"
+aws --endpoint-url "$R2_ENDPOINT" s3 cp "$WORKDIR/$FILENAME" "s3://${R2_BUCKET}/$FILENAME"
 echo "Upload complete"
 
 # 4. Verify upload (head object)
-aws --only-show-errors --endpoint-url "$R2_ENDPOINT" s3api head-object --bucket "$R2_BUCKET" --key "$FILENAME" > /dev/null
+aws --endpoint-url "$R2_ENDPOINT" s3api head-object --bucket "$R2_BUCKET" --key "$FILENAME" > /dev/null
 echo "Upload verified"
 
 # 5. Prune backups older than 7 days
@@ -71,12 +71,12 @@ echo "Pruning old backups..."
 CUTOFF_EPOCH=$(($(date -u +%s) - 7*24*3600))
 CUTOFF=$(date -u -d "@${CUTOFF_EPOCH}" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -r "$CUTOFF_EPOCH" +%Y%m%dT%H%M%SZ)
 echo "Cutoff: $CUTOFF"
-aws --only-show-errors --endpoint-url "$R2_ENDPOINT" s3 ls "s3://${R2_BUCKET}/" | while read -r _ _ _ key; do
+aws --endpoint-url "$R2_ENDPOINT" s3 ls "s3://${R2_BUCKET}/" | while read -r _ _ _ key; do
   # key format: rta-prod-YYYYMMDDTHHMMSSZ.dump.gpg
   KEY_TS=$(echo "$key" | sed -n 's/rta-prod-\(.*\)\.dump\.gpg/\1/p')
   if [ -n "$KEY_TS" ] && [ "$KEY_TS" \< "$CUTOFF" ]; then
     echo "Deleting old backup: $key"
-    aws --only-show-errors --endpoint-url "$R2_ENDPOINT" s3 rm "s3://${R2_BUCKET}/$key"
+    aws --endpoint-url "$R2_ENDPOINT" s3 rm "s3://${R2_BUCKET}/$key"
   fi
 done
 echo "Prune complete"
