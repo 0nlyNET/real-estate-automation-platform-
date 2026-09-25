@@ -325,9 +325,13 @@ export class AiConversationService
         description:
           'AI processing was interrupted repeatedly. The inbound message remains stored and the conversation was escalated for human review.',
         priority: 'high',
-        relatedEntityType: 'ai_run',
-        relatedEntityId: row.id,
+        // Dedupe per lead (not per ai_run): each exhausted run used to mint
+        // its own task, which is what flooded the queue with duplicates.
+        relatedEntityType: 'lead',
+        relatedEntityId: row.leadId,
+        evidenceNote: `Exhausted ai_run ${row.id}`,
         dedupeOpen: true,
+        throttleHours: 24,
       });
       await this.control.markWaitingForHuman(
         row.tenantId,
@@ -1102,9 +1106,12 @@ export class AiConversationService
         title: 'AI response needs human follow-up',
         description: run.sanitizedError,
         priority: priority === 'urgent' ? 'critical' : 'high',
-        relatedEntityType: 'ai_run',
-        relatedEntityId: run.id,
+        // Dedupe per lead (not per ai_run) for the same alert-storm reason.
+        relatedEntityType: 'lead',
+        relatedEntityId: run.leadId,
+        evidenceNote: `Blocked ai_run ${run.id}`,
         dedupeOpen: true,
+        throttleHours: 24,
       });
     }
     await this.audit.recordSystem(run.leadId, 'ai_run_blocked', {
