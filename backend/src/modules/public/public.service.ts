@@ -80,7 +80,21 @@ export class PublicService {
     let operatorSent = false;
     let applicantSent = false;
 
-    if (!salesInbox) {
+    // Distinguish "provider not configured" from a genuine send failure so the
+    // admin UI shows a clear state instead of a generic "Alert failed". When
+    // the provider is missing we skip the sends entirely (no point attempting,
+    // and no retries against a missing provider).
+    const emailStatus: { configured: boolean; reason?: string } =
+      typeof this.mail.emailProviderStatus === 'function'
+        ? await this.mail.emailProviderStatus()
+        : { configured: true };
+    const providerMissing = !emailStatus.configured;
+
+    if (providerMissing) {
+      errors.push(
+        `Email provider is not configured (${emailStatus.reason || 'unknown reason'}). Configure SendGrid before alerts can be sent.`,
+      );
+    } else if (!salesInbox) {
       errors.push('Sales inbox is not configured');
     } else {
       try {
@@ -112,25 +126,28 @@ export class PublicService {
       }
     }
 
-    try {
-      await this.mail.sendEmail({
-        to: application.email,
-        subject: 'We received your RealtyTechAI application',
-        text:
-          `Your application was received. Our team will review it and contact you using the information provided.\n\n` +
-          `Reference: ${application.id}`,
-      });
-      applicantSent = true;
-    } catch (error: unknown) {
-      errors.push(
-        `Applicant confirmation failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+    if (!providerMissing) {
+      try {
+        await this.mail.sendEmail({
+          to: application.email,
+          subject: 'We received your RealtyTechAI application',
+          text:
+            `Your application was received. Our team will review it and contact you using the information provided.\n\n` +
+            `Reference: ${application.id}`,
+        });
+        applicantSent = true;
+      } catch (error: unknown) {
+        errors.push(
+          `Applicant confirmation failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
 
-    application.notificationStatus =
-      operatorSent && applicantSent
+    application.notificationStatus = providerMissing
+      ? 'not_configured'
+      : operatorSent && applicantSent
         ? 'sent'
         : operatorSent || applicantSent
           ? 'partial'
@@ -144,8 +161,12 @@ export class PublicService {
       await this.operations.createTask({
         applicationId: application.id,
         category: 'application_notification_failure',
-        title: `Application notification failed for ${application.name}`,
-        description: 'The application is safely persisted. Contact the prospect and review system email configuration.',
+        title: providerMissing
+          ? `Configure email provider: application alert not sent for ${application.name}`
+          : `Application notification failed for ${application.name}`,
+        description: providerMissing
+          ? 'The application is safely persisted. Configure the platform email provider (SendGrid) so applicant and operator alerts can be sent.'
+          : 'The application is safely persisted. Contact the prospect and review system email configuration.',
         priority: 'high',
         relatedEntityType: 'prospect_application',
         relatedEntityId: application.id,

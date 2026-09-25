@@ -51,7 +51,7 @@ export class ProspectApplication {
   operatorNotes?: string | null;
 
   @Column({ name: 'notification_status', type: 'varchar', length: 50, default: 'pending' })
-  notificationStatus!: 'pending' | 'sent' | 'partial' | 'failed';
+  notificationStatus!: 'pending' | 'sent' | 'partial' | 'failed' | 'not_configured';
 
   @Column({ name: 'notification_error', type: 'text', nullable: true })
   notificationError?: string | null;

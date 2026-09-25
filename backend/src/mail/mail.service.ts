@@ -13,12 +13,14 @@ export class MailService {
     private readonly platformCredentials?: Repository<PlatformCredential>,
   ) {}
 
-  async sendEmail(params: {
-    to: string;
-    subject: string;
-    text: string;
-    html?: string;
-  }) {
+  /**
+   * Reports whether the platform email provider (SendGrid) is configured,
+   * without attempting a send. Callers use this to distinguish "provider not
+   * configured" from a genuine send failure.
+   */
+  async emailProviderStatus(): Promise<
+    { configured: true; apiKey: string } | { configured: false; reason: string }
+  > {
     const managed = await this.platformCredentials?.findOne({
       where: { provider: 'sendgrid' },
     });
@@ -26,9 +28,23 @@ export class MailService {
       ? decryptIntegrationPayload(managed.encryptedValue)
       : null;
     const apiKey = String(managedPayload?.apiKey || process.env.SENDGRID_API_KEY || '').trim();
-    if (!apiKey) throw new Error('SENDGRID_API_KEY missing');
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL;
-    if (!fromEmail) throw new Error('SENDGRID_FROM_EMAIL missing');
+    if (!apiKey) return { configured: false, reason: 'SENDGRID_API_KEY missing' };
+    if (!process.env.SENDGRID_FROM_EMAIL) {
+      return { configured: false, reason: 'SENDGRID_FROM_EMAIL missing' };
+    }
+    return { configured: true, apiKey };
+  }
+
+  async sendEmail(params: {
+    to: string;
+    subject: string;
+    text: string;
+    html?: string;
+  }) {
+    const status = await this.emailProviderStatus();
+    if (!status.configured) throw new Error(status.reason);
+    const apiKey = status.apiKey;
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL as string;
 
     const fromName = process.env.SENDGRID_FROM_NAME || 'RealtyTechAI';
     await sendSendGridEmail({
