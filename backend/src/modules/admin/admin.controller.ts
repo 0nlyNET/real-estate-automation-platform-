@@ -17,7 +17,6 @@ import {
   Optional,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { DataSource } from 'typeorm';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthService } from '../auth/auth.service';
 import { AdminService } from './admin.service';
@@ -75,7 +74,6 @@ export class AdminController {
     private readonly serviceControl: ServiceControlService,
     private readonly platformIntegrations: PlatformIntegrationsService,
     private readonly limits: LimitsService,
-    private readonly dataSource: DataSource,
     @Optional() private readonly provisioning?: TenantProvisioningService,
     @Optional() private readonly twilioProvisioning?: TwilioProvisioningService,
     @Optional() private readonly testing?: TestingService,
