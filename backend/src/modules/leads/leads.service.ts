@@ -8,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, IsNull, Repository } from 'typeorm';
+import { DataSource, IsNull, Like, Repository } from 'typeorm';
 
 import { IntakeLeadDto } from './dto/intake-lead.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
@@ -720,6 +720,21 @@ export class LeadsService {
   async createSampleLeads(tenantId: string | undefined): Promise<Lead[]> {
     const tenant = await this.requireTenant(tenantId);
     assertLeadAcceptance(tenant, { source: 'sample_leads' });
+
+    // Idempotency: sample leads are identifiable by their dedicated address
+    // pattern. Emails embed Date.now(), so exact matching would never dedup
+    // across runs. If ANY sample leads already exist for the tenant, skip
+    // seeding entirely rather than creating duplicates.
+    const sampleEmailPattern = `sample+${tenant.id.slice(0, 6)}-%@realtytechai.dev`;
+    const existingSamples = await this.leadsRepository.count({
+      where: { tenantId: tenant.id, email: Like(sampleEmailPattern) },
+    });
+    if (existingSamples > 0) {
+      this.logger.log(
+        `Sample leads already exist for tenant ${tenant.id} (${existingSamples} found); skipping seeding`,
+      );
+      return [];
+    }
 
     const now = Date.now();
 
