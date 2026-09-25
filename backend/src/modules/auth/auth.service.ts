@@ -328,6 +328,12 @@ export class AuthService {
     const user = await this.usersService.findByEmail(emailClean);
 
     if (!user) {
+      // Timing equalization: the not-found branch skips token persistence,
+      // mail delivery, and the security audit write, so burn a randomized
+      // 1.5-3s delay before returning. Without this, an attacker can tell
+      // registered emails apart from unknown ones by response latency. The
+      // { ok: true } response shape is deliberately unchanged.
+      await this.burnResetTimingPadding();
       return {
         ok: true,
         message: 'If that email exists, a reset link has been created.',
@@ -424,6 +430,13 @@ export class AuthService {
       ok: true,
       message: 'If that email exists, a reset link has been created.',
     };
+  }
+
+  private async burnResetTimingPadding() {
+    // Cryptographically-seeded jitter approximating the time the found-email
+    // branch spends on token persistence, mail delivery, and audit writes.
+    const jitterMs = crypto.randomInt(1500, 3001);
+    await new Promise((resolve) => setTimeout(resolve, jitterMs));
   }
 
   async resetPassword(token: string, password: string) {
