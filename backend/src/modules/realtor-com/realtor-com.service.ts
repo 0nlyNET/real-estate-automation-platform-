@@ -13,6 +13,18 @@ import { decryptString, encryptString } from '../../common/crypto-secrets';
 
 const PROVIDER = 'realtor_com';
 
+// M2: the unauthenticated webhook endpoint must not reveal whether a tenant
+// has configured the Realtor.com integration. Both failure cases ("tenant
+// not configured" and "invalid API key") collapse to this single message and
+// HTTP status.
+const AUTH_FAILURE_MESSAGE = 'Invalid Realtor.com API key';
+
+// Dummy compared against when no credential is configured. Generated keys are
+// crypto.randomBytes(32).toString('base64url') (43 chars), so the constant-time
+// comparison below always runs against a same-length expected value and the
+// two failure cases share the same timing profile.
+const AUTH_COMPARISON_DUMMY = 'x'.repeat(43);
+
 type StoredConfig = {
   configured: boolean;
   connected: boolean;
@@ -156,21 +168,29 @@ export class RealtorComService {
   ) {
     const row = await this.findCredential(tenantId);
     const config = this.decode(row);
-    if (!row || !config?.configured || !config.apiKey) {
-      throw new UnauthorizedException('Realtor.com delivery is not configured');
+    const supplied = this.extractApiKey(headers, body);
+
+    // Collapse "tenant not configured" and "invalid API key" into one
+    // identical response so the webhook cannot be used to enumerate which
+    // tenants have the integration configured. The constant-time key
+    // comparison always runs — against a same-length dummy key when nothing
+    // is configured — so timing cannot distinguish the two cases either.
+    const apiKey = row && config?.configured ? config.apiKey : undefined;
+    const expected = apiKey ?? AUTH_COMPARISON_DUMMY;
+    if (!apiKey || !this.safeEqual(expected, supplied)) {
+      throw new UnauthorizedException(AUTH_FAILURE_MESSAGE);
     }
 
-    const supplied = this.extractApiKey(headers, body);
-    if (!supplied || !this.safeEqual(config.apiKey, supplied)) {
-      throw new UnauthorizedException('Invalid Realtor.com API key');
-    }
+    // `apiKey` being set implies `row` and `config` exist.
+    const credentialRow = row as Credential;
+    const activeConfig = config as StoredConfig;
 
     if (this.isConnectionTest(body)) {
       try {
-        await this.markConnected(row, config);
+        await this.markConnected(credentialRow, activeConfig);
         return { success: true, status: 'connected' };
       } catch (error) {
-        await this.markError(row, config, error);
+        await this.markError(credentialRow, activeConfig, error);
         throw error;
       }
     }
@@ -178,11 +198,11 @@ export class RealtorComService {
     try {
       const payload = this.normalizeLead(body);
       const lead = await this.leads.intake(tenantId, payload as any);
-      await this.markConnected(row, config);
+      await this.markConnected(credentialRow, activeConfig);
 
       return { success: true, status: 'accepted', leadId: lead.id };
     } catch (error) {
-      await this.markError(row, config, error);
+      await this.markError(credentialRow, activeConfig, error);
       throw error;
     }
   }

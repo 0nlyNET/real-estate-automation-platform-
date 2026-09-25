@@ -97,4 +97,72 @@ describe('RealtorComService', () => {
       expect.objectContaining({ fullName: 'Jordan Lee', source: 'Realtor.com' }),
     );
   });
+
+  describe('webhook auth failure oracle (M2)', () => {
+  const configuredRow = () => ({
+    encryptedValue: encryptString(
+      JSON.stringify({
+        configured: true,
+        connected: false,
+        apiKey: 'correct-key',
+        loginName: 'realtytechai-tenant-1',
+        createdAt: new Date().toISOString(),
+        lastSync: null,
+        error: null,
+      }),
+    ),
+  });
+
+  const captureFailure = async (err: unknown) => {
+    expect(err).toBeInstanceOf(UnauthorizedException);
+    const exception = err as UnauthorizedException;
+    return JSON.stringify({
+      status: exception.getStatus(),
+      body: exception.getResponse(),
+    });
+  };
+
+  it('returns byte-identical status + body for not-configured vs invalid-key', async () => {
+    credentials.findOne.mockResolvedValue(null);
+    const notConfigured = await service
+      .receiveLead('tenant-1', { 'x-api-key': 'any-key' }, { test: true })
+      .catch(captureFailure);
+
+    credentials.findOne.mockResolvedValue(configuredRow());
+    const invalidKey = await service
+      .receiveLead('tenant-1', { 'x-api-key': 'wrong-key' }, { test: true })
+      .catch(captureFailure);
+
+    expect(typeof notConfigured).toBe('string');
+    expect(typeof invalidKey).toBe('string');
+    expect(notConfigured).toBe(invalidKey);
+    expect(Buffer.from(invalidKey as string).equals(Buffer.from(notConfigured as string))).toBe(
+      true,
+    );
+    expect(leads.intake).not.toHaveBeenCalled();
+  });
+
+  it('returns the same response when no API key is supplied on a configured tenant', async () => {
+    credentials.findOne.mockResolvedValue(configuredRow());
+    const missingKey = await service
+      .receiveLead('tenant-1', {}, { test: true })
+      .catch(captureFailure);
+
+    credentials.findOne.mockResolvedValue(configuredRow());
+    const wrongKey = await service
+      .receiveLead('tenant-1', { 'x-api-key': 'wrong-key' }, { test: true })
+      .catch(captureFailure);
+
+    expect(missingKey).toBe(wrongKey);
+  });
+
+  it('does not leak "not configured" wording in any auth failure response', async () => {
+    credentials.findOne.mockResolvedValue(null);
+    const failure = await service
+      .receiveLead('tenant-1', { 'x-api-key': 'any-key' }, { test: true })
+      .catch(captureFailure);
+
+    expect((failure as string).toLowerCase()).not.toContain('not configured');
+  });
+  });
 });
