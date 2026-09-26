@@ -67,3 +67,5 @@ configure the monitor below — until then, a full outage pages nobody.
 - [ ] Point alerts at an email + phone number he actually reads
 - [ ] Set `EXTERNAL_UPTIME_MONITOR_URL` on the backend to the monitor's check URL
 - [ ] Trigger one test alert (pause a check or use the monitor's test feature) and confirm it reaches him
+
+<!-- CI trigger -->
