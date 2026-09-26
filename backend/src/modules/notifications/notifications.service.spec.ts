@@ -16,12 +16,16 @@ describe('admin notifications', () => {
     process.env = { ...original };
   });
 
-  function setup(preferencePatch: Record<string, unknown> = {}) {
+  function setup(preferencePatch: Record<string, unknown> = {}, opts: {
+    durableJobs?: any;
+    tenantUsers?: any[];
+  } = {}) {
     const stored: any[] = [];
     const notifications = {
       findOne: jest.fn(async ({ where, order }: any) => {
         if (where.id) {
-          return stored.find((row) => row.id === where.id && row.recipientUserId === where.recipientUserId) || null;
+          return stored.find((row) => row.id === where.id &&
+            (!where.recipientUserId || row.recipientUserId === where.recipientUserId)) || null;
         }
         if (where.incidentKey) {
           const rows = stored.filter((row) => row.incidentKey === where.incidentKey);
@@ -66,20 +70,32 @@ describe('admin notifications', () => {
       save: jest.fn(async (value) => value),
       createQueryBuilder: jest.fn(),
     };
+    const tenantUsers = opts.tenantUsers || [
+      { id: 'user-owner', tenantId: 'tenant-1', role: 'owner', email: 'owner@example.com', isActive: true, isEmailVerified: true },
+      { id: 'user-staff', tenantId: 'tenant-1', role: 'agent', email: 'staff@example.com', isActive: true, isEmailVerified: true },
+    ];
     const users = {
-      find: jest.fn().mockResolvedValue([
-        { id: 'user-owner', tenantId: 'tenant-1', role: 'owner', email: 'owner@example.com', isActive: true, isEmailVerified: true },
-        { id: 'user-staff', tenantId: 'tenant-1', role: 'agent', email: 'staff@example.com', isActive: true, isEmailVerified: true },
-      ]),
-      findOne: jest.fn(),
+      find: jest.fn(async ({ where }: any) => {
+        if (where?.tenantId) return tenantUsers.filter((u) => u.tenantId === where.tenantId);
+        return tenantUsers;
+      }),
+      findOne: jest.fn(async ({ where }: any) => {
+        const directory: Record<string, any> = {};
+        for (const u of tenantUsers) directory[u.id] = u;
+        return directory[where.id] || null;
+      }),
     };
+    const mailService = { sendEmail: jest.fn().mockResolvedValue({ messageId: 'sg-test-1', status: 'accepted' }) };
+    const durableJobs = opts.durableJobs || undefined;
     const service = new NotificationsService(
       notifications as any,
       subscriptions as any,
       preferences as any,
       users as any,
+      mailService as any,
+      durableJobs as any,
     );
-    return { service, stored, notifications, users, subscriptions, preferences };
+    return { service, stored, notifications, users, subscriptions, preferences, mailService, durableJobs };
   }
 
   it('recovers concurrent first-login preference creation without overwriting the winner', async () => {
@@ -262,5 +278,484 @@ describe('admin notifications', () => {
     await expect(service.markRead('user-owner', 'note-1')).rejects.toThrow('Notification not found');
     await expect(service.markRead('user-staff', 'note-1')).resolves.toEqual({ ok: true });
     expect(stored[0].readAt).toBeInstanceOf(Date);
+  });
+
+  it('delivers critical notifications by email when emailEnabled', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    await service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'critical',
+      title: 'Backup failed',
+      message: 'Nightly backup failed at 2 AM.',
+      deduplicationKey: 'backup-failed-email-1',
+    });
+    expect(mailService.sendEmail).toHaveBeenCalledTimes(1);
+    expect(mailService.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'owner@example.com',
+        subject: expect.stringContaining('[CRITICAL]'),
+      }),
+    );
+    expect(stored[0].emailDeliveryStatus).toBe('sent');
+    expect(stored[0].emailSentAt).toBeInstanceOf(Date);
+  });
+
+  it('skips email delivery when emailEnabled is false', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: false, privacyMode: false });
+    await service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'critical',
+      title: 'Backup failed',
+      message: 'Nightly backup failed.',
+      deduplicationKey: 'backup-failed-email-2',
+    });
+    expect(mailService.sendEmail).not.toHaveBeenCalled();
+    expect(stored[0].emailDeliveryStatus).toBe('skipped');
+  });
+
+  it('records email failure without breaking notification creation', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    mailService.sendEmail.mockRejectedValueOnce(new Error('SendGrid down'));
+    const created = await service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'critical',
+      title: 'Backup failed',
+      message: 'Nightly backup failed.',
+      deduplicationKey: 'backup-failed-email-3',
+    });
+    expect(created).toHaveLength(1);
+    expect(stored[0].emailDeliveryStatus).toBe('failed');
+  });
+
+  it('critical email bypasses quiet hours but warning email does not', async () => {
+    const quiet = { quietHoursEnabled: true, quietHoursStart: '00:00', quietHoursEnd: '23:59' };
+    const critical = setup({ emailEnabled: true, privacyMode: false, ...quiet });
+    await critical.service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'critical',
+      title: 'Backup failed',
+      message: 'Nightly backup failed.',
+      deduplicationKey: 'backup-failed-email-4',
+    });
+    expect(critical.mailService.sendEmail).toHaveBeenCalledTimes(1);
+
+    const warning = setup({ emailEnabled: true, privacyMode: false, ...quiet });
+    await warning.service.createForPlatform({
+      eventType: 'sendgrid.bounce_warning',
+      category: 'system',
+      severity: 'warning',
+      title: 'Bounce rate elevated',
+      message: 'Bounce rate above threshold.',
+      deduplicationKey: 'sendgrid-warning-email-1',
+    });
+    expect(warning.mailService.sendEmail).not.toHaveBeenCalled();
+  });
+
+  // ---- Notification system v1: 21-test suite ----
+
+  it('1. admin warning sends email', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    await service.createForPlatform({
+      eventType: 'integration.failed',
+      category: 'integrations',
+      severity: 'warning',
+      audience: 'super_admin',
+      title: 'SendGrid auth failing',
+      message: 'SendGrid authentication failed repeatedly.',
+      deduplicationKey: 't1-warning',
+    });
+    expect(mailService.sendEmail).toHaveBeenCalledTimes(1);
+    expect(mailService.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'owner@example.com' }),
+    );
+    expect(stored[0].emailDeliveryStatus).toBe('sent');
+    expect(stored[0].providerMessageId).toBe('sg-test-1');
+  });
+
+  it('2. admin critical sends email', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    await service.createForPlatform({
+      eventType: 'system.outage',
+      category: 'system',
+      severity: 'critical',
+      title: 'Production outage',
+      message: 'The platform is down.',
+      deduplicationKey: 't2-critical',
+    });
+    expect(mailService.sendEmail).toHaveBeenCalledTimes(1);
+    expect(stored[0].emailDeliveryStatus).toBe('sent');
+  });
+
+  it('3. INFO does not email by default', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    await service.createForPlatform({
+      eventType: 'onboarding.step_completed',
+      category: 'onboarding',
+      severity: 'info',
+      title: 'Step completed',
+      message: 'A routine step completed.',
+      deduplicationKey: 't3-info',
+    });
+    expect(mailService.sendEmail).not.toHaveBeenCalled();
+    expect(stored[0].emailDeliveryStatus).toBe('skipped');
+  });
+
+  it('4. client owner receives integration warning', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    await service.createForTenant({
+      tenantId: 'tenant-1',
+      eventType: 'integration.failed',
+      category: 'integrations',
+      severity: 'warning',
+      title: 'CRM disconnected',
+      message: 'The CRM connection is failing.',
+      deduplicationKey: 't4-tenant-warning',
+      templateId: 'integration.disconnected',
+      templateContext: { provider: 'CRM', actionPath: '/app/settings/integrations' },
+    });
+    expect(stored).toHaveLength(1);
+    expect(stored[0].recipientUserId).toBe('user-owner');
+    expect(mailService.sendEmail).toHaveBeenCalledTimes(1);
+    const call = mailService.sendEmail.mock.calls[0][0];
+    expect(call.to).toBe('owner@example.com');
+    expect(call.subject).toContain('CRM');
+    expect(call.html).toContain('https://www.realtytechai.app/app/settings/integrations');
+  });
+
+  it('5. assigned agent receives lead handoff', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    await service.createForTenant({
+      tenantId: 'tenant-1',
+      assignedUserId: 'user-staff',
+      eventType: 'lead.ai_handoff',
+      category: 'leads',
+      severity: 'warning',
+      title: 'AI handed off Jordan Buyer',
+      message: 'Low confidence response.',
+      deduplicationKey: 't5-handoff',
+      templateId: 'lead.ai_handoff',
+      templateContext: {
+        leadName: 'Jordan Buyer',
+        handoffReason: 'Low confidence',
+        summary: 'Asked about pricing.',
+        actionPath: '/app/conversations?leadId=lead-1',
+      },
+    });
+    const agentRows = stored.filter((row) => row.recipientUserId === 'user-staff');
+    expect(agentRows).toHaveLength(1);
+    expect(mailService.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'staff@example.com' }),
+    );
+  });
+
+  it('6. unrelated agent does not receive another agent\u2019s lead', async () => {
+    const tenantUsers = [
+      { id: 'user-owner', tenantId: 'tenant-1', role: 'owner', email: 'owner@example.com', isActive: true, isEmailVerified: true },
+      { id: 'user-staff', tenantId: 'tenant-1', role: 'agent', email: 'staff@example.com', isActive: true, isEmailVerified: true },
+      { id: 'user-other', tenantId: 'tenant-1', role: 'agent', email: 'other@example.com', isActive: true, isEmailVerified: true },
+    ];
+    const { service, mailService, stored } = setup(
+      { emailEnabled: true, privacyMode: false },
+      { tenantUsers },
+    );
+    await service.createForTenant({
+      tenantId: 'tenant-1',
+      assignedUserId: 'user-staff',
+      eventType: 'lead.ai_handoff',
+      category: 'leads',
+      severity: 'warning',
+      title: 'Handoff',
+      message: 'Handoff message.',
+      deduplicationKey: 't6-handoff',
+    });
+    expect(stored.some((row) => row.recipientUserId === 'user-other')).toBe(false);
+    expect(mailService.sendEmail).not.toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'other@example.com' }),
+    );
+  });
+
+  it('7. Tenant A notification never reaches Tenant B', async () => {
+    const tenantUsers = [
+      { id: 'user-owner', tenantId: 'tenant-1', role: 'owner', email: 'owner@example.com', isActive: true, isEmailVerified: true },
+      { id: 'user-b', tenantId: 'tenant-2', role: 'owner', email: 'b@example.com', isActive: true, isEmailVerified: true },
+    ];
+    const { service, mailService, stored } = setup(
+      { emailEnabled: true, privacyMode: false },
+      { tenantUsers },
+    );
+    await service.createForTenant({
+      tenantId: 'tenant-1',
+      eventType: 'lead.hot_lead',
+      category: 'leads',
+      severity: 'warning',
+      title: 'Hot lead',
+      message: 'Hot lead in tenant 1.',
+      deduplicationKey: 't7-tenant-isolation',
+    });
+    expect(stored).toHaveLength(1);
+    expect(stored[0].recipientUserId).toBe('user-owner');
+    expect(mailService.sendEmail).toHaveBeenCalledTimes(1);
+    expect(mailService.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'owner@example.com' }),
+    );
+  });
+
+  it('8. billing notification only goes to permitted roles', async () => {
+    const tenantUsers = [
+      { id: 'user-owner', tenantId: 'tenant-1', role: 'owner', email: 'owner@example.com', isActive: true, isEmailVerified: true },
+      { id: 'user-admin', tenantId: 'tenant-1', role: 'admin', email: 'admin@example.com', isActive: true, isEmailVerified: true },
+      { id: 'user-staff', tenantId: 'tenant-1', role: 'agent', email: 'staff@example.com', isActive: true, isEmailVerified: true },
+    ];
+    const { service, stored } = setup(
+      { emailEnabled: true, privacyMode: false },
+      { tenantUsers },
+    );
+    await service.createForTenant({
+      tenantId: 'tenant-1',
+      eventType: 'billing.payment_failed',
+      category: 'billing',
+      severity: 'warning',
+      title: 'Payment failed',
+      message: 'A payment failed.',
+      deduplicationKey: 't8-billing-roles',
+    });
+    expect(stored).toHaveLength(1);
+    expect(stored[0].recipientUserId).toBe('user-owner');
+  });
+
+  it('9. email preference disabled suppresses optional email', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: false, privacyMode: false });
+    await service.createForPlatform({
+      eventType: 'integration.failed',
+      category: 'integrations',
+      severity: 'warning',
+      title: 'Integration warning',
+      message: 'Something needs attention.',
+      deduplicationKey: 't9-pref-off',
+    });
+    expect(mailService.sendEmail).not.toHaveBeenCalled();
+    expect(stored[0].emailDeliveryStatus).toBe('skipped');
+  });
+
+  it('10. critical reaches required recipient despite category/severity opt-outs, but honors master emailEnabled', async () => {
+    const optedOut = setup({
+      emailEnabled: true,
+      privacyMode: false,
+      categorySettings: { system: false },
+      severitySettings: { warning: false, critical: false },
+    });
+    await optedOut.service.createForPlatform({
+      eventType: 'system.outage',
+      category: 'system',
+      severity: 'critical',
+      title: 'Critical incident',
+      message: 'Immediate action required.',
+      deduplicationKey: 't10-critical-optout',
+    });
+    expect(optedOut.mailService.sendEmail).toHaveBeenCalledTimes(1);
+
+    const masterOff = setup({ emailEnabled: false, privacyMode: false });
+    await masterOff.service.createForPlatform({
+      eventType: 'system.outage',
+      category: 'system',
+      severity: 'critical',
+      title: 'Critical incident',
+      message: 'Immediate action required.',
+      deduplicationKey: 't10-critical-masteroff',
+    });
+    expect(masterOff.mailService.sendEmail).not.toHaveBeenCalled();
+    expect(masterOff.stored[0].emailDeliveryStatus).toBe('skipped');
+  });
+
+  it('11. quiet hours suppress normal notification', async () => {
+    const { service, mailService, stored } = setup({
+      emailEnabled: true,
+      privacyMode: false,
+      quietHoursEnabled: true,
+      quietHoursStart: '00:00',
+      quietHoursEnd: '23:59',
+    });
+    await service.createForPlatform({
+      eventType: 'integration.failed',
+      category: 'integrations',
+      severity: 'warning',
+      title: 'Integration warning',
+      message: 'Needs attention.',
+      deduplicationKey: 't11-quiet',
+    });
+    expect(mailService.sendEmail).not.toHaveBeenCalled();
+    expect(stored[0].emailDeliveryStatus).toBe('skipped');
+  });
+
+  it('12. critical bypasses quiet hours', async () => {
+    const { service, mailService } = setup({
+      emailEnabled: true,
+      privacyMode: false,
+      quietHoursEnabled: true,
+      quietHoursStart: '00:00',
+      quietHoursEnd: '23:59',
+    });
+    await service.createForPlatform({
+      eventType: 'system.outage',
+      category: 'system',
+      severity: 'critical',
+      title: 'Critical incident',
+      message: 'Immediate action required.',
+      deduplicationKey: 't12-critical-quiet',
+    });
+    expect(mailService.sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('16. email provider failure preserves in-app notification', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    mailService.sendEmail.mockRejectedValueOnce(new Error('SendGrid down'));
+    const created = await service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'critical',
+      title: 'Backup failed',
+      message: 'Nightly backup failed.',
+      deduplicationKey: 't16-provider-failure',
+    });
+    expect(created).toHaveLength(1);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].emailDeliveryStatus).toBe('failed');
+    expect(stored[0].emailLastError).toContain('SendGrid down');
+  });
+
+  it('17. bounded retry works with max 3 attempts', async () => {
+    const durableJobs = { register: jest.fn(), schedule: jest.fn().mockResolvedValue({}) };
+    const { service, mailService, stored } = setup(
+      { emailEnabled: true, privacyMode: false },
+      { durableJobs },
+    );
+    mailService.sendEmail.mockRejectedValue(new Error('SendGrid down'));
+    await service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'warning',
+      title: 'Backup failed',
+      message: 'Nightly backup failed.',
+      deduplicationKey: 't17-retry',
+    });
+    const row = stored[0];
+    expect(row.emailAttemptCount).toBe(1);
+    expect(durableJobs.schedule).toHaveBeenCalledTimes(1);
+    expect(durableJobs.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ taskType: 'notifications.email_retry' }),
+    );
+    expect(row.emailRetryAt).toBeInstanceOf(Date);
+
+    await service.retryEmailDelivery(row.id);
+    expect(stored[0].emailAttemptCount).toBe(2);
+    expect(durableJobs.schedule).toHaveBeenCalledTimes(2);
+
+    await service.retryEmailDelivery(row.id);
+    expect(stored[0].emailAttemptCount).toBe(3);
+    // Third failure exhausts attempts for the original notification: the
+    // operations incident is raised instead of a further retry. (The
+    // incident notification's own first email attempt accounts for the extra
+    // send/schedule calls below.)
+    expect(
+      durableJobs.schedule.mock.calls.filter(
+        (call: any[]) => call[0].dedupeKey === `email-retry:${row.id}`,
+      ),
+    ).toHaveLength(2);
+
+    // A fourth retry run is a no-op for the exhausted notification.
+    const sendsBefore = mailService.sendEmail.mock.calls.length;
+    await service.retryEmailDelivery(row.id);
+    expect(stored[0].emailAttemptCount).toBe(3);
+    expect(
+      mailService.sendEmail.mock.calls.filter(
+        (call: any[]) => call[0].subject.includes('Backup failed'),
+      ).length,
+    ).toBe(3);
+    expect(mailService.sendEmail.mock.calls.length).toBe(sendsBefore);
+  });
+
+  it('18. email failure creates operations incident after exhaustion', async () => {
+    const durableJobs = { register: jest.fn(), schedule: jest.fn().mockResolvedValue({}) };
+    const { service, mailService, stored } = setup(
+      { emailEnabled: true, privacyMode: false },
+      { durableJobs },
+    );
+    mailService.sendEmail.mockRejectedValue(new Error('SendGrid down'));
+    await service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'warning',
+      title: 'Backup failed',
+      message: 'Nightly backup failed.',
+      deduplicationKey: 't18-exhaust',
+    });
+    const row = stored[0];
+    await service.retryEmailDelivery(row.id);
+    await service.retryEmailDelivery(row.id);
+    const incident = stored.find((r) => r.eventType === 'notification.email_failed');
+    expect(incident).toBeDefined();
+    expect(incident.severity).toBe('warning');
+    expect(incident.category).toBe('system');
+    // The incident itself goes to super_admins only.
+    expect(incident.recipientUserId).toBe('user-owner');
+  });
+
+  it('19. template action URLs are absolute and external URLs are rejected', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    await service.createForTenant({
+      tenantId: 'tenant-1',
+      eventType: 'lead.ai_handoff',
+      category: 'leads',
+      severity: 'warning',
+      title: 'Handoff',
+      message: 'Handoff message.',
+      deduplicationKey: 't19-action-url',
+      templateId: 'lead.ai_handoff',
+      templateContext: {
+        leadName: 'Jordan Buyer',
+        handoffReason: 'Low confidence',
+        summary: 'Asked about pricing.',
+        actionPath: '/app/conversations?leadId=lead-1',
+      },
+    });
+    const call = mailService.sendEmail.mock.calls[0][0];
+    expect(call.text).toContain('https://www.realtytechai.app/app/conversations?leadId=lead-1');
+    expect(call.text).not.toMatch(/(^|\s)\/app\//);
+
+    // An external actionPath in the template context must not produce an email.
+    const evil = setup({ emailEnabled: true, privacyMode: false });
+    const created = await evil.service.createForPlatform({
+      eventType: 'system.evil',
+      category: 'system',
+      severity: 'warning',
+      title: 'Evil',
+      message: 'Evil message.',
+      deduplicationKey: 't19-evil',
+      templateId: 'platform.warning',
+      templateContext: { warningTitle: 'x', actionPath: 'https://evil.example/phish' },
+    });
+    expect(created).toEqual([]);
+    expect(evil.mailService.sendEmail).not.toHaveBeenCalled();
+    expect(evil.stored).toHaveLength(0);
+  });
+
+  it('stores template id on the notification for audit', async () => {
+    const { service, stored } = setup({ emailEnabled: true, privacyMode: false });
+    await service.createForPlatform({
+      eventType: 'integration.recovered',
+      category: 'integrations',
+      severity: 'success',
+      title: '',
+      message: '',
+      deduplicationKey: 't-template-audit',
+      templateId: 'integration.recovered',
+      templateContext: { provider: 'SendGrid', downtimeMinutes: 17 },
+    });
+    expect(stored[0].templateId).toBe('integration.recovered');
+    expect(stored[0].title).toContain('SendGrid');
   });
 });

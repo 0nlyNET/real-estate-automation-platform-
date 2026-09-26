@@ -36,6 +36,12 @@ export class UpdateNotificationPreferencesDto {
   @IsOptional() @IsBoolean()
   privacyMode?: boolean;
 
+  @IsOptional() @IsBoolean()
+  dailyDigestEnabled?: boolean;
+
+  @IsOptional() @IsBoolean()
+  weeklyDigestEnabled?: boolean;
+
   @IsOptional() @IsObject()
   categorySettings?: Record<string, boolean>;
 

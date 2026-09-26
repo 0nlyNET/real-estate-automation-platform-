@@ -1,9 +1,11 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import * as webPush from 'web-push';
 import { platformAdminEmails, platformStaffEmails, resolvePlatformRole } from '../../common/env';
 import { operationalEvent } from '../../common/operational-log';
+import { MailService } from '../../mail/mail.service';
+import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 import { User } from '../users/user.entity';
 import {
   AdminNotification,
@@ -12,6 +14,11 @@ import {
 } from './notification.entity';
 import { AdminNotificationPreference } from './notification-preference.entity';
 import { AdminPushSubscription } from './push-subscription.entity';
+import {
+  canonicalActionUrl,
+  getTemplate,
+  TemplateContext,
+} from './notification-templates';
 
 type PlatformAudience = 'super_admin' | 'operators';
 
@@ -29,6 +36,19 @@ export type CreatePlatformNotification = {
   entityId?: string | null;
   incidentKey?: string | null;
   metadata?: Record<string, string | number | boolean | null>;
+  /**
+   * When set, notifications go to exactly these users (verified to be
+   * platform operators for platform notifications, or members of the tenant
+   * for tenant notifications). Used by digests, which are per-recipient.
+   */
+  exactRecipientIds?: string[] | null;
+  /**
+   * When set, the email subject/html/text are rendered from the template
+   * registry instead of the raw title/message. The in-app title/message
+   * fall back to the rendered subject/textBody.
+   */
+  templateId?: string | null;
+  templateContext?: TemplateContext | null;
 };
 
 export type CreateTenantNotification = Omit<
@@ -64,6 +84,29 @@ const WEB_PUSH_HOST_SUFFIXES = [
   'push.apple.com',
 ];
 
+/** Reserved metadata key carrying the serialized template context for retries. */
+const TEMPLATE_CONTEXT_METADATA_KEY = '__templateContext';
+/** Max email send attempts per notification (initial + retries). */
+const EMAIL_MAX_ATTEMPTS = 3;
+/** Exponential backoff delays (minutes) after attempt 1 and 2 fail. */
+const EMAIL_RETRY_BACKOFF_MINUTES = [1, 5, 15];
+const EMAIL_RETRY_TASK_TYPE = 'notifications.email_retry';
+
+/**
+ * Strip anything secret-looking from a provider error before persisting or
+ * logging it. Never persist raw tokens, keys, or authorization headers.
+ */
+export function sanitizeProviderError(error: unknown): string {
+  let message = error instanceof Error ? error.message : String(error);
+  message = message
+    .replace(/(api[_-]?key|apikey)\s*[:=]\s*['"]?[^\s'"]+/gi, '$1=[redacted]')
+    .replace(/(authorization\s*:\s*)(bearer\s+)?[^\s,;]+/gi, '$1[redacted]')
+    .replace(/(token|secret|password)\s*[:=]\s*['"]?[^\s'"]+/gi, '$1=[redacted]')
+    .replace(/x-api-key:\s*[^\s,;]+/gi, 'x-api-key: [redacted]')
+    .replace(/SG\.[A-Za-z0-9_-]{10,}/g, 'SG.[redacted]');
+  return message.slice(0, 500);
+}
+
 export function assertSafePushEndpoint(value: string) {
   let endpoint: URL;
   try {
@@ -89,7 +132,7 @@ export function assertSafePushEndpoint(value: string) {
 }
 
 @Injectable()
-export class NotificationsService {
+export class NotificationsService implements OnModuleInit {
   private readonly logger = new Logger(NotificationsService.name);
   private readonly pushConfigured: boolean;
 
@@ -102,6 +145,8 @@ export class NotificationsService {
     private readonly preferences: Repository<AdminNotificationPreference>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
+    private readonly mailService: MailService,
+    @Optional() private readonly durableJobs?: DurableJobsService,
   ) {
     const subject = String(process.env.VAPID_SUBJECT || '').trim();
     const publicKey = String(process.env.VAPID_PUBLIC_KEY || '').trim();
@@ -122,6 +167,70 @@ export class NotificationsService {
     this.pushConfigured = configured;
   }
 
+  onModuleInit() {
+    if (!this.durableJobs) return;
+    this.durableJobs.register(EMAIL_RETRY_TASK_TYPE, async (job) => {
+      const notificationId = String((job.payload as any)?.notificationId || '');
+      if (notificationId) await this.retryEmailDelivery(notificationId);
+    });
+  }
+
+  /**
+   * Durable retry handler for failed notification emails. Re-renders the
+   * email from the stored template (or the stored title/message) and attempts
+   * delivery again; deliverEmail() schedules the next backoff or records
+   * exhaustion.
+   */
+  async retryEmailDelivery(notificationId: string) {
+    const notification = await this.notifications.findOne({
+      where: { id: notificationId },
+    });
+    if (!notification) return;
+    if (notification.emailDeliveryStatus !== 'failed') return;
+    if (notification.emailAttemptCount >= EMAIL_MAX_ATTEMPTS) return;
+    const preference = await this.getPreferences(notification.recipientUserId);
+    await this.deliverEmail(notification, preference);
+  }
+
+  /**
+   * Resolve the rendered email content for a notification create input. When
+   * a templateId is supplied, subject/html/text come from the template
+   * registry; the in-app title/message fall back to the rendered subject
+   * and text body when the caller did not provide explicit ones.
+   */
+  private resolveRenderedContent(input: CreatePlatformNotification | CreateTenantNotification): {
+    title: string;
+    message: string;
+    htmlBody: string | null;
+    templateId: string | null;
+    templateContext: TemplateContext | null;
+  } {
+    const templateId = input.templateId || null;
+    if (!templateId) {
+      return {
+        title: input.title,
+        message: input.message,
+        htmlBody: null,
+        templateId: null,
+        templateContext: null,
+      };
+    }
+    const template = getTemplate(templateId);
+    if (!template) {
+      throw new BadRequestException(`Unknown notification template: ${templateId}`);
+    }
+    const ctx: TemplateContext = { ...(input.templateContext || {}) };
+    // The stored actionUrl path is always available to templates.
+    if (input.actionUrl && !ctx.actionPath) ctx.actionPath = input.actionUrl;
+    return {
+      title: input.title || template.subject(ctx),
+      message: input.message || template.textBody(ctx),
+      htmlBody: template.htmlBody(ctx),
+      templateId,
+      templateContext: ctx,
+    };
+  }
+
   private ensureActionUrl(value?: string | null) {
     if (!value) return null;
     if (
@@ -139,6 +248,21 @@ export class NotificationsService {
       input.audience === 'super_admin' ||
       input.category === 'billing' ||
       input.category === 'system';
+    if (input.exactRecipientIds) {
+      // Exact targeting, guarded: only verified platform operators may be
+      // targeted by platform notifications. An explicitly empty list means
+      // no recipients (used by digests when nobody opted in).
+      if (!input.exactRecipientIds.length) return [];
+      const users = await this.users.find({
+        where: { id: In(input.exactRecipientIds), isActive: true, isEmailVerified: true },
+      });
+      return users
+        .filter(
+          (user) =>
+            resolvePlatformRole(user.email, user.platformRole) !== null,
+        )
+        .map((user) => user.id);
+    }
     if (input.assignedOperatorId) {
       const assigned = await this.users.findOne({
         where: { id: input.assignedOperatorId, isActive: true, isEmailVerified: true },
@@ -175,7 +299,10 @@ export class NotificationsService {
     try {
       const actionUrl = this.ensureActionUrl(input.actionUrl);
       const recipientIds = await this.recipientIds(input);
-      return this.createForRecipients(input, actionUrl, recipientIds);
+      // NOTE: `return await` (not bare `return`) so rejections from
+      // createForRecipients are caught by the catch block below. A bare
+      // `return promise` inside try does NOT route the rejection to catch.
+      return await this.createForRecipients(input, actionUrl, recipientIds);
     } catch (error: unknown) {
       this.logger.error(
         operationalEvent('admin_notification_creation_failed', {
@@ -197,18 +324,34 @@ export class NotificationsService {
           isEmailVerified: true,
         },
       });
-      const recipientIds = tenantUsers
-        .filter((user) => {
-          if (user.role === 'read_only') return false;
-          if (!input.assignedUserId) return user.role === 'owner' || user.role === 'admin';
-          return (
-            user.id === input.assignedUserId ||
-            user.role === 'owner' ||
-            user.role === 'admin'
-          );
-        })
-        .map((user) => user.id);
-      return this.createForRecipients(input, actionUrl, [...new Set(recipientIds)]);
+      const tenantUserIds = new Set(tenantUsers.map((user) => user.id));
+      let recipientIds: string[];
+      if (input.exactRecipientIds) {
+        // Tenant isolation: only users verified to belong to this tenant.
+        // An explicitly empty list means no recipients.
+        recipientIds = [...new Set(input.exactRecipientIds)].filter((id) =>
+          tenantUserIds.has(id),
+        );
+      } else {
+        recipientIds = tenantUsers
+          .filter((user) => {
+            if (user.role === 'read_only') return false;
+            // Billing notifications go to workspace owners only — never agents.
+            if (input.category === 'billing' && !input.assignedUserId) {
+              return user.role === 'owner';
+            }
+            if (!input.assignedUserId) return user.role === 'owner' || user.role === 'admin';
+            return (
+              user.id === input.assignedUserId ||
+              user.role === 'owner' ||
+              user.role === 'admin'
+            );
+          })
+          .map((user) => user.id);
+      }
+      // NOTE: `return await` (not bare `return`) so rejections from
+      // createForRecipients are caught by the catch block below.
+      return await this.createForRecipients(input, actionUrl, [...new Set(recipientIds)]);
     } catch (error: unknown) {
       this.logger.error(
         operationalEvent('client_notification_creation_failed', {
@@ -226,10 +369,19 @@ export class NotificationsService {
     actionUrl: string | null,
     recipientIds: string[],
   ) {
+    const rendered = this.resolveRenderedContent(input);
+    // Persist the template context (serialized) so email retries can
+    // re-render the exact same content in a later job run.
+    const metadata: Record<string, string | number | boolean | null> = {
+      ...(input.metadata || {}),
+    };
+    if (rendered.templateId && rendered.templateContext) {
+      metadata[TEMPLATE_CONTEXT_METADATA_KEY] = JSON.stringify(rendered.templateContext).slice(0, 4000);
+    }
     const created: AdminNotification[] = [];
     for (const recipientUserId of recipientIds) {
       const preference = await this.getPreferences(recipientUserId);
-      if (!preference.inAppEnabled && !preference.pushEnabled) continue;
+      if (!preference.inAppEnabled && !preference.pushEnabled && !preference.emailEnabled) continue;
       let notification = await this.notifications.findOne({
         where: {
           recipientUserId,
@@ -247,14 +399,16 @@ export class NotificationsService {
             eventType: input.eventType,
             category: input.category,
             severity: input.severity,
-            title: input.title.slice(0, 180),
-            message: input.message.slice(0, 2000),
+            title: rendered.title.slice(0, 180),
+            message: rendered.message.slice(0, 2000),
             actionUrl,
             entityType: input.entityType || null,
             entityId: input.entityId || null,
             deduplicationKey: input.deduplicationKey.slice(0, 255),
             incidentKey: input.incidentKey?.slice(0, 255) || null,
-            metadata: input.metadata || {},
+            templateId: rendered.templateId,
+            metadata,
+            emailAttemptCount: 0,
             expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
           }),
         );
@@ -270,6 +424,7 @@ export class NotificationsService {
       }
       created.push(notification);
       await this.deliverPush(notification, preference);
+      await this.deliverEmail(notification, preference);
     }
     return created;
   }
@@ -349,7 +504,7 @@ export class NotificationsService {
         recipientUserId,
         inAppEnabled: true,
         pushEnabled: true,
-        emailEnabled: false,
+        emailEnabled: true,
         privacyMode: true,
         categorySettings: DEFAULT_CATEGORIES,
         severitySettings: DEFAULT_SEVERITIES,
@@ -357,6 +512,8 @@ export class NotificationsService {
         quietHoursStart: '21:00',
         quietHoursEnd: '08:00',
         timezone: 'America/New_York',
+        dailyDigestEnabled: true,
+        weeklyDigestEnabled: false,
       }).orIgnore().execute();
       preference = await this.preferences.findOne({ where: { recipientUserId } });
       if (!preference) throw new Error('Notification preferences could not be initialized');
@@ -378,6 +535,8 @@ export class NotificationsService {
       'quietHoursStart',
       'quietHoursEnd',
       'timezone',
+      'dailyDigestEnabled',
+      'weeklyDigestEnabled',
     ] as const) {
       if (patch[key] !== undefined) (preference as any)[key] = patch[key];
     }
@@ -555,6 +714,173 @@ export class NotificationsService {
     notification.pushDeliveryStatus = sent ? 'sent' : 'failed';
     notification.pushSentAt = sent ? new Date() : null;
     await this.notifications.save(notification);
+  }
+
+  /**
+   * Render the email subject/text/html for a persisted notification. Template
+   * notifications re-render from the stored template id + context; legacy
+   * notifications fall back to the title/message with privacy-mode masking.
+   */
+  private renderEmailContent(
+    notification: AdminNotification,
+    preference: AdminNotificationPreference,
+  ): { subject: string; text: string; html?: string } {
+    if (notification.templateId) {
+      const template = getTemplate(notification.templateId);
+      let ctx: TemplateContext = {};
+      try {
+        const raw = notification.metadata?.[TEMPLATE_CONTEXT_METADATA_KEY];
+        if (typeof raw === 'string' && raw) ctx = JSON.parse(raw);
+      } catch {
+        ctx = {};
+      }
+      if (notification.actionUrl && !ctx.actionPath) ctx = { ...ctx, actionPath: notification.actionUrl };
+      if (template) {
+        return {
+          subject: template.subject(ctx),
+          text: template.textBody(ctx),
+          html: template.htmlBody(ctx),
+        };
+      }
+    }
+    const subject = preference.privacyMode
+      ? 'RealtyTechAI update'
+      : `[RealtyTechAI] [${notification.severity.toUpperCase()}] ${notification.title}`;
+    const body = preference.privacyMode
+      ? 'Open RealtyTechAI to view this update.'
+      : notification.message;
+    // Emails always carry the canonical absolute URL, never a raw path.
+    const actionLine = notification.actionUrl
+      ? `\n\nView in RealtyTechAI: ${canonicalActionUrl(notification.actionUrl)}`
+      : '';
+    return { subject, text: `${body}${actionLine}` };
+  }
+
+  private async deliverEmail(
+    notification: AdminNotification,
+    preference: AdminNotificationPreference,
+  ) {
+    const markSkipped = async () => {
+      notification.emailDeliveryStatus = 'skipped';
+      await this.notifications.save(notification);
+    };
+    // INFO events are in-app only by default — they never generate email.
+    // Digest emails are the explicit exception: an opted-in digest is, by
+    // definition, an email the user asked for.
+    const isDigestEmail = (notification.templateId || '').startsWith('digest.');
+    if (notification.severity === 'info' && !isDigestEmail) {
+      await markSkipped();
+      return;
+    }
+    // Critical alerts bypass category/severity opt-outs and quiet hours,
+    // mirroring deliverPush. The emailEnabled master switch is always honored.
+    // Opted-in digests bypass the severity toggle: dailyDigestEnabled is the
+    // explicit opt-in for that email.
+    const categoryEnabled =
+      notification.severity === 'critical' ||
+      preference.categorySettings?.[notification.category] !== false;
+    const severityEnabled =
+      notification.severity === 'critical' ||
+      isDigestEmail ||
+      preference.severitySettings?.[notification.severity] !== false;
+    if (
+      !preference.emailEnabled ||
+      !categoryEnabled ||
+      !severityEnabled ||
+      (notification.severity !== 'critical' && this.isQuietHours(preference))
+    ) {
+      await markSkipped();
+      return;
+    }
+    const recipient = await this.users.findOne({
+      where: { id: notification.recipientUserId },
+    });
+    const toEmail = recipient?.email?.trim().toLowerCase();
+    if (!toEmail || !recipient?.isActive || !recipient?.isEmailVerified) {
+      await markSkipped();
+      return;
+    }
+    notification.emailAttemptCount = (notification.emailAttemptCount || 0) + 1;
+    try {
+      const content = this.renderEmailContent(notification, preference);
+      const result = await this.mailService.sendEmail({
+        to: toEmail,
+        subject: content.subject,
+        text: content.text,
+        ...(content.html ? { html: content.html } : {}),
+      });
+      notification.emailDeliveryStatus = 'sent';
+      notification.emailSentAt = new Date();
+      notification.providerMessageId = result?.messageId || null;
+      notification.emailLastError = null;
+      notification.emailRetryAt = null;
+    } catch (error: unknown) {
+      notification.emailDeliveryStatus = 'failed';
+      notification.emailLastError = sanitizeProviderError(error);
+      notification.emailRetryAt = null;
+      this.logger.error(
+        operationalEvent('notification_email_delivery_failed', {
+          notificationId: notification.id,
+          attempt: notification.emailAttemptCount,
+          error: notification.emailLastError,
+        }),
+      );
+      await this.notifications.save(notification);
+      await this.scheduleEmailRetryOrEscalate(notification);
+      return;
+    }
+    await this.notifications.save(notification);
+  }
+
+  /**
+   * Bounded retry with exponential backoff after an email send failure. When
+   * attempts are exhausted, an operations incident is raised (once) so the
+   * failure is visible instead of silently dropped. The in-app notification
+   * is always preserved regardless of email outcome.
+   */
+  private async scheduleEmailRetryOrEscalate(notification: AdminNotification) {
+    if (notification.emailAttemptCount < EMAIL_MAX_ATTEMPTS && this.durableJobs) {
+      const delayMinutes =
+        EMAIL_RETRY_BACKOFF_MINUTES[notification.emailAttemptCount - 1] || 15;
+      notification.emailRetryAt = new Date(Date.now() + delayMinutes * 60_000);
+      await this.notifications.save(notification);
+      try {
+        await this.durableJobs.schedule({
+          taskType: EMAIL_RETRY_TASK_TYPE,
+          dedupeKey: `email-retry:${notification.id}`,
+          payload: { notificationId: notification.id },
+          nextRunAt: notification.emailRetryAt,
+          maxAttempts: EMAIL_MAX_ATTEMPTS,
+        });
+      } catch (error: unknown) {
+        this.logger.error(
+          operationalEvent('notification_email_retry_schedule_failed', {
+            notificationId: notification.id,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+      return;
+    }
+    if (notification.emailAttemptCount < EMAIL_MAX_ATTEMPTS) return;
+    // Attempts exhausted. Raise one operations incident — but never for the
+    // incident notification itself, to avoid unbounded regress.
+    if (notification.eventType === 'notification.email_failed') return;
+    await this.createForPlatform({
+      eventType: 'notification.email_failed',
+      category: 'system',
+      severity: 'warning',
+      audience: 'super_admin',
+      title: 'Notification email delivery failed repeatedly',
+      message:
+        `Email delivery for notification "${notification.title}" failed after ` +
+        `${notification.emailAttemptCount} attempts. Last error: ${notification.emailLastError || 'unknown'}. ` +
+        `The in-app notification is preserved.`,
+      deduplicationKey: `email-failed:${notification.id}`,
+      incidentKey: `email-delivery:${notification.id}`,
+      actionUrl: '/admin/dashboard',
+      metadata: { notificationId: notification.id },
+    });
   }
 
   async incidentIsOpen(incidentKey: string) {

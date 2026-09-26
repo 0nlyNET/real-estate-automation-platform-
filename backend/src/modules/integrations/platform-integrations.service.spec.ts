@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { ProviderConfigService } from './provider-config.service';
 import { EmailIdentityService } from './email-identity.service';
-import { decryptIntegrationPayload } from './integrations.service';
+import { decryptIntegrationPayload } from './integration-crypto';
 import { PlatformIntegrationsService } from './platform-integrations.service';
 
 describe('platform-managed tenant messaging assignments', () => {

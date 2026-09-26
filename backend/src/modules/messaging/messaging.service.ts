@@ -16,7 +16,7 @@ import { Tenant } from '../tenants/tenant.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { SequencesService } from '../sequences/sequences.service';
 import { Credential } from '../settings/credential.entity';
-import { decryptIntegrationPayload } from '../integrations/integrations.service';
+import { decryptIntegrationPayload } from '../integrations/integration-crypto';
 import { ComplianceService } from '../compliance/compliance.service';
 import { sendSendGridEmail, sendTwilioSms } from '../../common/providers';
 import { UserRole } from '../../common/rbac';

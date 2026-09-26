@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { sendSendGridEmail } from '../common/providers';
 import { PlatformCredential } from '../modules/integrations/platform-credential.entity';
-import { decryptIntegrationPayload } from '../modules/integrations/integrations.service';
+import { decryptIntegrationPayload } from '../modules/integrations/integration-crypto';
 
 @Injectable()
 export class MailService {
@@ -40,14 +40,14 @@ export class MailService {
     subject: string;
     text: string;
     html?: string;
-  }) {
+  }): Promise<{ messageId?: string; status: 'accepted' }> {
     const status = await this.emailProviderStatus();
     if (!status.configured) throw new Error(status.reason);
     const apiKey = status.apiKey;
     const fromEmail = process.env.SENDGRID_FROM_EMAIL as string;
 
     const fromName = process.env.SENDGRID_FROM_NAME || 'RealtyTechAI';
-    await sendSendGridEmail({
+    return sendSendGridEmail({
       apiKey,
       to: params.to,
       fromEmail,

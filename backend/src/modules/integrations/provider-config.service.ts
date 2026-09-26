@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { decryptString } from '../../common/crypto-secrets';
-import { decryptIntegrationPayload } from './integrations.service';
+import { decryptIntegrationPayload } from './integration-crypto';
 import { PlatformCredential } from './platform-credential.entity';
 import { TenantEmailIdentity } from './tenant-email-identity.entity';
 import { TenantMessagingResource } from './tenant-messaging-resource.entity';

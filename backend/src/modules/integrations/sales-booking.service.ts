@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as crypto from 'crypto';
 import { Repository } from 'typeorm';
 import { isSafeBookingUrl } from '../../common/booking-link';
-import { decryptIntegrationPayload } from './integrations.service';
+import { decryptIntegrationPayload } from './integration-crypto';
 import { PlatformCredential } from './platform-credential.entity';
 
 const SALES_BOOKING_PROVIDER = 'sales_calendar';

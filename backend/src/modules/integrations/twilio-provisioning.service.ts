@@ -5,7 +5,7 @@ import { DataSource, Repository } from 'typeorm';
 import { decryptString, encryptString } from '../../common/crypto-secrets';
 import { sanitizeOperationalText } from '../../common/operational-log';
 import { Tenant } from '../tenants/tenant.entity';
-import { decryptIntegrationPayload } from './integrations.service';
+import { decryptIntegrationPayload } from './integration-crypto';
 import { PlatformCredential } from './platform-credential.entity';
 import { TenantMessagingResource } from './tenant-messaging-resource.entity';
 import { AuditService } from '../audit/audit.service';
