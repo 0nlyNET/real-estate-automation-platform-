@@ -15,7 +15,7 @@ import { ClientOperationsService } from '../client-operations/client-operations.
 import { ComplianceService } from '../compliance/compliance.service';
 import { EntitlementService } from '../entitlements/entitlement.service';
 import { Credential } from '../settings/credential.entity';
-import { decryptIntegrationPayload } from '../integrations/integrations.service';
+import { decryptIntegrationPayload } from '../integrations/integration-crypto';
 import { Lead } from '../leads/lead.entity';
 import { Message } from '../messaging/message.entity';
 import { NotificationsService } from '../notifications/notifications.service';

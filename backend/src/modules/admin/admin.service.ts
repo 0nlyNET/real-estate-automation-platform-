@@ -19,7 +19,7 @@ import { BillingEvent } from '../billing/billing-event.entity';
 import { PlatformOperatorsService } from '../../common/platform-operators.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { environmentReadiness } from '../../common/environment-readiness';
-import { decryptIntegrationPayload } from '../integrations/integrations.service';
+import { decryptIntegrationPayload } from '../integrations/integration-crypto';
 import {
   defaultTenantUsagePolicy,
 } from '../limits/limits.service';

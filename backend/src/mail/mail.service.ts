@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { sendSendGridEmail } from '../common/providers';
 import { PlatformCredential } from '../modules/integrations/platform-credential.entity';
-import { decryptIntegrationPayload } from '../modules/integrations/integrations.service';
+import { decryptIntegrationPayload } from '../modules/integrations/integration-crypto';
 
 @Injectable()
 export class MailService {

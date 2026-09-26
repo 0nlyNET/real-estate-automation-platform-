@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { decryptIntegrationPayload } from '../integrations/integrations.service';
+import { decryptIntegrationPayload } from '../integrations/integration-crypto';
 import { Credential } from '../settings/credential.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { AiAuditService } from './ai-audit.service';

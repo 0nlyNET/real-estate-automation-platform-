@@ -13,7 +13,7 @@ import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Credential } from '../settings/credential.entity';
 import { SequenceStep } from '../sequences/sequence-step.entity';
 import { billingEligibility } from '../entitlements/entitlement.service';
-import { decryptIntegrationPayload } from '../integrations/integrations.service';
+import { decryptIntegrationPayload } from '../integrations/integration-crypto';
 import {
   operationalEvent,
   sanitizeOperationalText,

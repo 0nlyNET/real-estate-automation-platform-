@@ -16,7 +16,7 @@ import { Credential } from '../settings/credential.entity';
 import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { Message } from '../messaging/message.entity';
-import { decryptIntegrationPayload } from '../integrations/integrations.service';
+import { decryptIntegrationPayload } from '../integrations/integration-crypto';
 import { ComplianceService } from '../compliance/compliance.service';
 import { SequencesService } from '../sequences/sequences.service';
 import { LeadsService } from '../leads/leads.service';
