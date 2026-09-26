@@ -34,6 +34,7 @@ import {
   storedProviderFromName,
 } from '../calendar/booking-provider.types';
 import { TenantWebhookSubscription } from '../crm-events/tenant-webhook-subscription.entity';
+import { OperationalEventsService } from '../notifications/operational-events.service';
 
 type ReadinessCategory =
   | 'client_information'
@@ -158,7 +159,15 @@ export class OnboardingService {
     @Optional()
     @InjectRepository(TenantWebhookSubscription)
     private readonly crmSubscriptions?: Repository<TenantWebhookSubscription>,
+    @Optional() private readonly operationalEvents?: OperationalEventsService,
   ) {}
+
+  /**
+   * Last known readiness state per tenant for ready-for-activation transition
+   * detection. In-memory only; the notification's day-bucketed dedupe key is
+   * the backstop across restarts and instances.
+   */
+  private readonly readyNotified = new Map<string, boolean>();
 
   async getOrCreate(tenantId: string) {
     let record = await this.records.findOne({ where: { tenantId } });
@@ -631,6 +640,132 @@ export class OnboardingService {
     }
     await this.testRuns.save(run);
     return record;
+  }
+
+  /**
+   * Safe automation: align the client's approved sender identity with the
+   * provisioned managed email identity so readiness stops blocking on a
+   * value the platform already knows.
+   *
+   * - Client never set one -> adopt the provisioned from address.
+   * - Matches case-insensitively -> no-op.
+   * - Client explicitly set a DIFFERENT address -> never silently override;
+   *   report the mismatch so the operator can surface it.
+   * Gates are not weakened: the provisioned identity itself is untouched,
+   * and changing the approved identity bumps configurationUpdatedAt so any
+   * stale evidence must be re-earned.
+   */
+  async autoAlignApprovedEmailIdentity(tenantId: string): Promise<{
+    ok: boolean;
+    aligned: boolean;
+    reason: string;
+    brandIdentity?: string | null;
+    provisionedIdentity?: string | null;
+  }> {
+    const record = await this.getOrCreate(tenantId);
+    if (!record.emailEnabled) {
+      return { ok: false, aligned: false, reason: 'email_not_enabled' };
+    }
+    if (!this.emailIdentities) {
+      return { ok: false, aligned: false, reason: 'identity_store_unavailable' };
+    }
+    const identity = await this.emailIdentities.findOne({
+      where: { tenantId },
+    });
+    const provisioned = String(identity?.fromEmail || '')
+      .trim()
+      .toLowerCase();
+    if (!identity || !validEmail(provisioned)) {
+      return { ok: false, aligned: false, reason: 'no_provisioned_identity' };
+    }
+    const brand = record.brandCommunication || {};
+    const current = String(brand.approvedEmailIdentity || '')
+      .trim()
+      .toLowerCase();
+    if (current === provisioned) {
+      return {
+        ok: true,
+        aligned: false,
+        reason: 'already_aligned',
+        brandIdentity: current,
+        provisionedIdentity: provisioned,
+      };
+    }
+    if (current) {
+      return {
+        ok: false,
+        aligned: false,
+        reason: 'mismatch',
+        brandIdentity: current,
+        provisionedIdentity: provisioned,
+      };
+    }
+    record.brandCommunication = {
+      ...brand,
+      approvedEmailIdentity: provisioned,
+    };
+    record.configurationUpdatedAt = new Date();
+    await this.records.save(record);
+    await this.audit?.recordSystemEvent({
+      tenantId,
+      eventType: 'onboarding.approved_email_identity_auto_aligned',
+      resourceType: 'onboarding_record',
+      resourceId: record.id,
+      beforeState: { approvedEmailIdentity: null },
+      afterState: { approvedEmailIdentity: provisioned },
+    });
+    this.logger.log(
+      operationalEvent('approved_email_identity_auto_aligned', {
+        tenantId,
+        provisionedIdentity: provisioned,
+      }),
+    );
+    return {
+      ok: true,
+      aligned: true,
+      reason: 'auto_aligned',
+      brandIdentity: provisioned,
+      provisionedIdentity: provisioned,
+    };
+  }
+
+  /**
+   * Track an automated provider connection-test attempt so the automation
+   * retries on a sane cadence instead of every provisioning pass.
+   */
+  async noteAutoConnectionTestAttempt(
+    tenantId: string,
+    provider: 'sendgrid',
+    outcome: 'ok' | 'failed',
+    detail?: string,
+  ) {
+    const record = await this.getOrCreate(tenantId);
+    const now = new Date().toISOString();
+    record.providerTests = {
+      ...(record.providerTests || {}),
+      [`${provider}AutoTestLastAttemptedAt`]: now,
+      [`${provider}AutoTestLastResult`]: outcome,
+      ...(detail
+        ? { [`${provider}AutoTestLastDetail`]: sanitizeOperationalText(detail, 300) }
+        : {}),
+    };
+    return this.records.save(record);
+  }
+
+  /**
+   * Preferred recipient for automated connection tests: the controlled test
+   * address (or account owner fallback). Never a lead.
+   */
+  async connectionTestRecipient(tenantId: string): Promise<string | null> {
+    const record = await this.getOrCreate(tenantId);
+    const candidate = String(
+      record.contacts?.controlledTestEmail ||
+        record.contacts?.accountOwner ||
+        '',
+    )
+      .trim()
+      .toLowerCase();
+    return validEmail(candidate) ? candidate : null;
   }
 
   private async approvedTemplateCounts(tenantId: string) {
@@ -1491,7 +1626,7 @@ export class OnboardingService {
         item.key !== 'operator_approval' &&
         item.key !== 'global_pause',
     );
-    return {
+    const result = {
       state: tenant.lifecycleStatus,
       activationStatus: computedActivationStatus,
       ready: blockers.length === 0,
@@ -1553,6 +1688,43 @@ export class OnboardingService {
       },
       lastUpdatedAt: record.updatedAt,
     };
+    await this.notifyReadyForActivationTransition(tenantId, tenant, result, {
+      billing: billing.allowed ? 'verified' : `blocked: ${billing.reason || 'payment not confirmed'}`,
+      email: result.providerDiagnostics.sendgrid.status,
+      crm: appointmentCrmSubscription ? 'connected' : 'not connected',
+      calendar: bookingProviderConnection ? 'connected' : 'not connected',
+    });
+    return result;
+  }
+
+  /**
+   * Fires readyForActivation once per ready-transition (not on every
+   * readiness poll). The last-known state is tracked in memory; the
+   * notification's day-bucketed dedupe key is the backstop across restarts.
+   */
+  private async notifyReadyForActivationTransition(
+    tenantId: string,
+    tenant: { name?: string | null } | null,
+    readiness: { ready: boolean },
+    checklist: { billing?: string; email?: string; crm?: string; calendar?: string },
+  ) {
+    const wasReady = this.readyNotified.get(tenantId) === true;
+    this.readyNotified.set(tenantId, readiness.ready);
+    if (!readiness.ready || wasReady || !this.operationalEvents) return;
+    try {
+      await this.operationalEvents.readyForActivation({
+        tenantId,
+        tenantName: tenant?.name || undefined,
+        checklist,
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('ready_for_activation_notification_failed', {
+          tenantId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
   }
 
   async beginTesting(tenantId: string, operatorId: string) {
@@ -1626,6 +1798,27 @@ export class OnboardingService {
           blockerKeys: readiness.blockers.map((item) => item.key),
         }),
       );
+      // One notification per explicit activation attempt (day-bucketed dedupe
+      // inside the facade). Never breaks the activation flow itself.
+      try {
+        const blockedTenant = await this.tenants
+          .findOne({ where: { id: tenantId } })
+          .catch(() => null);
+        await this.operationalEvents?.onboardingBlocked({
+          tenantId,
+          tenantName: blockedTenant?.name || undefined,
+          blocker: readiness.blockers.map((item) => item.label).join('; '),
+          whatIsNeeded:
+            'Resolve the readiness blockers in the onboarding checklist, then retry activation.',
+        });
+      } catch (error: unknown) {
+        this.logger.warn(
+          operationalEvent('activation_blocked_notification_failed', {
+            tenantId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
       throw new BadRequestException({
         code: 'ACTIVATION_BLOCKED',
         message: 'Workspace activation requirements are incomplete',
@@ -1666,6 +1859,21 @@ export class OnboardingService {
       await manager.save(record);
       await manager.save(settings!);
     });
+    // Activation re-enables automations: raise the resume lifecycle event.
+    // Notification failure never breaks the activation itself.
+    try {
+      await this.operationalEvents?.automationResumed({
+        tenantId,
+        tenantName: tenant.name || undefined,
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('activation_automation_event_failed', {
+          tenantId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
     return this.readiness(tenantId);
   }
 
@@ -1684,6 +1892,22 @@ export class OnboardingService {
       await manager.save(settings!);
       await manager.save(record);
     });
+    // Tenant automation pause lifecycle event. Never breaks the pause itself.
+    try {
+      await this.operationalEvents?.automationPaused({
+        tenantId,
+        tenantName: tenant.name || undefined,
+        reason: 'Workspace paused by operator',
+        actionNeeded: 'Resume the workspace to restart automations.',
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('pause_automation_event_failed', {
+          tenantId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
     return { ok: true, lifecycleStatus: tenant.lifecycleStatus };
   }
 }

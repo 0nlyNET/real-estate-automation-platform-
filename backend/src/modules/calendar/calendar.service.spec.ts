@@ -655,3 +655,318 @@ describe('CalendarService production behavior', () => {
     );
   });
 });
+
+describe('CalendarService failure alerting (P3) and credential expiry (P6)', () => {
+  function alertFixture(overrides: Record<string, unknown> = {}) {
+    const connection: any = {
+      id: 'connection-1',
+      tenantId: 'tenant-1',
+      provider: 'google',
+      accessTokenEncrypted: encryptString('current-access-token'),
+      refreshTokenEncrypted: encryptString('refresh-token'),
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      refreshTokenExpiresAt: null,
+      grantedScopes: [],
+      status: 'connected',
+      selectedCalendarId: 'calendar@example.com',
+      selectedCalendarName: 'Appointments',
+      selectedCalendarTimeZone: 'America/New_York',
+      lastTestedAt: new Date(),
+      lastSuccessfulSyncAt: new Date(),
+      lastErrorCode: null,
+      lastErrorAt: null,
+      webhookChannelId: null,
+      webhookResourceId: null,
+      webhookTokenHash: null,
+      webhookExpiresAt: null,
+      webhookLastMessageNumber: null,
+    };
+    Object.assign(connection, overrides);
+    const connections = {
+      findOne: jest.fn().mockResolvedValue(connection),
+      find: jest.fn().mockResolvedValue([]),
+      create: jest.fn((value) => ({ id: 'connection-new', ...value })),
+      save: jest.fn(async (value) => value),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const oauthStates = {
+      create: jest.fn((value) => ({ id: 'state-1', ...value })),
+      save: jest.fn(async (value) => value),
+    };
+    const google = {
+      authorizationUrl: jest.fn().mockReturnValue('https://accounts.google.com/oauth'),
+      exchangeCode: jest.fn(),
+      refreshAccessToken: jest.fn(),
+      revokeToken: jest.fn().mockResolvedValue(undefined),
+      listCalendars: jest.fn(),
+      getCalendar: jest.fn(),
+      freeBusy: jest.fn().mockResolvedValue([]),
+      listEvents: jest.fn().mockResolvedValue([]),
+      getEvent: jest.fn(),
+      insertEvent: jest.fn(),
+      patchEvent: jest.fn(),
+      deleteEvent: jest.fn(),
+      watchEvents: jest.fn().mockImplementation(async (_token, input) => ({
+        id: input.channelId,
+        resourceId: 'google-resource-1',
+        expiration: String(Date.now() + 7 * 24 * 60 * 60_000),
+      })),
+      stopChannel: jest.fn().mockResolvedValue(undefined),
+    };
+    const audit = {
+      record: jest.fn().mockResolvedValue({}),
+      recordSystemEvent: jest.fn().mockResolvedValue({}),
+    };
+    const operations = { createTask: jest.fn().mockResolvedValue({}) };
+    const durableJobs = {
+      register: jest.fn(),
+      schedule: jest.fn().mockResolvedValue({ id: 'job-1' }),
+    };
+    const appointments = { find: jest.fn().mockResolvedValue([]) };
+    const dataSource = {
+      transaction: jest.fn(async (callback) =>
+        callback({ query: jest.fn(), getRepository: jest.fn() }),
+      ),
+    };
+    const operationalEvents = {
+      integrationFailed: jest.fn().mockResolvedValue({ id: 'incident-1' }),
+      integrationRecovered: jest.fn().mockResolvedValue({ id: 'incident-1' }),
+    };
+    const notifications = {
+      createForTenant: jest.fn().mockResolvedValue([]),
+      createForPlatform: jest.fn().mockResolvedValue([]),
+    };
+    const tenants = {
+      findById: jest.fn().mockResolvedValue({ id: 'tenant-1', name: 'Acme Realty' }),
+    };
+    const service = new CalendarService(
+      dataSource as any,
+      connections as any,
+      oauthStates as any,
+      google as any,
+      audit as any,
+      operations as any,
+      durableJobs as any,
+      appointments as any,
+      operationalEvents as any,
+      notifications as any,
+      tenants as any,
+    );
+    return {
+      service,
+      connection,
+      connections,
+      google,
+      operationalEvents,
+      notifications,
+      tenants,
+    };
+  }
+
+  beforeEach(() => {
+    process.env.INTEGRATIONS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+    process.env.GOOGLE_CALENDAR_CLIENT_ID = 'google-client';
+    process.env.GOOGLE_CALENDAR_CLIENT_SECRET = 'google-secret';
+    process.env.PUBLIC_API_URL = 'https://api.example.com';
+  });
+
+  it('notifies tenant owners/admins with a reconnect deep link on OAuth auth failure', async () => {
+    const item = alertFixture();
+    await (item.service as any).handleProviderError(
+      item.connection,
+      new GoogleCalendarApiError('GOOGLE_AUTH_REQUIRED', 'revoked', 401, false),
+    );
+    // Fail-closed state machine is unchanged.
+    expect(item.connection.status).toBe('needs_attention');
+    expect(item.connection.lastErrorCode).toBe('GOOGLE_AUTH_REQUIRED');
+    expect(item.operationalEvents.integrationFailed).toHaveBeenCalledTimes(1);
+    expect(item.operationalEvents.integrationFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'Google Calendar',
+        tenantId: 'tenant-1',
+        tenantName: 'Acme Realty',
+        reconnectPath: '/app/settings/calendar',
+      }),
+    );
+  });
+
+  it('stays silent on transient provider errors and non-auth failures', async () => {
+    const item = alertFixture();
+    await (item.service as any).handleProviderError(
+      item.connection,
+      new GoogleCalendarApiError(
+        'GOOGLE_CALENDAR_TEMPORARY_FAILURE',
+        'temporary',
+        503,
+        true,
+      ),
+    );
+    expect(item.connection.status).toBe('needs_attention');
+    expect(item.operationalEvents.integrationFailed).not.toHaveBeenCalled();
+
+    await (item.service as any).handleProviderError(
+      item.connection,
+      new GoogleCalendarApiError(
+        'GOOGLE_CALENDAR_REQUEST_FAILED',
+        'not found',
+        404,
+        false,
+      ),
+    );
+    expect(item.operationalEvents.integrationFailed).not.toHaveBeenCalled();
+  });
+
+  it('emits exactly one recovery event when a test reconnect leaves needs_attention', async () => {
+    const item = alertFixture({
+      status: 'needs_attention',
+      lastErrorCode: 'GOOGLE_AUTH_REQUIRED',
+      lastErrorAt: new Date(Date.now() - 90 * 60_000),
+    });
+    item.google.getCalendar.mockResolvedValue({
+      accessRole: 'writer',
+      summary: 'Appointments',
+      timeZone: 'America/New_York',
+    });
+    await item.service.testConnection('tenant-1', 'user-1');
+    expect(item.connection.status).toBe('connected');
+    expect(item.operationalEvents.integrationRecovered).toHaveBeenCalledTimes(1);
+    expect(item.operationalEvents.integrationRecovered).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'Google Calendar',
+        tenantId: 'tenant-1',
+        downtimeMinutes: expect.any(Number),
+      }),
+    );
+  });
+
+  it('does not emit recovery when the connection was already healthy', async () => {
+    const item = alertFixture({ status: 'connected' });
+    item.google.getCalendar.mockResolvedValue({
+      accessRole: 'writer',
+      summary: 'Appointments',
+      timeZone: 'America/New_York',
+    });
+    await item.service.testConnection('tenant-1', 'user-1');
+    expect(item.operationalEvents.integrationRecovered).not.toHaveBeenCalled();
+  });
+
+  it('escalates auth-failure needs_attention older than 24h to the platform admin', async () => {
+    const now = new Date('2026-09-26T12:00:00Z');
+    const staleAt = new Date(now.getTime() - 26 * 60 * 60_000);
+    const freshAt = new Date(now.getTime() - 2 * 60 * 60_000);
+    const item = alertFixture();
+    item.connections.find.mockResolvedValue([
+      {
+        id: 'conn-stale',
+        tenantId: 'tenant-1',
+        provider: 'google',
+        status: 'needs_attention',
+        lastErrorCode: 'GOOGLE_AUTH_REQUIRED',
+        lastErrorAt: staleAt,
+        refreshTokenExpiresAt: null,
+      },
+      {
+        id: 'conn-fresh',
+        tenantId: 'tenant-1',
+        provider: 'google',
+        status: 'needs_attention',
+        lastErrorCode: 'GOOGLE_AUTH_REQUIRED',
+        lastErrorAt: freshAt,
+        refreshTokenExpiresAt: null,
+      },
+      {
+        id: 'conn-transient',
+        tenantId: 'tenant-1',
+        provider: 'google',
+        status: 'needs_attention',
+        lastErrorCode: 'GOOGLE_CALENDAR_TEMPORARY_FAILURE',
+        lastErrorAt: new Date(now.getTime() - 30 * 60 * 60_000),
+        refreshTokenExpiresAt: null,
+      },
+    ]);
+    const result = await item.service.runConnectionHealthScan(now);
+    expect(result.escalated).toBe(1);
+    expect(item.notifications.createForPlatform).toHaveBeenCalledTimes(1);
+    expect(item.notifications.createForPlatform).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audience: 'super_admin',
+        category: 'system',
+        severity: 'warning',
+        deduplicationKey: expect.stringContaining(
+          `conn-stale:${staleAt.getTime()}`,
+        ),
+      }),
+    );
+    expect(item.notifications.createForTenant).not.toHaveBeenCalled();
+  });
+
+  it('warns 3 days and 1 day before OAuth refresh-token expiry, once each', async () => {
+    const now = new Date('2026-09-26T12:00:00Z');
+    const item = alertFixture();
+    const expiringSoon = {
+      id: 'conn-exp',
+      tenantId: 'tenant-1',
+      provider: 'google',
+      status: 'connected',
+      lastErrorCode: null,
+      lastErrorAt: null,
+      refreshTokenExpiresAt: new Date(now.getTime() + 2.5 * 86_400_000),
+    };
+    item.connections.find.mockResolvedValue([expiringSoon]);
+    const first = await item.service.runConnectionHealthScan(now);
+    expect(first.expiryWarnings).toBe(1);
+    expect(item.notifications.createForTenant).toHaveBeenCalledTimes(1);
+    expect(item.notifications.createForTenant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        category: 'integrations',
+        severity: 'warning',
+        actionUrl: '/app/settings/calendar',
+        deduplicationKey: expect.stringContaining('calendar:oauth-expiry:3d:conn-exp'),
+      }),
+    );
+
+    // One day out → the distinct 1-day milestone (different dedupe key).
+    item.notifications.createForTenant.mockClear();
+    expiringSoon.refreshTokenExpiresAt = new Date(now.getTime() + 20 * 3_600_000);
+    const second = await item.service.runConnectionHealthScan(now);
+    expect(second.expiryWarnings).toBe(1);
+    expect(item.notifications.createForTenant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deduplicationKey: expect.stringContaining('calendar:oauth-expiry:1d:conn-exp'),
+      }),
+    );
+  });
+
+  it('does not warn for refresh tokens expiring far in the future or already expired', async () => {
+    const now = new Date('2026-09-26T12:00:00Z');
+    const item = alertFixture();
+    item.connections.find.mockResolvedValue([
+      {
+        id: 'conn-far',
+        tenantId: 'tenant-1',
+        provider: 'google',
+        status: 'connected',
+        refreshTokenExpiresAt: new Date(now.getTime() + 10 * 86_400_000),
+      },
+      {
+        id: 'conn-past',
+        tenantId: 'tenant-1',
+        provider: 'google',
+        status: 'connected',
+        refreshTokenExpiresAt: new Date(now.getTime() - 60_000),
+      },
+      {
+        id: 'conn-none',
+        tenantId: 'tenant-1',
+        provider: 'google',
+        status: 'connected',
+        refreshTokenExpiresAt: null,
+      },
+    ]);
+    const result = await item.service.runConnectionHealthScan(now);
+    expect(result).toEqual({ escalated: 0, expiryWarnings: 0 });
+    expect(item.notifications.createForTenant).not.toHaveBeenCalled();
+    expect(item.notifications.createForPlatform).not.toHaveBeenCalled();
+  });
+});

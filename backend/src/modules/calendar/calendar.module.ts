@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditModule } from '../audit/audit.module';
 import { OperationsModule } from '../operations/operations.module';
+import { TenantsModule } from '../tenants/tenants.module';
 import { Appointment } from '../client-operations/appointment.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { BookingProviderRegistry } from './booking-provider.registry';
@@ -28,6 +29,9 @@ import { MicrosoftCalendarService } from './microsoft-calendar.service';
     ]),
     AuditModule,
     OperationsModule,
+    // P3: resolve tenant names for calendar failure/recovery notifications.
+    // TenantsModule is dependency-free (TypeORM only), so no cycle.
+    TenantsModule,
   ],
   controllers: [CalendarController],
   providers: [

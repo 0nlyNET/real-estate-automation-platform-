@@ -112,6 +112,60 @@ describe('central service entitlements', () => {
     });
   });
 
+  it('flags billing-suspended tenants for read-only access while other suspensions stay strict', async () => {
+    const tenantsById: Record<string, any> = {
+      billing: { ...paid, status: 'unpaid', lifecycleStatus: 'SUSPENDED', serviceSuspensionSource: 'billing' },
+      manual: { ...paid, status: 'active', lifecycleStatus: 'SUSPENDED', serviceSuspensionSource: 'manual' },
+      offboarding: { ...paid, status: 'active', lifecycleStatus: 'SUSPENDED', serviceSuspensionSource: 'offboarding' },
+    };
+    const tenants = { findOne: jest.fn().mockImplementation(async ({ where }: any) => tenantsById[where.id] || null) };
+    const service = new EntitlementService(tenants as any, {} as any);
+
+    await expect(service.workspaceAccess('billing')).resolves.toMatchObject({
+      allowed: false,
+      billingSuspended: true,
+      suspensionSource: 'billing',
+      lifecycleStatus: 'SUSPENDED',
+    });
+    await expect(service.workspaceAccess('manual')).resolves.toMatchObject({
+      allowed: false,
+      billingSuspended: false,
+      suspensionSource: 'manual',
+    });
+    await expect(service.workspaceAccess('offboarding')).resolves.toMatchObject({
+      allowed: false,
+      billingSuspended: false,
+    });
+  });
+
+  it('keeps denying every protected service action for billing-suspended tenants', async () => {
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'false';
+    const tenant = { ...paid, status: 'active', lifecycleStatus: 'SUSPENDED', serviceSuspensionSource: 'billing' };
+    const tenants = { findOne: jest.fn().mockResolvedValue(tenant) };
+    const service = new EntitlementService(
+      tenants as any,
+      { findOne: jest.fn().mockResolvedValue({ automationsEnabled: false }) } as any,
+    );
+
+    for (const action of [
+      'send_automated_sms',
+      'send_automated_email',
+      'send_manual_sms',
+      'send_manual_email',
+      'enroll_lead',
+      'run_sequence_step',
+      'start_automation',
+    ] as const) {
+      await expect(service.evaluate('tenant-1', action)).resolves.toMatchObject({
+        allowed: false,
+        lifecycleEligible: false,
+        reasons: expect.arrayContaining(['Workspace lifecycle is SUSPENDED']),
+      });
+    }
+    await expect(service.assertAllowed('tenant-1', 'send_automated_email')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
   it('applies the platform kill switch even to otherwise eligible automation', async () => {
     process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
     const service = new EntitlementService(

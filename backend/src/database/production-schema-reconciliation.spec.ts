@@ -1,6 +1,7 @@
 import { ConversationReadState1789862400002 } from './migrations/202609200002-conversation-read-state';
 import { NotificationEmailDelivery1790361600001 } from './migrations/202609260001-notification-email-delivery';
 import { NotificationSystemV11790365760000 } from './migrations/202609260002-notification-system-v1';
+import { WorkerHeartbeat1790448000001 } from './migrations/202609270001-worker-heartbeat';
 import { AutomationScheduledDueTime1789862400001 } from './migrations/202609200001-automation-scheduled-due-time';
 import { FirstClientPayment1788652800001 } from './migrations/202609060001-first-client-payment';
 import { readFileSync } from "fs";
@@ -148,7 +149,7 @@ describe("deployed legacy schema reproduction", () => {
     const before = await inspectDatabaseSchema(dataSource);
     expect(before).toMatchObject({
       ok: false,
-      expectedTables: 62,
+      expectedTables: 63,
       actualTables: 12,
       missingTables: [
         "account_invitations",
@@ -200,6 +201,7 @@ describe("deployed legacy schema reproduction", () => {
         "usage_buckets",
         "usage_policies",
         "usage_reservations",
+        "worker_heartbeat",
         "workspace_ai_settings",
       ],
     });
@@ -230,12 +232,13 @@ describe("deployed legacy schema reproduction", () => {
     await new ConversationReadState1789862400002().up(queryRunner);
     await new NotificationEmailDelivery1790361600001().up(queryRunner);
     await new NotificationSystemV11790365760000().up(queryRunner);
+    await new WorkerHeartbeat1790448000001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 62,
-      actualTables: 62,
+      expectedTables: 63,
+      actualTables: 63,
       missingTables: [],
       missingColumns: [],
     });
@@ -363,12 +366,13 @@ describe("deployed legacy schema reproduction", () => {
     await new ConversationReadState1789862400002().up(queryRunner);
     await new NotificationEmailDelivery1790361600001().up(queryRunner);
     await new NotificationSystemV11790365760000().up(queryRunner);
+    await new WorkerHeartbeat1790448000001().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
       ok: true,
-      expectedTables: 62,
-      actualTables: 62,
+      expectedTables: 63,
+      actualTables: 63,
       missingTables: [],
       missingColumns: [],
     });

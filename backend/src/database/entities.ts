@@ -60,6 +60,7 @@ import { CalendarConnection } from '../modules/calendar/calendar-connection.enti
 import { CalendarOAuthState } from '../modules/calendar/calendar-oauth-state.entity';
 import { BookingWebhookReceipt } from '../modules/calendar/booking-webhook-receipt.entity';
 import { ConversationReadState } from '../modules/messaging/conversation-read-state.entity';
+import { WorkerHeartbeat } from '../modules/durable-jobs/worker-heartbeat.entity';
 
 export const databaseEntities = [
   Tenant,
@@ -124,4 +125,5 @@ export const databaseEntities = [
   CalendarOAuthState,
   BookingWebhookReceipt,
   ConversationReadState,
+  WorkerHeartbeat,
 ] as const;

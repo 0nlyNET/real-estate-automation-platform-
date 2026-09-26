@@ -9,6 +9,13 @@ import { Tenant } from '../tenants/tenant.entity';
 import { OffboardingRequest } from './offboarding-request.entity';
 import { AuditService } from '../audit/audit.service';
 
+/**
+ * P7: terminal suspension marker written at offboarding start. Billing
+ * recovery only restores source === 'billing', so this value can never be
+ * matched by a late payment. See the comment at the write site in start().
+ */
+const OFFBOARDING_SUSPENSION_SOURCE = 'offboarding';
+
 @Injectable()
 export class OffboardingService implements OnModuleInit {
   constructor(
@@ -81,7 +88,18 @@ export class OffboardingService implements OnModuleInit {
       tenant.servicePausedAt = new Date();
       tenant.serviceSuspendedAt = new Date();
       tenant.serviceSuspensionReason = 'Client offboarding retention period';
-      tenant.serviceSuspensionSource = 'billing';
+      // P7: terminal suspension marker. Billing recovery (restoreAfterPayment)
+      // only restores source === 'billing', so this marker can never be matched
+      // by a late payment — a tenant mid-offboarding-retention cannot be
+      // resurrected. Intentionally not part of the public ServiceSuspensionSource
+      // union (backend/src/modules/tenants/tenant.entity.ts) so the admin
+      // suspend API can never create it; it is stored in the same varchar
+      // column and compared as a plain string by the restore path.
+      (tenant as { serviceSuspensionSource?: string | null }).serviceSuspensionSource =
+        OFFBOARDING_SUSPENSION_SOURCE;
+      // Clear any previous-lifecycle restore target: this suspension is
+      // terminal, so there is no state to restore back to.
+      tenant.servicePreviousLifecycleStatus = null;
       await manager.save(tenant);
       await manager.getRepository(TenantSettings).update(
         { tenantId },

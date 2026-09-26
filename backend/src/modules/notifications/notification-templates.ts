@@ -322,7 +322,7 @@ const templates: NotificationTemplate[] = [
       `If ignored: ${str(ctx, 'ifIgnored', 'the subscription may be suspended for non-payment.')}\n`,
   },
   {
-    id: 'lead.ai_handoff',
+    id: 'handoff.created',
     defaultSeverity: 'warning',
     defaultCategory: 'leads',
     subject: (ctx) => `AI handed off a conversation — ${str(ctx, 'leadName', 'a lead')}`,

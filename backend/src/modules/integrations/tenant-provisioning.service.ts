@@ -105,6 +105,113 @@ export class TenantProvisioningService implements OnModuleInit {
     }
   }
 
+  /**
+   * Minimum gap between automated SendGrid connection-test attempts for a
+   * tenant. SendGrid sender verification is an external wait, so the scan
+   * retries on this cadence instead of every 15-minute pass. The operator
+   * can always force an immediate check via the manual test endpoint.
+   */
+  private static readonly EMAIL_AUTO_TEST_RETRY_MS = 6 * 60 * 60_000;
+
+  /**
+   * Safe automation (P10): automatically verify the tenant's managed email
+   * identity once provisioning reaches a testable state.
+   *
+   * Never throws: a failed or skipped auto test must not break provisioning,
+   * weaken any readiness gate, or activate the tenant.
+   */
+  private async maybeAutoVerifyEmailIdentity(tenantId: string) {
+    try {
+      const record = await this.onboarding.getOrCreate(tenantId);
+      if (!record.emailEnabled) return;
+      const tenant = await this.tenants.findOne({ where: { id: tenantId } });
+      // Never auto-send from a live tenant; ACTIVE clients keep the manual flow.
+      if (!tenant || tenant.lifecycleStatus === 'ACTIVE') return;
+      const summary = await this.integrations.tenantSummary(tenantId);
+      const status = String(summary?.sendgrid?.status || '');
+      if (!['testing', 'failed'].includes(status)) return;
+      const providerTests = (record.providerTests || {}) as Record<
+        string,
+        unknown
+      >;
+      const lastAttempt = Date.parse(
+        String(providerTests.sendgridAutoTestLastAttemptedAt || ''),
+      );
+      if (
+        Number.isFinite(lastAttempt) &&
+        Date.now() - lastAttempt <
+          TenantProvisioningService.EMAIL_AUTO_TEST_RETRY_MS
+      ) {
+        return;
+      }
+      // Auto-reconcile the approved sender identity first so the readiness
+      // `sendgrid` item can pass in the same pass. An explicitly-set
+      // different identity is never overridden; it is surfaced instead.
+      const align =
+        await this.onboarding.autoAlignApprovedEmailIdentity(tenantId);
+      if (!align.ok && align.reason === 'mismatch') {
+        await this.operations.createTask({
+          tenantId,
+          category: 'provider_configuration',
+          title: 'Approved email identity does not match the provisioned sender',
+          description: `The client-approved sender "${align.brandIdentity}" differs from the provisioned SendGrid identity "${align.provisionedIdentity}". Resolve with the client before the connection test can pass.`,
+          priority: 'high',
+          relatedEntityType: 'tenant',
+          relatedEntityId: tenantId,
+          dedupeOpen: true,
+        });
+      }
+      const toEmail = await this.onboarding.connectionTestRecipient(tenantId);
+      if (!toEmail) {
+        this.logger.warn(
+          `Skipping automated SendGrid connection test for ${tenantId}: no controlled test recipient is configured`,
+        );
+        return;
+      }
+      let result: { ok: boolean; error?: string };
+      try {
+        result = await this.integrations.testTenantSendGrid(tenantId, {
+          toEmail,
+        });
+      } catch (error: any) {
+        result = {
+          ok: false,
+          error: error?.message || 'SendGrid connection test failed',
+        };
+      }
+      await this.onboarding.noteAutoConnectionTestAttempt(
+        tenantId,
+        'sendgrid',
+        result.ok ? 'ok' : 'failed',
+        result.ok ? undefined : result.error,
+      );
+      if (result.ok) {
+        this.logger.log(
+          `Automated SendGrid connection test passed for ${tenantId}`,
+        );
+        return;
+      }
+      await this.operations.createTask({
+        tenantId,
+        category: 'provider_configuration',
+        title: 'Automated SendGrid connection test failed',
+        description: sanitizeOperationalText(
+          result.error || 'SendGrid connection test failed',
+        ),
+        priority: 'high',
+        relatedEntityType: 'tenant',
+        relatedEntityId: tenantId,
+        dedupeOpen: true,
+      });
+    } catch (error: any) {
+      this.logger.warn(
+        `Automated SendGrid connection test skipped for ${tenantId}: ${sanitizeOperationalText(
+          error?.message || error,
+        )}`,
+      );
+    }
+  }
+
   async reconcileTenantProvisioning(tenantId: string) {
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) throw new Error('Workspace not found');
@@ -122,6 +229,11 @@ export class TenantProvisioningService implements OnModuleInit {
       return { ok: true, status: tenant.provisioningStatus, errors: [], resources: await this.integrations.tenantSummary(tenantId) };
     }
     if (tenant.provisioningStatus === 'TESTING') {
+      // Safe automation (P10): keep retrying the automated email connection
+      // test on the regular scan cadence until the identity verifies.
+      if (before.enabledServices.email) {
+        await this.maybeAutoVerifyEmailIdentity(tenantId);
+      }
       const resources = await this.integrations.tenantSummary(tenantId);
       const status: TenantProvisioningStatus = tenant.lifecycleStatus === 'ACTIVE'
         ? 'ACTIVE'
@@ -191,6 +303,15 @@ export class TenantProvisioningService implements OnModuleInit {
         dedupeOpen: true,
       });
       return { ok: false, status: tenant.provisioningStatus, errors, resources };
+    }
+
+    // Safe automation (P10): after the identity is provisioned, align the
+    // approved sender identity and run the tenant SendGrid connection test
+    // automatically. Success marks the identity verified, which clears the
+    // `sendgrid` and `sendgrid_provider_approval` readiness blockers.
+    // Activation still requires the explicit operator POST /activate.
+    if (before.enabledServices.email) {
+      await this.maybeAutoVerifyEmailIdentity(tenantId);
     }
 
     const after = await this.onboarding.readiness(tenantId);

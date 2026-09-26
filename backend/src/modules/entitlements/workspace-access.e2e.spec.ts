@@ -30,7 +30,11 @@ describe('all authenticated operations require paid workspace access', () => {
   let app: INestApplication;
   const paid = { status: 'active', lifecycleStatus: 'ACTIVE', stripeSubscriptionId: 'sub_paid', paidSubscriptionId: 'sub_paid', paymentConfirmedAt: new Date() };
   const tenants: Record<string, any> = { paid, unpaid: { status: 'incomplete', lifecycleStatus: 'ONBOARDING' },
-    suspended: { ...paid, lifecycleStatus: 'SUSPENDED' }, stale: { status: 'active', lifecycleStatus: 'ACTIVE' } };
+    suspended: { ...paid, lifecycleStatus: 'SUSPENDED', serviceSuspensionSource: 'manual' },
+    // P8: a billing-source suspension keeps read-only access; manual/safety
+    // suspensions stay fully strict.
+    billingSuspended: { status: 'unpaid', lifecycleStatus: 'SUSPENDED', serviceSuspensionSource: 'billing' },
+    stale: { status: 'active', lifecycleStatus: 'ACTIVE' } };
   beforeAll(async () => {
     const module = await Test.createTestingModule({ controllers: [WorkspaceFixture], providers: [
       SessionFixture,
@@ -54,5 +58,16 @@ describe('all authenticated operations require paid workspace access', () => {
   it('allows an operator but never lets impersonation bypass client payment', async () => {
     await request(app.getHttpServer()).get('/workspace/conversations').set('x-test-operator', 'true').expect(200);
     await request(app.getHttpServer()).get('/workspace/conversations').set('x-test-operator', 'true').set('x-test-impersonated', 'true').expect(403);
+  });
+  it('gives billing-suspended tenants read-only access but keeps manual suspensions fully strict', async () => {
+    // P8: reads pass for a billing-source suspension...
+    await request(app.getHttpServer()).get('/workspace/conversations').set('x-test-tenant', 'billingSuspended').expect(200);
+    // ...but mutations still 403...
+    await request(app.getHttpServer()).post('/workspace/send').set('x-test-tenant', 'billingSuspended').expect(403)
+      .expect(({ body }) => expect(body.code).toBe('PAYMENT_REQUIRED'));
+    // ...and manual suspensions block reads too.
+    await request(app.getHttpServer()).get('/workspace/conversations').set('x-test-tenant', 'suspended').expect(403)
+      .expect(({ body }) => expect(body.code).toBe('WORKSPACE_SUSPENDED'));
+    await request(app.getHttpServer()).post('/workspace/send').set('x-test-tenant', 'suspended').expect(403);
   });
 });

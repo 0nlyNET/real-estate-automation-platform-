@@ -43,15 +43,15 @@ describe('operational events facade', () => {
     expect(notifications.createForTenant).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId: 'tenant-1',
-        eventType: 'lead.ai_handoff',
-        templateId: 'lead.ai_handoff',
-        deduplicationKey: 'ai-handoff:handoff-1',
+        eventType: 'handoff.created',
+        templateId: 'handoff.created',
+        deduplicationKey: 'handoff:handoff-1',
       }),
     );
     expect(durableJobs.schedule).toHaveBeenCalledWith(
       expect.objectContaining({
         taskType: 'notifications.ai_handoff_reminder',
-        dedupeKey: 'ai-handoff-reminder:handoff-1',
+        dedupeKey: 'handoff-reminder:handoff-1',
       }),
     );
     const scheduledAt: Date = durableJobs.schedule.mock.calls[0][0].nextRunAt;
@@ -87,7 +87,7 @@ describe('operational events facade', () => {
     await handler({
       payload: {
         tenantId: 'tenant-1',
-        dedupeKey: 'ai-handoff:handoff-1',
+        dedupeKey: 'handoff:handoff-1',
         leadId: 'lead-1',
         leadName: 'Jordan Buyer',
         assignedUserId: 'user-staff',
@@ -95,11 +95,11 @@ describe('operational events facade', () => {
       },
     });
     expect(adminNotifications.count).toHaveBeenCalledWith({
-      where: { deduplicationKey: 'ai-handoff:handoff-1', readAt: expect.anything() },
+      where: { deduplicationKey: 'handoff:handoff-1', readAt: expect.anything() },
     });
     expect(notifications.createForTenant).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventType: 'lead.ai_handoff_reminder',
+        eventType: 'handoff.reminder',
         tenantId: 'tenant-1',
       }),
     );
@@ -122,7 +122,7 @@ describe('operational events facade', () => {
     await handler({
       payload: {
         tenantId: 'tenant-1',
-        dedupeKey: 'ai-handoff:handoff-1',
+        dedupeKey: 'handoff:handoff-1',
         leadId: 'lead-1',
         leadName: 'Jordan Buyer',
       },
@@ -139,5 +139,56 @@ describe('operational events facade', () => {
     );
     expect(keys[0]).toBe(keys[1]);
     expect(keys[0]).toContain('automation-paused:tenant-1:');
+  });
+
+  it('aiHandoff maps urgent priority to critical severity', async () => {
+    const { service, notifications } = setup();
+    await service.aiHandoff({ ...handoffInput(), priority: 'urgent' });
+    expect(notifications.createForTenant).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'critical', eventType: 'handoff.created' }),
+    );
+  });
+
+  it('handoffResolved marks the handoff notifications read so the reminder stays silent', async () => {
+    const updateBuilder: any = {};
+    updateBuilder.update = jest.fn(() => updateBuilder);
+    updateBuilder.set = jest.fn(() => updateBuilder);
+    updateBuilder.where = jest.fn(() => updateBuilder);
+    updateBuilder.andWhere = jest.fn(() => updateBuilder);
+    updateBuilder.execute = jest.fn(async () => ({ affected: 2 }));
+    const adminNotifications = { createQueryBuilder: jest.fn(() => updateBuilder) };
+    const notifications = {
+      createForPlatform: jest.fn(async () => []),
+      createForTenant: jest.fn(async () => []),
+    };
+    const service = new OperationalEventsService(
+      notifications as any,
+      {} as any,
+      adminNotifications as any,
+      undefined,
+    );
+    const result = await service.handoffResolved({
+      tenantId: 'tenant-1',
+      handoffId: 'handoff-1',
+      leadId: 'lead-1',
+    });
+    expect(result).toEqual({ markedRead: 2 });
+    expect(updateBuilder.where).toHaveBeenCalledWith(
+      'deduplicationKey IN (:...keys)',
+      { keys: ['handoff:handoff-1', 'handoff:handoff:lead-1'] },
+    );
+    expect(updateBuilder.andWhere).toHaveBeenCalledWith('readAt IS NULL');
+  });
+
+  it('handoffResolved never throws when the notification store is unavailable', async () => {
+    const service = new OperationalEventsService(
+      { createForTenant: jest.fn() } as any,
+      {} as any,
+      undefined,
+      undefined,
+    );
+    await expect(
+      service.handoffResolved({ tenantId: 'tenant-1', handoffId: 'handoff-1' }),
+    ).resolves.toEqual({ markedRead: 0 });
   });
 });

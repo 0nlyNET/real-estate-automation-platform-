@@ -269,9 +269,12 @@ export class OperationalEventsService implements OnModuleInit {
 
   /**
    * AI → human handoff. Notifies owners/admins plus the assigned agent only.
-   * Deduplicated per lead: one email per handoff; a reminder is sent only if
-   * the handoff stays unresolved (handled by the caller passing a distinct
-   * handoff id for reminders).
+   * Deduplicated per handoff: one notification per recipient; a reminder is
+   * sent only if the handoff stays unresolved (the 4h durable reminder checks
+   * that the handoff notification is still unread before firing).
+   *
+   * Event type is 'handoff.created' — the same event the live handoff path
+   * emits and the digest counts, so handoffs are unified on one event.
    */
   async aiHandoff(input: {
     tenantId: string;
@@ -284,21 +287,23 @@ export class OperationalEventsService implements OnModuleInit {
     aiPaused?: boolean;
     assignedUserId?: string | null;
     handoffId?: string;
+    /** 'urgent' handoffs are delivered as critical so they bypass opt-outs/quiet hours. */
+    priority?: 'high' | 'urgent';
   }) {
     const dedupe = input.handoffId || `handoff:${input.leadId}`;
     const rows = await this.notifications.createForTenant({
       tenantId: input.tenantId,
       assignedUserId: input.assignedUserId || null,
-      eventType: 'lead.ai_handoff',
+      eventType: 'handoff.created',
       category: 'leads',
-      severity: 'warning',
+      severity: input.priority === 'urgent' ? 'critical' : 'warning',
       title: `AI handed off ${input.leadName}`,
       message: `${input.reason} — ${input.summary}`,
-      deduplicationKey: `ai-handoff:${dedupe}`,
-      entityType: 'lead',
-      entityId: input.leadId,
+      deduplicationKey: `handoff:${dedupe}`,
+      entityType: 'handoff',
+      entityId: input.handoffId || null,
       actionUrl: `/app/conversations?leadId=${input.leadId}`,
-      templateId: 'lead.ai_handoff',
+      templateId: 'handoff.created',
       templateContext: {
         leadName: input.leadName,
         leadSource: input.leadSource,
@@ -315,10 +320,10 @@ export class OperationalEventsService implements OnModuleInit {
       try {
         await this.durableJobs.schedule({
           taskType: 'notifications.ai_handoff_reminder',
-          dedupeKey: `ai-handoff-reminder:${dedupe}`,
+          dedupeKey: `handoff-reminder:${dedupe}`,
           payload: {
             tenantId: input.tenantId,
-            dedupeKey: `ai-handoff:${dedupe}`,
+            dedupeKey: `handoff:${dedupe}`,
             leadId: input.leadId,
             leadName: input.leadName,
             assignedUserId: input.assignedUserId || null,
@@ -341,6 +346,49 @@ export class OperationalEventsService implements OnModuleInit {
   }
 
   /**
+   * Closes the handoff incident cleanly when a human resolves the handoff.
+   * Marks the related handoff notifications as read so the 4h unread-reminder
+   * does not fire stale. In-app only: no recovery emails are sent for routine
+   * handoff resolutions.
+   */
+  async handoffResolved(input: {
+    tenantId: string;
+    handoffId: string;
+    leadId?: string;
+  }) {
+    try {
+      if (!this.adminNotifications) return { markedRead: 0 };
+      const keys = [`handoff:${input.handoffId}`];
+      if (input.leadId) keys.push(`handoff:handoff:${input.leadId}`);
+      const result = await this.adminNotifications
+        .createQueryBuilder()
+        .update()
+        .set({ readAt: () => 'CURRENT_TIMESTAMP' })
+        .where('deduplicationKey IN (:...keys)', { keys })
+        .andWhere('readAt IS NULL')
+        .execute();
+      const markedRead = result.affected || 0;
+      this.logger.log(
+        operationalEvent('handoff_resolved_notification', {
+          tenantId: input.tenantId,
+          handoffId: input.handoffId,
+          markedRead,
+        }),
+      );
+      return { markedRead };
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('handoff_resolved_notification_failed', {
+          tenantId: input.tenantId,
+          handoffId: input.handoffId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      return { markedRead: 0 };
+    }
+  }
+
+  /**
    * Sends the 4-hour handoff reminder only when the original handoff
    * notification is still unread (proxy for "unresolved"). A read handoff
    * means a human has seen it, so no reminder is sent.
@@ -358,14 +406,14 @@ export class OperationalEventsService implements OnModuleInit {
       await this.notifications.createForTenant({
         tenantId,
         assignedUserId: payload?.assignedUserId || null,
-        eventType: 'lead.ai_handoff_reminder',
+        eventType: 'handoff.reminder',
         category: 'leads',
         severity: 'warning',
         title: `Reminder: AI handed off ${payload?.leadName || 'a lead'}`,
         message:
           `This handoff is still unresolved after 4 hours` +
           (payload?.reason ? `: ${payload.reason}` : '.'),
-        deduplicationKey: `ai-handoff-reminder:${dedupeKey}`,
+        deduplicationKey: `handoff-reminder:${dedupeKey}`,
         entityType: 'lead',
         entityId: leadId || null,
         actionUrl: leadId ? `/app/conversations?leadId=${leadId}` : null,
