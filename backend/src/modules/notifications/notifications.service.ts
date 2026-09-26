@@ -4,6 +4,7 @@ import { In, IsNull, Not, Repository } from 'typeorm';
 import * as webPush from 'web-push';
 import { platformAdminEmails, platformStaffEmails, resolvePlatformRole } from '../../common/env';
 import { operationalEvent } from '../../common/operational-log';
+import { MailService } from '../../mail/mail.service';
 import { User } from '../users/user.entity';
 import {
   AdminNotification,
@@ -102,6 +103,7 @@ export class NotificationsService {
     private readonly preferences: Repository<AdminNotificationPreference>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
+    private readonly mailService: MailService,
   ) {
     const subject = String(process.env.VAPID_SUBJECT || '').trim();
     const publicKey = String(process.env.VAPID_PUBLIC_KEY || '').trim();
@@ -229,7 +231,7 @@ export class NotificationsService {
     const created: AdminNotification[] = [];
     for (const recipientUserId of recipientIds) {
       const preference = await this.getPreferences(recipientUserId);
-      if (!preference.inAppEnabled && !preference.pushEnabled) continue;
+      if (!preference.inAppEnabled && !preference.pushEnabled && !preference.emailEnabled) continue;
       let notification = await this.notifications.findOne({
         where: {
           recipientUserId,
@@ -270,6 +272,7 @@ export class NotificationsService {
       }
       created.push(notification);
       await this.deliverPush(notification, preference);
+      await this.deliverEmail(notification, preference);
     }
     return created;
   }
@@ -349,7 +352,7 @@ export class NotificationsService {
         recipientUserId,
         inAppEnabled: true,
         pushEnabled: true,
-        emailEnabled: false,
+        emailEnabled: true,
         privacyMode: true,
         categorySettings: DEFAULT_CATEGORIES,
         severitySettings: DEFAULT_SEVERITIES,
@@ -554,6 +557,69 @@ export class NotificationsService {
     notification.pushAttemptCount += subscriptions.length;
     notification.pushDeliveryStatus = sent ? 'sent' : 'failed';
     notification.pushSentAt = sent ? new Date() : null;
+    await this.notifications.save(notification);
+  }
+
+  private async deliverEmail(
+    notification: AdminNotification,
+    preference: AdminNotificationPreference,
+  ) {
+    const markSkipped = async () => {
+      notification.emailDeliveryStatus = 'skipped';
+      await this.notifications.save(notification);
+    };
+    // Critical alerts bypass category/severity opt-outs and quiet hours,
+    // mirroring deliverPush. The emailEnabled master switch is always honored.
+    const categoryEnabled =
+      notification.severity === 'critical' ||
+      preference.categorySettings?.[notification.category] !== false;
+    const severityEnabled =
+      notification.severity === 'critical' ||
+      preference.severitySettings?.[notification.severity] !== false;
+    if (
+      !preference.emailEnabled ||
+      !categoryEnabled ||
+      !severityEnabled ||
+      (notification.severity !== 'critical' && this.isQuietHours(preference))
+    ) {
+      await markSkipped();
+      return;
+    }
+    const recipient = await this.users.findOne({
+      where: { id: notification.recipientUserId },
+    });
+    const toEmail = recipient?.email?.trim().toLowerCase();
+    if (!toEmail || !recipient?.isActive || !recipient?.isEmailVerified) {
+      await markSkipped();
+      return;
+    }
+    notification.emailAttemptCount += 1;
+    try {
+      const subject = preference.privacyMode
+        ? 'RealtyTechAI update'
+        : `[RealtyTechAI] [${notification.severity.toUpperCase()}] ${notification.title}`;
+      const body = preference.privacyMode
+        ? 'Open RealtyTechAI to view this update.'
+        : notification.message;
+      const actionLine = notification.actionUrl
+        ? `\n\nView in RealtyTechAI: ${notification.actionUrl}`
+        : '';
+      await this.mailService.sendEmail({
+        to: toEmail,
+        subject,
+        text: `${body}${actionLine}`,
+      });
+      notification.emailDeliveryStatus = 'sent';
+      notification.emailSentAt = new Date();
+    } catch (error: unknown) {
+      notification.emailDeliveryStatus = 'failed';
+      this.logger.error(
+        operationalEvent('notification_email_delivery_failed', {
+          notificationId: notification.id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
     await this.notifications.save(notification);
   }
 

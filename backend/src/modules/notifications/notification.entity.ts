@@ -81,6 +81,15 @@ export class AdminNotification {
   @Column({ name: 'push_attempt_count', type: 'int', default: 0 })
   pushAttemptCount!: number;
 
+  @Column({ name: 'email_delivery_status', type: 'varchar', length: 30, default: 'pending' })
+  emailDeliveryStatus!: 'pending' | 'sent' | 'skipped' | 'failed';
+
+  @Column({ name: 'email_sent_at', type: 'timestamptz', nullable: true })
+  emailSentAt?: Date | null;
+
+  @Column({ name: 'email_attempt_count', type: 'int', default: 0 })
+  emailAttemptCount!: number;
+
   @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt?: Date | null;
 

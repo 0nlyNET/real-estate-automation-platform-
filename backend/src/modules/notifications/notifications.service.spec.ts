@@ -71,15 +71,23 @@ describe('admin notifications', () => {
         { id: 'user-owner', tenantId: 'tenant-1', role: 'owner', email: 'owner@example.com', isActive: true, isEmailVerified: true },
         { id: 'user-staff', tenantId: 'tenant-1', role: 'agent', email: 'staff@example.com', isActive: true, isEmailVerified: true },
       ]),
-      findOne: jest.fn(),
+      findOne: jest.fn(async ({ where }: any) => {
+        const directory: Record<string, any> = {
+          'user-owner': { id: 'user-owner', email: 'owner@example.com', isActive: true, isEmailVerified: true },
+          'user-staff': { id: 'user-staff', email: 'staff@example.com', isActive: true, isEmailVerified: true },
+        };
+        return directory[where.id] || null;
+      }),
     };
+    const mailService = { sendEmail: jest.fn().mockResolvedValue(undefined) };
     const service = new NotificationsService(
       notifications as any,
       subscriptions as any,
       preferences as any,
       users as any,
+      mailService as any,
     );
-    return { service, stored, notifications, users, subscriptions, preferences };
+    return { service, stored, notifications, users, subscriptions, preferences, mailService };
   }
 
   it('recovers concurrent first-login preference creation without overwriting the winner', async () => {
@@ -262,5 +270,80 @@ describe('admin notifications', () => {
     await expect(service.markRead('user-owner', 'note-1')).rejects.toThrow('Notification not found');
     await expect(service.markRead('user-staff', 'note-1')).resolves.toEqual({ ok: true });
     expect(stored[0].readAt).toBeInstanceOf(Date);
+  });
+
+  it('delivers critical notifications by email when emailEnabled', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    await service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'critical',
+      title: 'Backup failed',
+      message: 'Nightly backup failed at 2 AM.',
+      deduplicationKey: 'backup-failed-email-1',
+    });
+    expect(mailService.sendEmail).toHaveBeenCalledTimes(1);
+    expect(mailService.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'owner@example.com',
+        subject: expect.stringContaining('[CRITICAL]'),
+      }),
+    );
+    expect(stored[0].emailDeliveryStatus).toBe('sent');
+    expect(stored[0].emailSentAt).toBeInstanceOf(Date);
+  });
+
+  it('skips email delivery when emailEnabled is false', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: false, privacyMode: false });
+    await service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'critical',
+      title: 'Backup failed',
+      message: 'Nightly backup failed.',
+      deduplicationKey: 'backup-failed-email-2',
+    });
+    expect(mailService.sendEmail).not.toHaveBeenCalled();
+    expect(stored[0].emailDeliveryStatus).toBe('skipped');
+  });
+
+  it('records email failure without breaking notification creation', async () => {
+    const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
+    mailService.sendEmail.mockRejectedValueOnce(new Error('SendGrid down'));
+    const created = await service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'critical',
+      title: 'Backup failed',
+      message: 'Nightly backup failed.',
+      deduplicationKey: 'backup-failed-email-3',
+    });
+    expect(created).toHaveLength(1);
+    expect(stored[0].emailDeliveryStatus).toBe('failed');
+  });
+
+  it('critical email bypasses quiet hours but warning email does not', async () => {
+    const quiet = { quietHoursEnabled: true, quietHoursStart: '00:00', quietHoursEnd: '23:59' };
+    const critical = setup({ emailEnabled: true, privacyMode: false, ...quiet });
+    await critical.service.createForPlatform({
+      eventType: 'backup.failed',
+      category: 'system',
+      severity: 'critical',
+      title: 'Backup failed',
+      message: 'Nightly backup failed.',
+      deduplicationKey: 'backup-failed-email-4',
+    });
+    expect(critical.mailService.sendEmail).toHaveBeenCalledTimes(1);
+
+    const warning = setup({ emailEnabled: true, privacyMode: false, ...quiet });
+    await warning.service.createForPlatform({
+      eventType: 'sendgrid.bounce_warning',
+      category: 'system',
+      severity: 'warning',
+      title: 'Bounce rate elevated',
+      message: 'Bounce rate above threshold.',
+      deduplicationKey: 'sendgrid-warning-email-1',
+    });
+    expect(warning.mailService.sendEmail).not.toHaveBeenCalled();
   });
 });

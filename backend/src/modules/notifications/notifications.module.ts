@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CommonModule } from '../../common/common.module';
+import { MailModule } from '../../mail/mail.module';
 import { StripeWebhookEvent } from '../billing/stripe-webhook-event.entity';
 import { User } from '../users/user.entity';
 import { HealthMonitorService } from './health-monitor.service';
@@ -38,6 +39,7 @@ import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entit
       TenantEmailIdentity,
     ]),
     CommonModule,
+    MailModule,
   ],
   controllers: [NotificationsController, ClientNotificationsController],
   providers: [
