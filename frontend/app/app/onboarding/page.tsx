@@ -133,10 +133,36 @@ export default function OnboardingPage() {
       data.consentConfiguration.sampleMessage && data.consentConfiguration.sampleMessage2 &&
       data.consentConfiguration.termsUrl && data.consentConfiguration.privacyUrl,
     )
+    // Section 2 ("Communication") indicator must match the real readiness
+    // gates for the tenant-controllable evidence. The approved SMS sender
+    // identity and the operator consent acknowledgment are intentionally
+    // excluded: they are RealtyTechAI's turn, not the client's, and the
+    // readiness gates now say so explicitly.
+    const brandReady = Boolean(
+      data.brandCommunication.brandName &&
+      data.brandCommunication.brandVoice &&
+      data.brandCommunication.requiredSignature &&
+      data.brandCommunication.fairHousingReviewAcknowledged === true &&
+      (!data.emailEnabled || data.brandCommunication.approvedEmailIdentity),
+    )
+    const consentReady = Boolean(
+      data.consentConfiguration.exactConsentLanguage &&
+      data.consentConfiguration.consentCollectionMethod &&
+      data.consentConfiguration.sourceOwnership &&
+      data.consentConfiguration.optOutProcess &&
+      (data.consentConfiguration.consentPolicyVersion || "client-onboarding-v1") &&
+      data.consentConfiguration.purchasedOrColdListsExcluded === true &&
+      data.consentConfiguration.clientResponsibilityAcknowledged === true &&
+      data.consentConfiguration.lawfulLeadCollectionCertified === true &&
+      data.consentConfiguration.termsAcceptedVersion &&
+      data.consentConfiguration.privacyAcceptedVersion &&
+      data.consentConfiguration.acceptableUseAcceptedVersion &&
+      data.consentConfiguration.dataRetentionAcceptedVersion,
+    )
     return [
       Boolean(data.businessIdentity.legalBusinessName && data.businessIdentity.primaryMarket && data.contacts.accountOwner && smsBusinessReady),
       Boolean(data.serviceScope.leadSources && data.leadHandling.routingRules && data.leadHandling.businessHours),
-      Boolean(data.brandCommunication.brandName && data.brandCommunication.brandVoice && data.consentConfiguration.exactConsentLanguage && smsCampaignReady),
+      Boolean(brandReady && consentReady && smsCampaignReady),
       Boolean(data.targetLaunchDate),
     ]
   }, [data])

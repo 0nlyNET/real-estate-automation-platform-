@@ -30,6 +30,14 @@ export type CreateOperationsTask = {
 
 @Injectable()
 export class OperationsService {
+  /**
+   * In-process promise chains keyed by dedupe tuple. Makes the
+   * check-then-insert sequence in createTask atomic within this process, so
+   * concurrent callers (e.g. overlapping worker ticks) cannot both observe
+   * "no existing task" and insert duplicates.
+   */
+  private readonly dedupeChains = new Map<string, Promise<void>>();
+
   constructor(
     @InjectRepository(OperationsTask)
     private readonly repo: Repository<OperationsTask>,
@@ -40,7 +48,69 @@ export class OperationsService {
     private readonly jobs?: Repository<DurableJob>,
   ) {}
 
+  private async withDedupeLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.dedupeChains.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => gate);
+    this.dedupeChains.set(key, tail);
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      // Drop the entry once this holder finishes, but only when it is still
+      // the tail, so the map cannot grow without bound.
+      void gate.then(() => {
+        if (this.dedupeChains.get(key) === tail) {
+          this.dedupeChains.delete(key);
+        }
+      });
+    }
+  }
+
   async createTask(input: CreateOperationsTask) {
+    // Serialize the check-then-insert sequence per dedupe tuple so
+    // concurrent callers collapse onto one task instead of racing.
+    const dedupeKey =
+      (input.dedupeOpen || (input.throttleHours && input.throttleHours > 0)) &&
+      input.relatedEntityType &&
+      input.relatedEntityId
+        ? `task-dedupe:${input.category}:${input.relatedEntityType}:${input.relatedEntityId}`
+        : null;
+    const saved = dedupeKey
+      ? await this.withDedupeLock(dedupeKey, () => this.findOrInsertTask(input))
+      : await this.findOrInsertTask(input);
+    // Notify only for newly created tasks: dedupe/throttle hits reuse the
+    // existing task and must not re-fire its notification.
+    if (
+      saved.created &&
+      (saved.task.priority === 'high' ||
+        saved.task.priority === 'critical' ||
+        saved.task.assignedOperatorId)
+    ) {
+      const task = saved.task;
+      await this.notifications?.createForPlatform({
+        eventType: task.assignedOperatorId ? 'task.assigned' : 'task.created',
+        category: 'tasks',
+        severity: task.priority === 'critical' ? 'critical' : 'warning',
+        title: task.assignedOperatorId ? 'Task assigned to you' : task.title,
+        message: task.description,
+        deduplicationKey: `operations-task:${task.id}:${task.assignedOperatorId || 'queue'}`,
+        assignedOperatorId: task.assignedOperatorId,
+        actionUrl: '/admin/dashboard?view=tasks',
+        entityType: 'operations_task',
+        entityId: task.id,
+      });
+    }
+    return saved.task;
+  }
+
+  private async findOrInsertTask(
+    input: CreateOperationsTask,
+  ): Promise<{ task: OperationsTask; created: boolean }> {
     const unresolvedStatuses: OperationsTask['status'][] = [
       'open',
       'in_progress',
@@ -56,7 +126,7 @@ export class OperationsService {
         },
         order: { createdAt: 'DESC' },
       });
-      if (existing) return existing;
+      if (existing) return { task: existing, created: false };
     }
 
     // Throttle recurring triggers: at most one task per (category, subject)
@@ -79,13 +149,13 @@ export class OperationsService {
         },
         order: { createdAt: 'DESC' },
       });
-      if (recent) return recent;
+      if (recent) return { task: recent, created: false };
     }
 
     if (input.assignedOperatorId) {
       await this.platformOperators?.requireAssignable(input.assignedOperatorId);
     }
-    const saved = await this.repo.save(
+    const task = await this.repo.save(
       this.repo.create({
         tenantId: input.tenantId ?? null,
         applicationId: input.applicationId ?? null,
@@ -101,21 +171,7 @@ export class OperationsService {
         evidenceNote: input.evidenceNote ?? null,
       }),
     );
-    if (saved.priority === 'high' || saved.priority === 'critical' || saved.assignedOperatorId) {
-      await this.notifications?.createForPlatform({
-        eventType: saved.assignedOperatorId ? 'task.assigned' : 'task.created',
-        category: 'tasks',
-        severity: saved.priority === 'critical' ? 'critical' : 'warning',
-        title: saved.assignedOperatorId ? 'Task assigned to you' : saved.title,
-        message: saved.description,
-        deduplicationKey: `operations-task:${saved.id}:${saved.assignedOperatorId || 'queue'}`,
-        assignedOperatorId: saved.assignedOperatorId,
-        actionUrl: '/admin/dashboard?view=tasks',
-        entityType: 'operations_task',
-        entityId: saved.id,
-      });
-    }
-    return saved;
+    return { task, created: true };
   }
 
   async list(filters: {

@@ -85,13 +85,18 @@ export class AiController {
 
   @Post('emergency-pause')
   @RequireRole('admin')
-  setWorkspacePause(@Req() req: any, @Body() body: PauseAiDto) {
-    return this.conversations.setWorkspacePause(
+  async setWorkspacePause(@Req() req: any, @Body() body: PauseAiDto) {
+    // Persist the pause first, then return the FULL configuration. Callers
+    // (e.g. ai-assistant-settings.tsx) replace their local configuration with
+    // the mutation response; returning the partial WorkspaceAiSettings here
+    // corrupted that state and crashed the page on render.
+    await this.conversations.setWorkspacePause(
       req.user.tenantId,
       body.paused,
       body.reason || '',
       actorFrom(req),
     );
+    return this.configuration.getConfiguration(req.user.tenantId);
   }
 
   @Get('conversations/:leadId')

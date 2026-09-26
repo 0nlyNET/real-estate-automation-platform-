@@ -78,6 +78,7 @@ export class AiConversationService
   private readonly logger = new Logger(AiConversationService.name);
   private readonly workerId = `ai-${process.env.HOSTNAME || process.pid}`;
   private workerTimer?: NodeJS.Timeout;
+  private workerRunning = false;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -117,15 +118,31 @@ export class AiConversationService
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
     this.workerTimer = setInterval(() => {
-      void this.processPendingRuns(10).catch((error: unknown) => {
-        this.logger.error(
-          operationalEvent('ai_worker_failed', {
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
-      });
+      void this.tickWorker();
     }, 3_000);
     this.workerTimer.unref?.();
+  }
+
+  /**
+   * Runs one worker tick. Guarded so a slow tick can never overlap the next
+   * one: overlapping ticks raced the exhausted-run recovery path and produced
+   * duplicate "AI processing needs human follow-up" operations tasks (and
+   * therefore duplicate notifications) during the 2026-09-26 rehearsal.
+   */
+  private async tickWorker() {
+    if (this.workerRunning) return;
+    this.workerRunning = true;
+    try {
+      await this.processPendingRuns(10);
+    } catch (error: unknown) {
+      this.logger.error(
+        operationalEvent('ai_worker_failed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    } finally {
+      this.workerRunning = false;
+    }
   }
 
   onModuleDestroy() {

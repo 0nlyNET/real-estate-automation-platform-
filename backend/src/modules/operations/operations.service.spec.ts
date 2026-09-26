@@ -323,4 +323,73 @@ describe('OperationsService follow-up alert dedup and throttle', () => {
       await dataSource.destroy();
     }
   });
+
+  it('collapses concurrent duplicate alerts for the same subject into one task', async () => {
+    // Regression: overlapping worker ticks raced the check-then-insert
+    // sequence and created one operations task (and one notification) per
+    // duplicate during the 2026-09-26 rehearsal.
+    const { dataSource, repo, service } = await buildService();
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 10 }, () => service.createTask(followUpInput(LEAD_1))),
+      );
+      const ids = new Set(results.map((task) => task.id));
+      expect(ids.size).toBe(1);
+      expect(await repo.count()).toBe(1);
+    } finally {
+      await dataSource.destroy();
+    }
+  });
+
+  it('emits exactly one platform notification for a concurrent duplicate burst', async () => {
+    const database = newDb();
+    database.public.registerFunction({
+      name: 'current_database',
+      returns: DataType.text,
+      implementation: () => 'operations_notify_test',
+    });
+    database.public.registerFunction({
+      name: 'version',
+      returns: DataType.text,
+      implementation: () => 'PostgreSQL 16.0',
+    });
+    database.public.registerFunction({
+      name: 'uuid_generate_v4',
+      returns: DataType.uuid,
+      impure: true,
+      implementation: randomUUID,
+    });
+    const dataSource = database.adapters.createTypeormDataSource({
+      type: 'postgres',
+      entities: [OperationsTask],
+      synchronize: true,
+    });
+    await dataSource.initialize();
+    try {
+      const repo = dataSource.getRepository(OperationsTask);
+      const notifications = { createForPlatform: jest.fn().mockResolvedValue({}) };
+      const service = new OperationsService(repo, notifications as any);
+      await Promise.all(
+        Array.from({ length: 10 }, () => service.createTask(followUpInput(LEAD_1))),
+      );
+      expect(await repo.count()).toBe(1);
+      expect(notifications.createForPlatform).toHaveBeenCalledTimes(1);
+    } finally {
+      await dataSource.destroy();
+    }
+  });
+
+  it('does not serialize alerts for different subjects', async () => {
+    const { dataSource, repo, service } = await buildService();
+    try {
+      const results = await Promise.all([
+        service.createTask(followUpInput(LEAD_1)),
+        service.createTask(followUpInput(LEAD_2)),
+      ]);
+      expect(results[0].id).not.toBe(results[1].id);
+      expect(await repo.count()).toBe(2);
+    } finally {
+      await dataSource.destroy();
+    }
+  });
 });
