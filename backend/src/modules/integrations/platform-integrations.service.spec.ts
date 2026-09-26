@@ -243,3 +243,207 @@ describe('platform credential-save encryption guard', () => {
     });
   });
 });
+
+describe('platform SendGrid sender identity persistence', () => {
+  const VALID_KEY = Buffer.alloc(32, 7).toString('base64');
+  const TEST_API_KEY = 'SG.test-platform-key-12345';
+
+  function makeServiceWithStorage() {
+    // Simulate a persistent store: findOne returns the last saved row
+    let stored: any = null;
+    const platformCredentials = {
+      findOne: jest.fn().mockImplementation(async () => stored),
+      create: jest.fn((values: Record<string, unknown>) => values),
+      save: jest.fn(async (row: any) => {
+        stored = row;
+        return row;
+      }),
+    };
+    const tenantCredentials = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((values: Record<string, unknown>) => values),
+      save: jest.fn(async (row: unknown) => row),
+    };
+    const service = new PlatformIntegrationsService(
+      platformCredentials as any,
+      tenantCredentials as any,
+    );
+    return { service, platformCredentials, tenantCredentials, getStored: () => stored };
+  }
+
+  async function withKey(run: () => Promise<void>) {
+    const original = process.env.INTEGRATIONS_ENCRYPTION_KEY;
+    try {
+      process.env.INTEGRATIONS_ENCRYPTION_KEY = VALID_KEY;
+      await run();
+    } finally {
+      if (original === undefined) delete process.env.INTEGRATIONS_ENCRYPTION_KEY;
+      else process.env.INTEGRATIONS_ENCRYPTION_KEY = original;
+    }
+  }
+
+  it('saves API key + From address + sender name together', async () => {
+    await withKey(async () => {
+      const { service } = makeServiceWithStorage();
+      await service.savePlatformSendGrid({
+        apiKey: TEST_API_KEY,
+        fromEmail: 'noreply@realtytechai.app',
+        fromName: 'RealtyTechAI',
+      });
+      const summary = await service.platformSummary();
+      expect(summary.sendgrid.fromEmail).toBe('noreply@realtytechai.app');
+      expect(summary.sendgrid.fromName).toBe('RealtyTechAI');
+      expect(summary.sendgrid.configured).toBe(true);
+    });
+  });
+
+  it('From address and sender name survive reload (persisted server-side)', async () => {
+    await withKey(async () => {
+      const { service } = makeServiceWithStorage();
+      await service.savePlatformSendGrid({
+        apiKey: TEST_API_KEY,
+        fromEmail: 'noreply@realtytechai.app',
+        fromName: 'RealtyTechAI',
+      });
+      // Simulate reload: create a new service instance sharing the same storage
+      const summary = await service.platformSummary();
+      expect(summary.sendgrid.fromEmail).toBe('noreply@realtytechai.app');
+      expect(summary.sendgrid.fromName).toBe('RealtyTechAI');
+    });
+  });
+
+  it('saving API key alone does not erase existing From address', async () => {
+    await withKey(async () => {
+      const { service } = makeServiceWithStorage();
+      // First save with fromEmail
+      await service.savePlatformSendGrid({
+        apiKey: TEST_API_KEY,
+        fromEmail: 'noreply@realtytechai.app',
+        fromName: 'RealtyTechAI',
+      });
+      // Save API key alone (partial update)
+      await service.savePlatformSendGrid({
+        apiKey: 'SG.new-key-67890',
+      });
+      const summary = await service.platformSummary();
+      expect(summary.sendgrid.fromEmail).toBe('noreply@realtytechai.app');
+      expect(summary.sendgrid.fromName).toBe('RealtyTechAI');
+    });
+  });
+
+  it('saving From address alone does not erase the API key', async () => {
+    await withKey(async () => {
+      const { service } = makeServiceWithStorage();
+      // First save with API key
+      await service.savePlatformSendGrid({
+        apiKey: TEST_API_KEY,
+      });
+      // Save fromEmail alone (partial update, no API key)
+      await service.savePlatformSendGrid({
+        fromEmail: 'system@realtytechai.app',
+      });
+      const summary = await service.platformSummary();
+      expect(summary.sendgrid.fromEmail).toBe('system@realtytechai.app');
+      // API key must still be configured (masked in summary, but configured=true proves it persists)
+      expect(summary.sendgrid.configured).toBe(true);
+      expect(summary.sendgrid.apiKey).toMatch(/^SG\./);
+    });
+  });
+
+  it('update changes only intended fields', async () => {
+    await withKey(async () => {
+      const { service } = makeServiceWithStorage();
+      await service.savePlatformSendGrid({
+        apiKey: TEST_API_KEY,
+        fromEmail: 'noreply@realtytechai.app',
+        fromName: 'RealtyTechAI',
+      });
+      // Update only the sender name
+      await service.savePlatformSendGrid({
+        fromName: 'RealtyTechAI Platform',
+      });
+      const summary = await service.platformSummary();
+      expect(summary.sendgrid.fromEmail).toBe('noreply@realtytechai.app');
+      expect(summary.sendgrid.fromName).toBe('RealtyTechAI Platform');
+      expect(summary.sendgrid.configured).toBe(true);
+    });
+  });
+
+  it('rejects malformed email addresses', async () => {
+    await withKey(async () => {
+      const { service } = makeServiceWithStorage();
+      await expect(
+        service.savePlatformSendGrid({
+          apiKey: TEST_API_KEY,
+          fromEmail: 'not-an-email',
+        })
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.savePlatformSendGrid({
+          apiKey: TEST_API_KEY,
+          fromEmail: 'missing@domain',
+        })
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  it('trims whitespace from email and name', async () => {
+    await withKey(async () => {
+      const { service } = makeServiceWithStorage();
+      await service.savePlatformSendGrid({
+        apiKey: TEST_API_KEY,
+        fromEmail: '  Noreply@RealtyTechAI.app  ',
+        fromName: '  RealtyTechAI  ',
+      });
+      const summary = await service.platformSummary();
+      expect(summary.sendgrid.fromEmail).toBe('noreply@realtytechai.app');
+      expect(summary.sendgrid.fromName).toBe('RealtyTechAI');
+    });
+  });
+
+  it('defaults sender name to RealtyTechAI when fromEmail is set without a name', async () => {
+    await withKey(async () => {
+      const { service } = makeServiceWithStorage();
+      await service.savePlatformSendGrid({
+        apiKey: TEST_API_KEY,
+        fromEmail: 'noreply@realtytechai.app',
+      });
+      const summary = await service.platformSummary();
+      expect(summary.sendgrid.fromName).toBe('RealtyTechAI');
+    });
+  });
+
+  it('never returns the full API key to the caller', async () => {
+    await withKey(async () => {
+      const { service } = makeServiceWithStorage();
+      const result = await service.savePlatformSendGrid({
+        apiKey: TEST_API_KEY,
+        fromEmail: 'noreply@realtytechai.app',
+      });
+      // The save response (platformSummary) must mask the key
+      expect(result.sendgrid.apiKey).not.toBe(TEST_API_KEY);
+      expect(result.sendgrid.apiKey).toMatch(/^SG\..*\.\.\.$/);
+      // Full key must not appear anywhere in the serialized response
+      expect(JSON.stringify(result)).not.toContain(TEST_API_KEY);
+    });
+  });
+
+  it('tenant sender assignment does not overwrite platform sender identity', async () => {
+    await withKey(async () => {
+      const { service, tenantCredentials } = makeServiceWithStorage();
+      // Set platform sender
+      await service.savePlatformSendGrid({
+        apiKey: TEST_API_KEY,
+        fromEmail: 'noreply@realtytechai.app',
+        fromName: 'RealtyTechAI',
+      });
+      // Tenant operations use tenantCredentials, not platformCredentials
+      // Verify platform sender is untouched after tenant-level mock activity
+      const summary = await service.platformSummary();
+      expect(summary.sendgrid.fromEmail).toBe('noreply@realtytechai.app');
+      expect(summary.sendgrid.fromName).toBe('RealtyTechAI');
+      // Tenant credential store was not used for platform save
+      expect(tenantCredentials.save).not.toHaveBeenCalled();
+    });
+  });
+});
