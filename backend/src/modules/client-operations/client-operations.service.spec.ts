@@ -68,6 +68,10 @@ function workflowHarness() {
     createForTenant: jest.fn().mockResolvedValue([]),
     createForPlatform: jest.fn().mockResolvedValue([]),
   };
+  const operationalEvents = {
+    aiHandoff: jest.fn().mockResolvedValue([]),
+    handoffResolved: jest.fn().mockResolvedValue({ markedRead: 0 }),
+  };
   const service = new ClientOperationsService(
     handoffs as any,
     appointments as any,
@@ -75,13 +79,16 @@ function workflowHarness() {
     messages as any,
     events as any,
     notifications as any,
+    undefined,
+    undefined,
+    operationalEvents as any,
   );
-  return { service, handoffs, appointments, leads, messages, events, notifications };
+  return { service, handoffs, appointments, leads, messages, events, notifications, operationalEvents };
 }
 
 describe('ClientOperationsService', () => {
   it('classifies the pre-approved 60-day buyer as hot and creates a handoff with a reason', async () => {
-    const { service, handoffs, notifications } = workflowHarness();
+    const { service, handoffs, notifications, operationalEvents } = workflowHarness();
     const item = lead();
 
     const result = await service.processInboundReply(
@@ -102,9 +109,48 @@ describe('ClientOperationsService', () => {
     expect(result.lead.temperatureReason).toContain('60 days');
     expect(result.handoff).toMatchObject({ priority: 'high', status: 'open' });
     expect(handoffs.save).toHaveBeenCalled();
-    expect(notifications.createForTenant).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'handoff.created' }),
+    // P1: the production handoff path goes through the operational-events
+    // facade exactly once (unified 'handoff.created' event + 4h reminder),
+    // never the legacy direct createForTenant call.
+    expect(operationalEvents.aiHandoff).toHaveBeenCalledTimes(1);
+    expect(operationalEvents.aiHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: item.tenantId,
+        leadId: item.id,
+        leadName: 'Jordan Buyer',
+        handoffId: result.handoff!.id,
+        priority: 'high',
+        assignedUserId: item.assignedToUserId || null,
+      }),
     );
+    const directHandoffCalls = notifications.createForTenant.mock.calls.filter(
+      (call: any[]) => call[0]?.eventType === 'handoff.created',
+    );
+    expect(directHandoffCalls).toHaveLength(0);
+  });
+
+  it('completing a handoff closes the notification incident without sending recovery email', async () => {
+    const { service, handoffs, operationalEvents } = workflowHarness();
+    const handoff = {
+      id: '30000000-0000-4000-8000-000000000001',
+      tenantId: '20000000-0000-4000-8000-000000000001',
+      leadId: '10000000-0000-4000-8000-000000000001',
+      lead: { id: '10000000-0000-4000-8000-000000000001' },
+      status: 'open',
+    };
+    const builder = queryBuilder([handoff]);
+    builder.getOne = jest.fn().mockResolvedValue(handoff);
+    handoffs.createQueryBuilder.mockReturnValue(builder);
+    handoffs.save = jest.fn(async (value) => value);
+
+    const saved = await service.updateHandoff(handoff.id, handoff.tenantId, { action: 'completed', note: 'Called the lead' } as any);
+    expect(saved.status).toBe('completed');
+    expect(operationalEvents.handoffResolved).toHaveBeenCalledTimes(1);
+    expect(operationalEvents.handoffResolved).toHaveBeenCalledWith({
+      tenantId: handoff.tenantId,
+      handoffId: handoff.id,
+      leadId: handoff.leadId,
+    });
   });
 
   it('keeps a buyer with a credit blocker warm and schedules a future follow-up without an urgent handoff', async () => {

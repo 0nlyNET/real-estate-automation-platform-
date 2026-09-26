@@ -83,10 +83,20 @@ export class EntitlementService {
     const tenant = tenantId ? await this.tenants.findOne({ where: { id: tenantId } }) : null;
     const billing = tenant ? billingEligibility(tenant) : { allowed: false, reason: 'Workspace not found' };
     const suspended = !tenant || ['SUSPENDED', 'CANCELED'].includes(tenant.lifecycleStatus);
+    // P8: a billing-source suspension keeps server-enforced READ-ONLY access
+    // (the interceptor allows GET while blocking mutations). Manual, safety,
+    // compliance and offboarding suspensions stay fully strict.
+    const billingSuspended =
+      !!tenant &&
+      tenant.lifecycleStatus === 'SUSPENDED' &&
+      tenant.serviceSuspensionSource === 'billing';
     return {
       allowed: billing.allowed && !suspended,
       billingEligible: billing.allowed,
       reason: billing.reason || (suspended ? 'Workspace services are suspended' : null),
+      suspensionSource: tenant?.serviceSuspensionSource || null,
+      lifecycleStatus: tenant?.lifecycleStatus || null,
+      billingSuspended,
     };
   }
 

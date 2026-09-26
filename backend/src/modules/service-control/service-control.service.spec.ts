@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { OffboardingRequest } from '../offboarding/offboarding-request.entity';
 import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
 import { OperationsTask } from '../operations/operations-task.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
@@ -33,12 +34,15 @@ function harness(overrides: Partial<Tenant> = {}) {
     save: jest.fn().mockImplementation(async (value) => value),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
+  const offboardingFindOne = jest.fn().mockResolvedValue(null);
+  const offboardingRepo = { findOne: offboardingFindOne };
   const manager = {
     getRepository: jest.fn().mockImplementation((entity) => {
       if (entity === Tenant) return tenantRepo;
       if (entity === TenantSettings) return settingsRepo;
       if (entity === OnboardingRecord) return onboardingRepo;
       if (entity === OperationsTask) return taskRepo;
+      if (entity === OffboardingRequest) return offboardingRepo;
       throw new Error(`Unexpected repository ${String(entity)}`);
     }),
     query: jest.fn().mockImplementation(async (sql: string) => {
@@ -60,6 +64,14 @@ function harness(overrides: Partial<Tenant> = {}) {
     createForTenant: jest.fn().mockResolvedValue([]),
   };
   const audit = { record: jest.fn().mockResolvedValue({ id: 'audit-1' }) };
+  const operationalEvents = {
+    billingEvent: jest.fn().mockResolvedValue({ skipped: false }),
+    automationResumed: jest.fn().mockResolvedValue({ skipped: false }),
+    automationPaused: jest.fn().mockResolvedValue({ skipped: false }),
+    readyForActivation: jest.fn().mockResolvedValue({ skipped: false }),
+    onboardingBlocked: jest.fn().mockResolvedValue({ skipped: false }),
+    integrationFailed: jest.fn().mockResolvedValue({ skipped: false }),
+  };
   const tenants = {
     findOne: jest.fn().mockImplementation(async () => tenant),
     createQueryBuilder: jest.fn(),
@@ -69,6 +81,7 @@ function harness(overrides: Partial<Tenant> = {}) {
     tenants as any,
     notifications as any,
     audit as any,
+    operationalEvents as any,
   );
   return {
     service,
@@ -77,11 +90,85 @@ function harness(overrides: Partial<Tenant> = {}) {
     manager,
     notifications,
     audit,
+    operationalEvents,
     tenantRepo,
     settingsRepo,
     taskRepo,
+    offboardingFindOne,
   };
 }
+
+describe('service-control operational event wiring (P1)', () => {
+  it('billing suspension raises a billing suspended event', async () => {
+    const { service, operationalEvents, tenant } = harness({ lifecycleStatus: 'ACTIVE' });
+    const result = await service.suspend({
+      tenantId: tenant.id,
+      reason: 'Payment failed',
+      source: 'billing',
+    });
+    expect(result.changed).toBe(true);
+    expect(operationalEvents.billingEvent).toHaveBeenCalledTimes(1);
+    expect(operationalEvents.billingEvent).toHaveBeenCalledWith({
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      type: 'suspended',
+      detail: 'Payment failed',
+    });
+  });
+
+  it('manual suspension does not raise a billing event', async () => {
+    const { service, operationalEvents, tenant } = harness({ lifecycleStatus: 'ACTIVE' });
+    const result = await service.suspend({
+      tenantId: tenant.id,
+      reason: 'Owner requested pause',
+      source: 'manual',
+    });
+    expect(result.changed).toBe(true);
+    expect(operationalEvents.billingEvent).not.toHaveBeenCalled();
+  });
+
+  it('billing restore raises recovered and automation-resumed events', async () => {
+    const { service, operationalEvents, tenant } = harness({
+      lifecycleStatus: 'SUSPENDED',
+      serviceSuspensionSource: 'billing',
+      servicePreviousLifecycleStatus: 'ACTIVE',
+      paymentConfirmedAt: new Date(),
+      paidSubscriptionId: 'sub_paid',
+      stripeSubscriptionId: 'sub_paid',
+    });
+    const result = await service.restore({
+      tenantId: tenant.id,
+      actor: { id: 'operator-1', role: 'super_admin', email: 'owner@example.com' } as any,
+      billingRecoveryOnly: true,
+    });
+    expect(result.changed).toBe(true);
+    expect(operationalEvents.billingEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: tenant.id, type: 'recovered' }),
+    );
+    expect(operationalEvents.automationResumed).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: tenant.id }),
+    );
+  });
+
+  it('restore still succeeds when the notification facade throws', async () => {
+    const { service, operationalEvents, tenant } = harness({
+      lifecycleStatus: 'SUSPENDED',
+      serviceSuspensionSource: 'billing',
+      servicePreviousLifecycleStatus: 'ACTIVE',
+      paymentConfirmedAt: new Date(),
+      paidSubscriptionId: 'sub_paid',
+      stripeSubscriptionId: 'sub_paid',
+    });
+    operationalEvents.billingEvent.mockRejectedValue(new Error('notify down'));
+    operationalEvents.automationResumed.mockRejectedValue(new Error('notify down'));
+    const result = await service.restore({
+      tenantId: tenant.id,
+      actor: { id: 'operator-1', role: 'super_admin', email: 'owner@example.com' } as any,
+      billingRecoveryOnly: true,
+    });
+    expect(result.changed).toBe(true);
+  });
+});
 
 describe('client service control', () => {
   it('automatically restores only billing suspensions after verified payment', async () => {
@@ -284,5 +371,92 @@ describe('client service control', () => {
     expect(setup.notifications.createForPlatform).not.toHaveBeenCalled();
     expect(setup.notifications.createForTenant).not.toHaveBeenCalled();
     expect(setup.audit.record).not.toHaveBeenCalled();
+  });
+});
+
+describe('billing recovery terminal-state gates (P7)', () => {
+  // "Pay" = the conditions that trigger restoreAfterPayment: Stripe-confirmed
+  // active billing (the harness default) plus a SUSPENDED workspace.
+  const suspendedTenant = (overrides: Record<string, unknown> = {}) =>
+    harness({
+      status: 'active',
+      lifecycleStatus: 'SUSPENDED',
+      serviceSuspendedAt: new Date('2026-07-23T00:00:00Z'),
+      serviceSuspensionSource: 'billing',
+      servicePreviousLifecycleStatus: 'ACTIVE',
+      ...overrides,
+    });
+
+  it('(1) billing suspend -> pay -> restores', async () => {
+    const setup = suspendedTenant();
+    await expect(setup.service.restoreAfterPayment(setup.tenant.id)).resolves.toMatchObject({
+      changed: true,
+      lifecycleStatus: 'ACTIVE',
+    });
+    expect(setup.tenant.serviceSuspensionSource).toBe('billing');
+  });
+
+  it('(2) manual suspend -> pay -> stays suspended', async () => {
+    const setup = suspendedTenant({ serviceSuspensionSource: 'manual' });
+    await expect(setup.service.restoreAfterPayment(setup.tenant.id)).resolves.toMatchObject({
+      changed: false,
+      lifecycleStatus: 'SUSPENDED',
+    });
+  });
+
+  it('(3) safety suspend -> pay -> stays suspended', async () => {
+    const setup = suspendedTenant({ serviceSuspensionSource: 'safety' });
+    await expect(setup.service.restoreAfterPayment(setup.tenant.id)).resolves.toMatchObject({
+      changed: false,
+      lifecycleStatus: 'SUSPENDED',
+    });
+  });
+
+  it('(4a) offboarding in progress -> pay -> stays offboarding (offboarding record gate)', async () => {
+    const setup = suspendedTenant({ serviceSuspensionSource: 'billing' });
+    setup.offboardingFindOne.mockResolvedValue({
+      tenantId: setup.tenant.id,
+      status: 'retention',
+      deleteAfter: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    });
+    await expect(setup.service.restoreAfterPayment(setup.tenant.id)).resolves.toMatchObject({
+      changed: false,
+      lifecycleStatus: 'SUSPENDED',
+    });
+    expect(setup.notifications.createForTenant).not.toHaveBeenCalled();
+  });
+
+  it('(4b) offboarding in progress -> pay -> stays offboarding (terminal source marker)', async () => {
+    // Post-fix offboarding.start() state: distinct terminal marker + no
+    // previous-lifecycle restore target.
+    const setup = suspendedTenant({
+      serviceSuspensionSource: 'offboarding',
+      servicePreviousLifecycleStatus: null,
+    });
+    await expect(setup.service.restoreAfterPayment(setup.tenant.id)).resolves.toMatchObject({
+      changed: false,
+      lifecycleStatus: 'SUSPENDED',
+    });
+  });
+
+  it('(4c) manual restore is also refused while offboarding is in progress', async () => {
+    const setup = suspendedTenant({
+      serviceSuspensionSource: 'offboarding',
+      servicePreviousLifecycleStatus: null,
+    });
+    await expect(
+      setup.service.restore({
+        tenantId: setup.tenant.id,
+        actor: { id: '22222222-2222-4222-8222-222222222222' },
+      }),
+    ).resolves.toMatchObject({ changed: false, lifecycleStatus: 'SUSPENDED' });
+  });
+
+  it('(5) canceled -> pay -> stays canceled', async () => {
+    const setup = suspendedTenant({ lifecycleStatus: 'CANCELED' });
+    await expect(setup.service.restoreAfterPayment(setup.tenant.id)).resolves.toMatchObject({
+      changed: false,
+      lifecycleStatus: 'CANCELED',
+    });
   });
 });

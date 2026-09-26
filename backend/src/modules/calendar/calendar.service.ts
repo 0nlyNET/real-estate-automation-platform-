@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
   Optional,
@@ -12,10 +13,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { DataSource, In, IsNull, Not, Repository } from 'typeorm';
 import { decryptString, encryptString } from '../../common/crypto-secrets';
+import { operationalEvent } from '../../common/operational-log';
 import { AuditService } from '../audit/audit.service';
 import { Appointment } from '../client-operations/appointment.entity';
 import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { OperationalEventsService } from '../notifications/operational-events.service';
 import { OperationsService } from '../operations/operations.service';
+import { TenantsService } from '../tenants/tenants.service';
 import {
   CalendarConnection,
   CalendarConnectionStatus,
@@ -31,6 +36,17 @@ import {
 const OAUTH_STATE_TTL_MS = 10 * 60_000;
 const GOOGLE_WATCH_TTL_SECONDS = 7 * 24 * 60 * 60;
 const GOOGLE_WATCH_RENEWAL_LEAD_MS = 12 * 60 * 60_000;
+// P3/P6: daily connection-health scan (stale needs_attention escalation +
+// OAuth refresh-token expiry warnings). One escalation per connection per
+// failure episode (lastErrorAt is part of the dedupe key); each expiry
+// milestone (3d/1d) fires once per connection per expiry date.
+const CALENDAR_HEALTH_SCAN_TASK_TYPE = 'calendar.connection_health_scan';
+const CALENDAR_HEALTH_SCAN_DEDUPE_KEY =
+  'recurring:calendar.connection_health_scan';
+const CALENDAR_HEALTH_SCAN_INTERVAL_MS = 24 * 60 * 60_000;
+const ATTENTION_ESCALATION_AFTER_MS = 24 * 60 * 60_000;
+const OAUTH_EXPIRY_WARNING_DAYS = [1, 3];
+const CALENDAR_RECONNECT_PATH = '/app/settings/calendar';
 
 type BookingEventInput = {
   tenantId: string;
@@ -135,6 +151,7 @@ function publicError(code?: string | null) {
 
 @Injectable()
 export class CalendarService implements OnModuleInit {
+  private readonly logger = new Logger(CalendarService.name);
   private readonly refreshing = new Map<string, Promise<string>>();
 
   constructor(
@@ -150,6 +167,14 @@ export class CalendarService implements OnModuleInit {
     @Optional()
     @InjectRepository(Appointment)
     private readonly appointments?: Repository<Appointment>,
+    // P3: failure/recovery alerting (Wave-1 injection pattern: optional so
+    // unit tests and partial module graphs keep working).
+    @Optional()
+    private readonly operationalEvents?: OperationalEventsService,
+    @Optional()
+    private readonly notifications?: NotificationsService,
+    @Optional()
+    private readonly tenants?: TenantsService,
   ) {}
 
   onModuleInit() {
@@ -203,6 +228,33 @@ export class CalendarService implements OnModuleInit {
         };
       });
     });
+    // P3/P6: daily scan — escalate auth-failure needs_attention unresolved
+    // beyond 24h to the platform admin, and warn before OAuth refresh-token
+    // expiry. The handler reschedules itself; the dedupe key keeps exactly
+    // one recurring schedule row.
+    if (this.durableJobs && process.env.NODE_ENV !== 'test') {
+      this.durableJobs.register(
+        CALENDAR_HEALTH_SCAN_TASK_TYPE,
+        async () => {
+          await this.runConnectionHealthScan();
+          return {
+            nextRunAt: new Date(Date.now() + CALENDAR_HEALTH_SCAN_INTERVAL_MS),
+          };
+        },
+      );
+      void this.durableJobs
+        .schedule({
+          taskType: CALENDAR_HEALTH_SCAN_TASK_TYPE,
+          dedupeKey: CALENDAR_HEALTH_SCAN_DEDUPE_KEY,
+        })
+        .catch((error: unknown) =>
+          this.logger.warn(
+            operationalEvent('calendar_health_scan_schedule_failed', {
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          ),
+        );
+    }
   }
 
   async status(tenantId: string) {
@@ -493,6 +545,11 @@ export class CalendarService implements OnModuleInit {
 
   private async testConnectionInsideLock(tenantId: string, actorId: string) {
     const connection = await this.requireSelectedConnection(tenantId);
+    // P3: a successful test that leaves needs_attention resolves the
+    // auth-failure incident (exactly one recovery event via the incident
+    // lifecycle — recordRecovery is a no-op when no incident is open).
+    const wasAttention = connection.status === 'needs_attention';
+    const attentionSince = connection.lastErrorAt;
     try {
       const accessToken = await this.accessToken(connection);
       const calendar = await this.google.getCalendar(
@@ -535,6 +592,9 @@ export class CalendarService implements OnModuleInit {
         statusCode: 200,
         metadata: { provider: 'google' },
       });
+      if (wasAttention) {
+        await this.notifyCalendarRecovered(connection, attentionSince);
+      }
       return this.status(tenantId);
     } catch (error) {
       await this.handleProviderError(connection, error);
@@ -1447,6 +1507,10 @@ export class CalendarService implements OnModuleInit {
   }
 
   private async noteSyncSuccess(connection: CalendarConnection) {
+    // P3: a successful provider round-trip that leaves needs_attention also
+    // resolves the incident (same exactly-once recovery guarantee).
+    const wasAttention = connection.status === 'needs_attention';
+    const attentionSince = connection.lastErrorAt;
     const update: {
       lastSuccessfulSyncAt: Date;
       lastErrorCode: null;
@@ -1465,6 +1529,266 @@ export class CalendarService implements OnModuleInit {
       update,
     );
     if (result.affected) Object.assign(connection, update);
+    if (wasAttention && update.status === 'connected') {
+      await this.notifyCalendarRecovered(connection, attentionSince);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // P3 — calendar failure alerting / P6 — credential expiry warnings.
+  //
+  // Fail-closed booking is unchanged: callers still throw through
+  // publicProviderException when the connection is not healthy. These
+  // helpers only add notifications around the existing state machine.
+  //
+  // "Assigned agent" routing: calendar connections are tenant-level, so the
+  // tenant owner/admin notification below is the correct audience — no
+  // per-agent routing is invented.
+  // ------------------------------------------------------------------
+
+  private providerDisplayName(provider: string): string {
+    if (provider === 'microsoft') return 'Microsoft Calendar';
+    if (provider === 'calendly') return 'Calendly';
+    return 'Google Calendar';
+  }
+
+  /**
+   * True when the provider rejected our credentials (revoked/expired OAuth
+   * grant). Google maps 401, non-rate-limited 403, and refresh_endpoint
+   * invalid_grant (HTTP 400 with authRequest) to GOOGLE_AUTH_REQUIRED.
+   * Transient provider outages must NOT page — they stay silent here.
+   */
+  private isAuthFailure(error: unknown): boolean {
+    if (error instanceof GoogleCalendarApiError) {
+      return (
+        error.code === 'GOOGLE_AUTH_REQUIRED' ||
+        (!error.transient && (error.status === 401 || error.status === 403))
+      );
+    }
+    const status = Number((error as any)?.status ?? (error as any)?.response?.status);
+    return status === 401 || status === 403;
+  }
+
+  private isAuthErrorCode(code?: string | null): boolean {
+    return (
+      code === 'GOOGLE_AUTH_REQUIRED' || /auth/i.test(String(code || ''))
+    );
+  }
+
+  private async resolveTenantName(tenantId: string): Promise<string | null> {
+    try {
+      const tenant = await this.tenants?.findById(tenantId);
+      return tenant?.name || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * P3 failure alert. The incident lifecycle dedupes repeats (in-app info on
+   * first failure, email on escalation) and incidentKeyFor builds the same
+   * key for integrationFailed/integrationRecovered (provider + tenantId), so
+   * the recovery below resolves exactly this incident.
+   */
+  private async notifyCalendarAuthFailure(
+    connection: CalendarConnection,
+    code: string,
+  ): Promise<void> {
+    try {
+      const tenantName = await this.resolveTenantName(connection.tenantId);
+      await this.operationalEvents?.integrationFailed({
+        provider: this.providerDisplayName(connection.provider),
+        tenantId: connection.tenantId,
+        tenantName: tenantName || undefined,
+        error: `calendar auth failure (${code})`,
+        reconnectPath: CALENDAR_RECONNECT_PATH,
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('calendar_auth_failure_notification_failed', {
+          tenantId: connection.tenantId,
+          provider: connection.provider,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  }
+
+  /** P3 recovery alert — exactly one recovery event per incident episode. */
+  private async notifyCalendarRecovered(
+    connection: CalendarConnection,
+    attentionSince?: Date | null,
+  ): Promise<void> {
+    try {
+      const downtimeMinutes = attentionSince
+        ? Math.max(
+            1,
+            Math.round((Date.now() - attentionSince.getTime()) / 60_000),
+          )
+        : undefined;
+      await this.operationalEvents?.integrationRecovered({
+        provider: this.providerDisplayName(connection.provider),
+        tenantId: connection.tenantId,
+        downtimeMinutes,
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('calendar_recovered_notification_failed', {
+          tenantId: connection.tenantId,
+          provider: connection.provider,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  }
+
+  /**
+   * P3 escalation: auth-failure needs_attention unresolved beyond 24h goes
+   * to the platform admin (super_admin only). The deduplication key embeds
+   * lastErrorAt, so each failure episode escalates at most once.
+   */
+  private async escalateStaleAttention(
+    connection: CalendarConnection,
+  ): Promise<void> {
+    const tenantName = await this.resolveTenantName(connection.tenantId);
+    const provider = this.providerDisplayName(connection.provider);
+    const since = connection.lastErrorAt
+      ? connection.lastErrorAt.toISOString().slice(0, 10)
+      : 'unknown date';
+    await this.notifications?.createForPlatform({
+      eventType: 'calendar.attention_unresolved',
+      category: 'system',
+      severity: 'warning',
+      audience: 'super_admin',
+      title: `${provider} unresolved for ${tenantName || 'a workspace'} (24h+)`,
+      message:
+        `${provider} for ${tenantName || connection.tenantId} has needed attention since ${since} ` +
+        `(last error: ${connection.lastErrorCode || 'unknown'}). Booking stays fail-closed until the calendar is reconnected.`,
+      deduplicationKey: `calendar:attention-escalated:${connection.id}:${connection.lastErrorAt?.getTime() || 0}`,
+      actionUrl: '/admin/clients',
+      metadata: {
+        tenantId: connection.tenantId,
+        provider: connection.provider,
+        connectionId: connection.id,
+      },
+    });
+  }
+
+  /**
+   * P6 OAuth credential warning: refreshTokenExpiresAt is stored but nothing
+   * scanned it (Google test-mode refresh tokens die after 7 days). Warn the
+   * tenant owners/admins 3 days and 1 day before expiry. Each milestone fires
+   * once per connection per expiry date via the deduplication key.
+   */
+  private async warnRefreshTokenExpiry(
+    connection: CalendarConnection,
+    expiresAt: Date,
+    now: Date,
+  ): Promise<'3d' | '1d' | null> {
+    const daysLeft = Math.ceil((expiresAt.getTime() - now.getTime()) / 86_400_000);
+    const milestone =
+      OAUTH_EXPIRY_WARNING_DAYS.find((days) => daysLeft <= days) ?? null;
+    if (milestone === null) return null;
+    const provider = this.providerDisplayName(connection.provider);
+    const expiryDay = expiresAt.toISOString().slice(0, 10);
+    const dayWord = daysLeft === 1 ? 'day' : 'days';
+    await this.notifications?.createForTenant({
+      tenantId: connection.tenantId,
+      eventType: 'calendar.oauth_expiring',
+      category: 'integrations',
+      severity: 'warning',
+      title: `${provider} authorization expires in ${daysLeft} ${dayWord}`,
+      message:
+        `The ${provider} authorization for this workspace expires on ${expiryDay}. ` +
+        `Reconnect the calendar before then to avoid interrupted booking and sync.`,
+      deduplicationKey: `calendar:oauth-expiry:${milestone}d:${connection.id}:${expiryDay}`,
+      actionUrl: CALENDAR_RECONNECT_PATH,
+    });
+    return milestone === 1 ? '1d' : '3d';
+  }
+
+  /**
+   * P3 24h escalation + P6 OAuth expiry warnings. Public so the durable-job
+   * handler and tests can drive it directly; returns counts for observability.
+   */
+  async runConnectionHealthScan(now = new Date()): Promise<{
+    escalated: number;
+    expiryWarnings: number;
+  }> {
+    let escalated = 0;
+    let expiryWarnings = 0;
+    try {
+      const stale = await this.connections.find({
+        where: { status: 'needs_attention' },
+      });
+      const cutoff = now.getTime() - ATTENTION_ESCALATION_AFTER_MS;
+      for (const connection of stale) {
+        try {
+          if (
+            !connection.lastErrorAt ||
+            connection.lastErrorAt.getTime() > cutoff ||
+            !this.isAuthErrorCode(connection.lastErrorCode)
+          ) {
+            continue;
+          }
+          await this.escalateStaleAttention(connection);
+          escalated += 1;
+        } catch (error: unknown) {
+          this.logger.warn(
+            operationalEvent('calendar_attention_escalation_failed', {
+              tenantId: connection.tenantId,
+              connectionId: connection.id,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
+      }
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('calendar_health_scan_attention_failed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+    try {
+      const connections = await this.connections.find({
+        where: { status: Not('disconnected') },
+      });
+      const horizon = now.getTime() + 3 * 86_400_000;
+      for (const connection of connections) {
+        try {
+          const expiresAt = connection.refreshTokenExpiresAt;
+          if (
+            !expiresAt ||
+            expiresAt.getTime() <= now.getTime() ||
+            expiresAt.getTime() > horizon
+          ) {
+            continue;
+          }
+          const warned = await this.warnRefreshTokenExpiry(
+            connection,
+            expiresAt,
+            now,
+          );
+          if (warned) expiryWarnings += 1;
+        } catch (error: unknown) {
+          this.logger.warn(
+            operationalEvent('calendar_oauth_expiry_warning_failed', {
+              tenantId: connection.tenantId,
+              connectionId: connection.id,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
+      }
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('calendar_health_scan_expiry_failed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+    return { escalated, expiryWarnings };
   }
 
   private async handleProviderError(
@@ -1491,6 +1815,13 @@ export class CalendarService implements OnModuleInit {
       )
       .catch(() => null);
     if (result?.affected) Object.assign(connection, update);
+    // P3: auth failures (revoked/expired OAuth grant) flip the connection to
+    // needs_attention AND notify tenant owners/admins with a reconnect deep
+    // link. Transient provider errors stay silent here (no paging). The
+    // incident lifecycle dedupes repeats; recovery fires on reconnect/test.
+    if (this.isAuthFailure(error)) {
+      await this.notifyCalendarAuthFailure(connection, code);
+    }
     if (error instanceof GoogleCalendarApiError && error.transient) {
       await this.operations?.createTask({
         tenantId: connection.tenantId,

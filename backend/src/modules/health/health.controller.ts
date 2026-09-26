@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Headers,
+  Optional,
   Res,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -11,16 +12,20 @@ import type { Response } from 'express';
 import { DataSource } from 'typeorm';
 import { environmentReadiness } from '../../common/environment-readiness';
 import { SchemaReadinessService } from '../../database/schema-readiness.service';
+import { WorkerHeartbeatService } from '../durable-jobs/worker-heartbeat.service';
 
 @Controller('health')
 export class HealthController {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly schema: SchemaReadinessService,
+    @Optional() private readonly heartbeats?: WorkerHeartbeatService,
   ) {}
 
   @Get('live')
   live() {
+    // Public liveness probe for external uptime monitors: no auth, no I/O,
+    // constant-time. Anything deeper belongs on /health/ready.
     return { status: 'up', process: { status: 'up' } };
   }
 
@@ -41,6 +46,7 @@ export class HealthController {
     let migrations: Record<string, unknown> = { status: 'unknown' };
     let credentialStorage: Record<string, unknown> = { status: 'unknown' };
     let durableWorkers: Record<string, unknown> = { status: 'unknown' };
+    let workers: Record<string, unknown> = { status: 'unknown', workers: [] };
 
     try {
       await this.dataSource.query('SELECT 1');
@@ -82,6 +88,8 @@ export class HealthController {
           legacyPlaintextRows,
         };
       }
+
+      workers = await this.workerHealth();
     } catch {
       // A public health response intentionally omits connection strings and exception text.
     }
@@ -92,6 +100,7 @@ export class HealthController {
       migrations.status === 'up' &&
       credentialStorage.status === 'up' &&
       durableWorkers.status === 'up' &&
+      workers.status !== 'down' &&
       configuration.runtime.status === 'up' &&
       configuration.encryption.status === 'up' &&
       configuration.systemEmail.status !== 'down' &&
@@ -107,7 +116,50 @@ export class HealthController {
       configuration,
       credentialStorage,
       durableWorkers,
+      workers,
     };
+  }
+
+  /**
+   * P5 worker-health inventory: expected frequency, last success, last error,
+   * and consecutive failures per in-process worker / recurring scan. A stale
+   * or failing critical worker marks readiness down (503) so external and
+   * internal monitors catch scheduler death, not just process death.
+   */
+  private async workerHealth(): Promise<Record<string, unknown>> {
+    if (!this.heartbeats) return { status: 'unknown', workers: [] };
+    try {
+      const snapshot = await this.heartbeats.snapshot();
+      const unhealthy = snapshot.filter(
+        (w) => w.status === 'stale' || w.status === 'failing',
+      );
+      const criticalUnhealthy = unhealthy.filter((w) => w.critical);
+      return {
+        status: criticalUnhealthy.length ? 'down' : 'up',
+        unhealthy: unhealthy.map((w) => ({
+          workerKey: w.workerKey,
+          displayName: w.displayName,
+          status: w.status,
+          critical: w.critical,
+          lastSuccessAt: w.lastSuccessAt?.toISOString() || null,
+          lastError: w.lastError,
+          consecutiveFailures: w.consecutiveFailures,
+        })),
+        workers: snapshot.map((w) => ({
+          workerKey: w.workerKey,
+          displayName: w.displayName,
+          expectedIntervalSeconds: w.expectedIntervalSeconds,
+          critical: w.critical,
+          source: w.source,
+          status: w.status,
+          lastSuccessAt: w.lastSuccessAt?.toISOString() || null,
+          lastError: w.lastError,
+          consecutiveFailures: w.consecutiveFailures,
+        })),
+      };
+    } catch {
+      return { status: 'unknown', workers: [] };
+    }
   }
 
   private assertDetailedHealthAccess(suppliedToken?: string) {

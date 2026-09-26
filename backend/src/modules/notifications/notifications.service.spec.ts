@@ -431,13 +431,13 @@ describe('admin notifications', () => {
     await service.createForTenant({
       tenantId: 'tenant-1',
       assignedUserId: 'user-staff',
-      eventType: 'lead.ai_handoff',
+      eventType: 'handoff.created',
       category: 'leads',
       severity: 'warning',
       title: 'AI handed off Jordan Buyer',
       message: 'Low confidence response.',
       deduplicationKey: 't5-handoff',
-      templateId: 'lead.ai_handoff',
+      templateId: 'handoff.created',
       templateContext: {
         leadName: 'Jordan Buyer',
         handoffReason: 'Low confidence',
@@ -450,6 +450,51 @@ describe('admin notifications', () => {
     expect(mailService.sendEmail).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'staff@example.com' }),
     );
+  });
+
+  it('5b. handoff with no tenant recipients escalates to platform admins', async () => {
+    const { service, stored } = setup({}, {
+      tenantUsers: [
+        {
+          id: 'user-platform-admin', tenantId: 'other-tenant', role: 'owner',
+          email: 'owner@example.com', platformRole: 'super_admin',
+          isActive: true, isEmailVerified: true,
+        },
+      ],
+    });
+    const rows = await service.createForTenant({
+      tenantId: 'tenant-1',
+      assignedUserId: 'user-staff',
+      eventType: 'handoff.created',
+      category: 'leads',
+      severity: 'warning',
+      title: 'Jordan Buyer needs you',
+      message: 'Call the lead today.',
+      deduplicationKey: 'handoff:no-recipients-1',
+      entityType: 'handoff',
+      entityId: 'handoff-1',
+    });
+    // Never a silent zero-recipient handoff: the platform admin is notified.
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0].recipientUserId).toBe('user-platform-admin');
+    expect(rows[0].title).toContain('[No tenant recipients]');
+    expect(rows[0].deduplicationKey).toBe('handoff:no-recipients-1:platform-fallback');
+    expect(stored.some((row) => row.recipientUserId === 'user-staff')).toBe(false);
+  });
+
+  it('5c. non-handoff, non-critical notification with no recipients stays silent', async () => {
+    const { service, stored } = setup({}, { tenantUsers: [] });
+    const rows = await service.createForTenant({
+      tenantId: 'tenant-1',
+      eventType: 'lead.replied',
+      category: 'leads',
+      severity: 'info',
+      title: 'Lead replied',
+      message: 'A lead replied.',
+      deduplicationKey: 'lead-replied:no-recipients-1',
+    });
+    expect(rows).toEqual([]);
+    expect(stored).toHaveLength(0);
   });
 
   it('6. unrelated agent does not receive another agent\u2019s lead', async () => {
@@ -465,7 +510,7 @@ describe('admin notifications', () => {
     await service.createForTenant({
       tenantId: 'tenant-1',
       assignedUserId: 'user-staff',
-      eventType: 'lead.ai_handoff',
+      eventType: 'handoff.created',
       category: 'leads',
       severity: 'warning',
       title: 'Handoff',
@@ -708,13 +753,13 @@ describe('admin notifications', () => {
     const { service, mailService, stored } = setup({ emailEnabled: true, privacyMode: false });
     await service.createForTenant({
       tenantId: 'tenant-1',
-      eventType: 'lead.ai_handoff',
+      eventType: 'handoff.created',
       category: 'leads',
       severity: 'warning',
       title: 'Handoff',
       message: 'Handoff message.',
       deduplicationKey: 't19-action-url',
-      templateId: 'lead.ai_handoff',
+      templateId: 'handoff.created',
       templateContext: {
         leadName: 'Jordan Buyer',
         handoffReason: 'Low confidence',

@@ -14,6 +14,7 @@ import { In, Repository } from 'typeorm';
 import { hasAtLeastRole, UserRole } from '../../common/rbac';
 import { operationalEvent } from '../../common/operational-log';
 import { NotificationsService } from '../notifications/notifications.service';
+import { OperationalEventsService } from '../notifications/operational-events.service';
 import { Appointment } from './appointment.entity';
 import { LeadHandoff } from './lead-handoff.entity';
 import { Lead } from '../leads/lead.entity';
@@ -101,6 +102,7 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     private readonly notifications: NotificationsService,
     @Optional() private readonly crmEvents?: CrmEventsService,
     @Optional() private readonly appointmentBooking?: AppointmentBookingService,
+    @Optional() private readonly operationalEvents?: OperationalEventsService,
   ) {}
 
   onModuleInit() {
@@ -493,6 +495,26 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
         metadata: { handoffId: handoff.id, note: dto.note || null },
       }),
     );
+    if (dto.action === 'completed') {
+      // Close the incident cleanly: mark the handoff notification as read so
+      // the scheduled 4h unread-reminder does not fire stale. In-app only —
+      // no recovery emails for routine handoff resolutions.
+      try {
+        await this.operationalEvents?.handoffResolved({
+          tenantId: saved.tenantId,
+          handoffId: saved.id,
+          leadId: saved.leadId,
+        });
+      } catch (error: unknown) {
+        this.logger.warn(
+          operationalEvent('handoff_resolved_notification_failed', {
+            tenantId: saved.tenantId,
+            handoffId: saved.id,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+    }
     return saved;
   }
 
@@ -854,19 +876,51 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
       handoff.dueAt = new Date(Date.now() + 15 * 60 * 1000);
     }
     const saved = await this.handoffs.save(handoff);
-    await this.notifications.createForTenant({
-      tenantId: lead.tenantId,
-      assignedUserId: lead.assignedToUserId,
-      eventType: 'handoff.created',
-      category: 'tasks',
-      severity: input.priority === 'urgent' ? 'critical' : 'warning',
-      title: `${lead.fullName} needs you`,
-      message: input.recommendedAction,
-      deduplicationKey: `handoff:${saved.id}:active`,
-      actionUrl: `/app/dashboard?leadId=${lead.id}`,
-      entityType: 'handoff',
-      entityId: saved.id,
-    });
+    // Notification failures must never break the handoff itself.
+    try {
+      if (this.operationalEvents) {
+        // Single unified path: the facade emits eventType 'handoff.created'
+        // (the event the digest counts), notifies owners/admins + the assigned
+        // agent exactly once per recipient, and schedules the 4h unread
+        // reminder. If the tenant has no recipients, the notification layer
+        // escalates to platform admins instead of staying silent.
+        await this.operationalEvents.aiHandoff({
+          tenantId: lead.tenantId,
+          leadId: lead.id,
+          leadName: lead.fullName,
+          leadSource: lead.source,
+          reason: input.reason,
+          summary: (lead.conversationSummary || '').slice(0, 2000),
+          aiRecommendation: input.recommendedAction,
+          aiPaused: true,
+          assignedUserId: lead.assignedToUserId || null,
+          handoffId: saved.id,
+          priority: input.priority === 'urgent' ? 'urgent' : 'high',
+        });
+      } else {
+        await this.notifications.createForTenant({
+          tenantId: lead.tenantId,
+          assignedUserId: lead.assignedToUserId,
+          eventType: 'handoff.created',
+          category: 'tasks',
+          severity: input.priority === 'urgent' ? 'critical' : 'warning',
+          title: `${lead.fullName} needs you`,
+          message: input.recommendedAction,
+          deduplicationKey: `handoff:${saved.id}:active`,
+          actionUrl: `/app/dashboard?leadId=${lead.id}`,
+          entityType: 'handoff',
+          entityId: saved.id,
+        });
+      }
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('handoff_notification_failed', {
+          tenantId: lead.tenantId,
+          handoffId: saved.id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
     await this.crmEvents?.publish(lead.tenantId, 'lead.human_handoff', {
       handoffId: saved.id,
       leadId: lead.id,

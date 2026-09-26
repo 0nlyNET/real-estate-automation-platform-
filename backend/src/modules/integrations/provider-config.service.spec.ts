@@ -64,3 +64,41 @@ describe('ProviderConfigService tenant isolation', () => {
     expect(await service.resolveTwilio('tenant-a')).not.toMatchObject({ accountSid: 'AC-b' });
   });
 });
+
+describe('ProviderConfigService integration-failure wiring (P1)', () => {
+  function setup() {
+    const emailIdentities = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const operationalEvents = {
+      integrationFailed: jest.fn().mockResolvedValue({}),
+    };
+    const service = new ProviderConfigService(
+      {} as any,
+      {} as any,
+      emailIdentities as any,
+      operationalEvents as any,
+    );
+    return { service, emailIdentities, operationalEvents };
+  }
+
+  it('SendGrid credential failure raises an integrationFailed event', async () => {
+    const { service, operationalEvents } = setup();
+    await service.recordSendGridCredentialFailure('tenant-1');
+    expect(operationalEvents.integrationFailed).toHaveBeenCalledTimes(1);
+    expect(operationalEvents.integrationFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'SendGrid',
+        tenantId: 'tenant-1',
+        reconnectPath: '/app/settings/integrations',
+      }),
+    );
+  });
+
+  it('credential bookkeeping still completes when the notification facade throws', async () => {
+    const { service, emailIdentities, operationalEvents } = setup();
+    operationalEvents.integrationFailed.mockRejectedValue(new Error('notify down'));
+    await expect(service.recordSendGridCredentialFailure('tenant-1')).resolves.toBeUndefined();
+    expect(emailIdentities.update).toHaveBeenCalled();
+  });
+});

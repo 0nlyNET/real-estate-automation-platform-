@@ -11,6 +11,7 @@ import { DataSource, Repository } from "typeorm";
 import { sanitizeOperationalText } from "../../common/operational-log";
 import { DurableJob } from "./durable-job.entity";
 import { OperationsService } from "../operations/operations.service";
+import { WorkerHeartbeatService } from "./worker-heartbeat.service";
 
 export type DurableJobHandler = (
   job: DurableJob,
@@ -57,6 +58,7 @@ export class DurableJobsService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(DurableJob)
     private readonly jobs: Repository<DurableJob>,
     @Optional() private readonly operations?: OperationsService,
+    @Optional() private readonly heartbeats?: WorkerHeartbeatService,
   ) {}
 
   onModuleInit() {
@@ -139,6 +141,22 @@ export class DurableJobsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async runDue(limit = 20) {
+    try {
+      const processed = await this.claimAndExecute(limit);
+      // Direct liveness signal: proves the 5s scheduler itself is ticking.
+      await this.heartbeats
+        ?.recordTick("durable_job_worker")
+        .catch(() => undefined);
+      return processed;
+    } catch (error) {
+      await this.heartbeats
+        ?.recordFailure("durable_job_worker", error)
+        .catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async claimAndExecute(limit: number) {
     const paused = process.env.GLOBAL_AUTOMATIONS_DISABLED === "true";
     // A bounded resume batch is deliberate: a deployment that clears the
     // global switch must never turn database recovery into an outbound burst.

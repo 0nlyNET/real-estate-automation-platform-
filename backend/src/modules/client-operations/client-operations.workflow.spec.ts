@@ -20,6 +20,7 @@ describe('client operations workflow integration', () => {
   let handoffs: Repository<LeadHandoff>;
   let appointments: Repository<Appointment>;
   let service: ClientOperationsService;
+  let operationalEvents: { aiHandoff: jest.Mock; handoffResolved: jest.Mock };
   const notifications = {
     createForTenant: jest.fn().mockResolvedValue([]),
     createForPlatform: jest.fn().mockResolvedValue([]),
@@ -61,6 +62,10 @@ describe('client operations workflow integration', () => {
     messages = dataSource.getRepository(Message);
     handoffs = dataSource.getRepository(LeadHandoff);
     appointments = dataSource.getRepository(Appointment);
+    operationalEvents = {
+      aiHandoff: jest.fn().mockResolvedValue([]),
+      handoffResolved: jest.fn().mockResolvedValue({ markedRead: 0 }),
+    };
     service = new ClientOperationsService(
       handoffs,
       appointments,
@@ -68,6 +73,9 @@ describe('client operations workflow integration', () => {
       messages,
       dataSource.getRepository(LeadEvent),
       notifications as any,
+      undefined,
+      undefined,
+      operationalEvents as any,
     );
   });
 
@@ -181,6 +189,23 @@ describe('client operations workflow integration', () => {
       { action: 'completed', note: 'Call completed' },
       { userId: clientA.owner.id, role: 'owner' },
     );
+    // Production wiring: the handoff raises the unified operational event
+    // exactly once, and completion closes the notification incident.
+    expect(operationalEvents.aiHandoff).toHaveBeenCalledTimes(1);
+    expect(operationalEvents.aiHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: clientA.tenant.id,
+        leadId: lead.id,
+        handoffId: qualified.handoff!.id,
+        priority: 'high',
+      }),
+    );
+    expect(operationalEvents.handoffResolved).toHaveBeenCalledTimes(1);
+    expect(operationalEvents.handoffResolved).toHaveBeenCalledWith({
+      tenantId: clientA.tenant.id,
+      handoffId: qualified.handoff!.id,
+      leadId: lead.id,
+    });
 
     await expect(
       service.listAppointments(clientA.tenant.id, { userId: clientA.owner.id, role: 'owner' }),

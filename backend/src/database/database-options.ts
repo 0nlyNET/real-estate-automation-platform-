@@ -34,6 +34,7 @@ import { AiFollowupTaskDedup1790294400001 } from './migrations/202609240001-ai-f
 import { ApplicationNotificationProviderState1790294400002 } from './migrations/202609240002-application-notification-provider-state';
 import { NotificationEmailDelivery1790361600001 } from './migrations/202609260001-notification-email-delivery';
 import { NotificationSystemV11790365760000 } from './migrations/202609260002-notification-system-v1';
+import { WorkerHeartbeat1790448000001 } from './migrations/202609270001-worker-heartbeat';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -68,6 +69,7 @@ const databaseMigrations = [
   ApplicationNotificationProviderState1790294400002,
   NotificationEmailDelivery1790361600001,
   NotificationSystemV11790365760000,
+  WorkerHeartbeat1790448000001,
 ];
 
 function migrationOptions() {

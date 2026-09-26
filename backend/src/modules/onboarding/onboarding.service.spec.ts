@@ -609,3 +609,300 @@ describe('operator-controlled workspace activation', () => {
     ).toBe(false);
   });
 });
+
+describe('onboarding safe automations (P10)', () => {
+  const PROVISIONED = 'lakeview-9f3ac2@mg.realtytechai.app';
+
+  function automationHarness(options?: {
+    emailEnabled?: boolean;
+    brandIdentity?: string | null;
+    identityFromEmail?: string | null;
+    contacts?: Record<string, unknown>;
+    providerTests?: Record<string, unknown>;
+  }) {
+    const brandCommunication: Record<string, unknown> = {};
+    if (options?.brandIdentity !== undefined && options.brandIdentity !== null) {
+      brandCommunication.approvedEmailIdentity = options.brandIdentity;
+    }
+    const record = Object.assign(new OnboardingRecord(), {
+      id: 'onboarding-auto',
+      tenantId: 'tenant-auto',
+      businessIdentity: {},
+      contacts: options?.contacts || {},
+      serviceScope: {},
+      leadHandling: {},
+      brandCommunication,
+      consentConfiguration: {},
+      integrationConfiguration: {},
+      providerTests: options?.providerTests || {},
+      verifiedItems: {},
+      smsEnabled: false,
+      emailEnabled: options?.emailEnabled ?? true,
+      bookingEnabled: false,
+      activationStatus: 'incomplete',
+      configurationUpdatedAt: new Date('2026-09-20T00:00:00Z'),
+    });
+    const records = {
+      findOne: jest.fn().mockResolvedValue(record),
+      create: jest.fn((value) => Object.assign(new OnboardingRecord(), value)),
+      save: jest.fn(async (value) => value),
+    };
+    const identity =
+      options?.identityFromEmail === undefined ||
+      options.identityFromEmail === null
+        ? null
+        : {
+            tenantId: 'tenant-auto',
+            fromEmail: options.identityFromEmail,
+            fromName: 'Lakeview Realty',
+            inboundAddress: 'reply@inbound.realtytechai.app',
+            emailStatus: 'testing',
+          };
+    const emailIdentities = { findOne: jest.fn().mockResolvedValue(identity) };
+    const audit = { recordSystemEvent: jest.fn().mockResolvedValue({}) };
+    const service = new OnboardingService(
+      records as any,
+      { findOne: jest.fn() } as any,
+      { findOne: jest.fn() } as any,
+      { find: jest.fn().mockResolvedValue([]) } as any,
+      { createQueryBuilder: jest.fn() } as any,
+      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      audit as any,
+      undefined,
+      emailIdentities as any,
+    );
+    return { service, record, records, emailIdentities, audit };
+  }
+
+  it('auto-aligns the approved identity when the client never set one', async () => {
+    const item = automationHarness({ identityFromEmail: PROVISIONED });
+    const result = await item.service.autoAlignApprovedEmailIdentity(
+      'tenant-auto',
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      aligned: true,
+      reason: 'auto_aligned',
+      provisionedIdentity: PROVISIONED,
+    });
+    expect(item.record.brandCommunication.approvedEmailIdentity).toBe(
+      PROVISIONED,
+    );
+    expect(
+      new Date(item.record.configurationUpdatedAt).getTime(),
+    ).toBeGreaterThan(new Date('2026-09-20T00:00:00Z').getTime());
+    expect(item.records.save).toHaveBeenCalled();
+    expect(item.audit.recordSystemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'onboarding.approved_email_identity_auto_aligned',
+      }),
+    );
+    // Gates are not weakened: activation state is untouched.
+    expect(item.record.activationStatus).toBe('incomplete');
+  });
+
+  it('is a no-op when the brand identity already matches (case-insensitively)', async () => {
+    const item = automationHarness({
+      identityFromEmail: PROVISIONED,
+      brandIdentity: PROVISIONED.toUpperCase(),
+    });
+    const result = await item.service.autoAlignApprovedEmailIdentity(
+      'tenant-auto',
+    );
+    expect(result).toMatchObject({ ok: true, aligned: false });
+    expect(item.records.save).not.toHaveBeenCalled();
+    expect(item.audit.recordSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it('never silently overrides an explicitly-set different identity', async () => {
+    const item = automationHarness({
+      identityFromEmail: PROVISIONED,
+      brandIdentity: 'owner@lakeviewrealty.com',
+    });
+    const result = await item.service.autoAlignApprovedEmailIdentity(
+      'tenant-auto',
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'mismatch' });
+    expect(item.record.brandCommunication.approvedEmailIdentity).toBe(
+      'owner@lakeviewrealty.com',
+    );
+    expect(item.records.save).not.toHaveBeenCalled();
+  });
+
+  it('skips alignment when email is disabled or no identity is provisioned', async () => {
+    const disabled = automationHarness({
+      emailEnabled: false,
+      identityFromEmail: PROVISIONED,
+    });
+    expect(
+      await disabled.service.autoAlignApprovedEmailIdentity('tenant-auto'),
+    ).toMatchObject({ ok: false, reason: 'email_not_enabled' });
+
+    const missing = automationHarness({ identityFromEmail: null });
+    expect(
+      await missing.service.autoAlignApprovedEmailIdentity('tenant-auto'),
+    ).toMatchObject({ ok: false, reason: 'no_provisioned_identity' });
+    expect(missing.records.save).not.toHaveBeenCalled();
+  });
+
+  it('tracks automated connection-test attempts for retry throttling', async () => {
+    const item = automationHarness({ identityFromEmail: PROVISIONED });
+    await item.service.noteAutoConnectionTestAttempt(
+      'tenant-auto',
+      'sendgrid',
+      'failed',
+      'SendGrid client test email failed (403)',
+    );
+    expect(
+      item.record.providerTests.sendgridAutoTestLastAttemptedAt,
+    ).toBeDefined();
+    expect(item.record.providerTests.sendgridAutoTestLastResult).toBe('failed');
+    expect(item.record.providerTests.sendgridAutoTestLastDetail).toContain(
+      '403',
+    );
+    expect(item.records.save).toHaveBeenCalled();
+  });
+
+  it('resolves the connection-test recipient from controlled contacts only', async () => {
+    const controlled = automationHarness({
+      identityFromEmail: PROVISIONED,
+      contacts: {
+        controlledTestEmail: 'Control-Test@Example.com',
+        accountOwner: 'owner@lakeviewrealty.com',
+      },
+    });
+    expect(
+      await controlled.service.connectionTestRecipient('tenant-auto'),
+    ).toBe('control-test@example.com');
+
+    const fallback = automationHarness({
+      identityFromEmail: PROVISIONED,
+      contacts: { accountOwner: 'owner@lakeviewrealty.com' },
+    });
+    expect(await fallback.service.connectionTestRecipient('tenant-auto')).toBe(
+      'owner@lakeviewrealty.com',
+    );
+
+    const none = automationHarness({
+      identityFromEmail: PROVISIONED,
+      contacts: { accountOwner: 'not-an-email' },
+    });
+    expect(await none.service.connectionTestRecipient('tenant-auto')).toBeNull();
+  });
+});
+
+describe('onboarding operational event wiring (P1)', () => {
+  function harnessWithEvents(record: OnboardingRecord) {
+    const records = {
+      findOne: jest.fn().mockResolvedValue(record),
+      create: jest.fn((value) => Object.assign(new OnboardingRecord(), value)),
+      save: jest.fn(async (value) => value),
+    };
+    const tenants = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'tenant-1',
+        name: 'Lakeview Realty',
+        status: 'active',
+        stripeSubscriptionId: 'sub_paid',
+        paidSubscriptionId: 'sub_paid',
+        paymentConfirmedAt: new Date(),
+        lifecycleStatus: 'ONBOARDING',
+      }),
+      manager: { transaction: jest.fn() },
+    };
+    const settings = { findOne: jest.fn().mockResolvedValue({ tenantId: 'tenant-1', automationsEnabled: false }) };
+    const stepsBuilder: any = {};
+    for (const method of ['innerJoin', 'where', 'andWhere', 'select', 'addSelect', 'groupBy']) {
+      stepsBuilder[method] = jest.fn(() => stepsBuilder);
+    }
+    stepsBuilder.getRawMany = jest.fn().mockResolvedValue([]);
+    const operations = { createTask: jest.fn().mockResolvedValue({}) };
+    const operationalEvents = {
+      readyForActivation: jest.fn().mockResolvedValue({}),
+      onboardingBlocked: jest.fn().mockResolvedValue({}),
+      automationResumed: jest.fn().mockResolvedValue({}),
+      automationPaused: jest.fn().mockResolvedValue({}),
+    };
+    const service = new OnboardingService(
+      records as any,
+      tenants as any,
+      settings as any,
+      { find: jest.fn().mockResolvedValue([]) } as any,
+      { createQueryBuilder: jest.fn(() => stepsBuilder) } as any,
+      operations as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      operationalEvents as any,
+    );
+    return { service, operationalEvents };
+  }
+
+  function blockedRecord(): OnboardingRecord {
+    return Object.assign(new OnboardingRecord(), {
+      id: 'onboarding-1',
+      tenantId: 'tenant-1',
+      businessIdentity: {},
+      contacts: {},
+      serviceScope: {},
+      leadHandling: {},
+      brandCommunication: {},
+      consentConfiguration: {},
+      integrationConfiguration: {},
+      providerTests: {},
+      verifiedItems: {},
+      smsEnabled: false,
+      emailEnabled: false,
+      bookingEnabled: false,
+      activationStatus: 'incomplete',
+    });
+  }
+
+  it('blocked activate fires onboardingBlocked before throwing ACTIVATION_BLOCKED', async () => {
+    const { service, operationalEvents } = harnessWithEvents(blockedRecord());
+    await expect(service.activate('tenant-1', 'operator-1')).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'ACTIVATION_BLOCKED' }),
+    });
+    expect(operationalEvents.onboardingBlocked).toHaveBeenCalledTimes(1);
+    expect(operationalEvents.onboardingBlocked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        tenantName: 'Lakeview Realty',
+        blocker: expect.any(String),
+        whatIsNeeded: expect.any(String),
+      }),
+    );
+  });
+
+  it('ready-for-activation fires once per ready transition, not on repeated ready polls', async () => {
+    const { service, operationalEvents } = harnessWithEvents(blockedRecord());
+    const transition = (service as any).notifyReadyForActivationTransition.bind(service);
+    const checklist = { billing: 'ok', email: 'ok', crm: 'ok', calendar: 'ok' };
+
+    // Not ready -> ready: fires.
+    await transition('tenant-1', { name: 'Lakeview Realty' }, { ready: false }, checklist);
+    expect(operationalEvents.readyForActivation).not.toHaveBeenCalled();
+    await transition('tenant-1', { name: 'Lakeview Realty' }, { ready: true }, checklist);
+    expect(operationalEvents.readyForActivation).toHaveBeenCalledTimes(1);
+    expect(operationalEvents.readyForActivation).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: 'tenant-1', tenantName: 'Lakeview Realty' }),
+    );
+    // Repeated ready polls do not re-fire.
+    await transition('tenant-1', { name: 'Lakeview Realty' }, { ready: true }, checklist);
+    await transition('tenant-1', { name: 'Lakeview Realty' }, { ready: true }, checklist);
+    expect(operationalEvents.readyForActivation).toHaveBeenCalledTimes(1);
+    // Ready -> not ready -> ready is a new transition: fires again.
+    await transition('tenant-1', { name: 'Lakeview Realty' }, { ready: false }, checklist);
+    await transition('tenant-1', { name: 'Lakeview Realty' }, { ready: true }, checklist);
+    expect(operationalEvents.readyForActivation).toHaveBeenCalledTimes(2);
+  });
+});

@@ -349,9 +349,47 @@ export class NotificationsService implements OnModuleInit {
           })
           .map((user) => user.id);
       }
+      const recipients = [...new Set(recipientIds)];
+      // P2 handoff safety: never create a handoff with zero notified humans.
+      // When no tenant recipient resolves for a handoff (or any critical
+      // notification), escalate to platform admins instead of returning []
+      // silently. An explicitly empty exactRecipientIds list still means no
+      // recipients (used by per-recipient digests).
+      const isHandoff =
+        input.eventType === 'handoff.created' || input.entityType === 'handoff';
+      if (
+        recipients.length === 0 &&
+        !input.exactRecipientIds &&
+        (isHandoff || input.severity === 'critical')
+      ) {
+        this.logger.warn(
+          operationalEvent('tenant_notification_no_recipients_escalated', {
+            tenantId: input.tenantId,
+            eventType: input.eventType,
+            severity: input.severity,
+          }),
+        );
+        return await this.createForPlatform({
+          eventType: input.eventType,
+          category: input.category,
+          severity: input.severity,
+          title: `[No tenant recipients] ${input.title}`,
+          message:
+            `Tenant ${input.tenantId} has no active, email-verified owner/admin` +
+            ` or assigned agent to notify. ${input.message}`,
+          deduplicationKey: `${input.deduplicationKey}:platform-fallback`,
+          audience: 'super_admin',
+          actionUrl: input.actionUrl,
+          entityType: input.entityType,
+          entityId: input.entityId,
+          metadata: input.metadata,
+          templateId: input.templateId,
+          templateContext: input.templateContext,
+        });
+      }
       // NOTE: `return await` (not bare `return`) so rejections from
       // createForRecipients are caught by the catch block below.
-      return await this.createForRecipients(input, actionUrl, [...new Set(recipientIds)]);
+      return await this.createForRecipients(input, actionUrl, recipients);
     } catch (error: unknown) {
       this.logger.error(
         operationalEvent('client_notification_creation_failed', {

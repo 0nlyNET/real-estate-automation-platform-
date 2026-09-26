@@ -24,6 +24,7 @@ import { OperationsService } from '../operations/operations.service';
 import { operationalEvent, sanitizeOperationalText } from '../../common/operational-log';
 import { ClientOperationsService } from '../client-operations/client-operations.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { OperationalEventsService } from '../notifications/operational-events.service';
 import { AiConversationControlService } from '../ai/ai-conversation-control.service';
 import { MessageSafetyService } from './message-safety.service';
 import { LimitsService } from '../limits/limits.service';
@@ -78,6 +79,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly limits?: LimitsService,
     @Optional() private readonly providerConfig?: ProviderConfigService,
     @Optional() private readonly sendDecisions?: SendDecisionService,
+    @Optional() private readonly operationalEvents?: OperationalEventsService,
   ) {}
 
   onModuleInit(): void {
@@ -816,6 +818,32 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         entityType: 'message',
         entityId: message.id,
       });
+      // P1: terminal SendGrid (email) provider failures raise the integration
+      // incident event. Only provider-caused codes count — data problems like
+      // MISSING_LEAD are not provider failures. The incident lifecycle
+      // escalates severity by failure count, so retries-exhausted noise does
+      // not spam. Never breaks the failure bookkeeping itself.
+      if (
+        message.channel === 'email' &&
+        ['PROVIDER_SEND_FAILED', 'AI_PROVIDER_SEND_FAILED', 'PROVIDER_RESULT_UNKNOWN'].includes(code)
+      ) {
+        try {
+          await this.operationalEvents?.integrationFailed({
+            provider: 'SendGrid',
+            tenantId: message.lead.tenantId,
+            error: String(reason || '').slice(0, 300),
+            reconnectPath: '/app/settings/integrations',
+          });
+        } catch (error: unknown) {
+          this.logger.warn(
+            operationalEvent('send_failure_integration_event_failed', {
+              tenantId: message.lead.tenantId,
+              messageId: message.id,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
+      }
     }
   }
 

@@ -96,7 +96,7 @@ describe('notification digests', () => {
       preferences as any,
       durableJobs as any,
     );
-    return { service, notifications, users, durableJobs, tenants };
+    return { service, notifications, users, adminNotifications, durableJobs, tenants };
   }
 
   it('registers digest jobs', () => {
@@ -155,6 +155,20 @@ describe('notification digests', () => {
     expect(tenant1Call!.exactRecipientIds).toEqual(['user-owner-1']);
     expect(tenant2Call!.exactRecipientIds).toEqual(['user-owner-2b']);
     expect(tenant1Call!.tenantId).not.toBe(tenant2Call!.tenantId);
+  });
+
+  it('22. human handoffs count uses the unified handoff.created event', async () => {
+    const { service, adminNotifications } = setup();
+    await service.sendClientDailyDigest({ tenantId: 'tenant-1' });
+    const handoffCountCall = adminNotifications.count.mock.calls.find(
+      (call: any[]) => call[0]?.where?.eventType === 'handoff.created',
+    );
+    expect(handoffCountCall).toBeDefined();
+    // The legacy dead event type must never be queried.
+    const legacyCall = adminNotifications.count.mock.calls.find(
+      (call: any[]) => call[0]?.where?.eventType === 'lead.ai_handoff',
+    );
+    expect(legacyCall).toBeUndefined();
   });
 
   it('admin digest notifies each opted-in platform operator', async () => {

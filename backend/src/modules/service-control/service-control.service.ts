@@ -5,6 +5,7 @@ import {
   NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -12,6 +13,8 @@ import { operationalEvent } from '../../common/operational-log';
 import { AuditService } from '../audit/audit.service';
 import { billingEligibility } from '../entitlements/entitlement.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { OperationalEventsService } from '../notifications/operational-events.service';
+import { OffboardingRequest } from '../offboarding/offboarding-request.entity';
 import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
 import { OperationsTask } from '../operations/operations-task.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
@@ -23,6 +26,14 @@ export type ServiceControlActor = {
   id: string | null;
   email?: string | null;
 };
+
+/**
+ * P7: terminal suspension marker written by OffboardingService.start().
+ * Deliberately not part of ServiceSuspensionSource so the suspend API can
+ * never create it; compared as a plain string below. Billing recovery only
+ * restores source === 'billing', so this marker can never match a payment.
+ */
+const OFFBOARDING_TERMINAL_SOURCE: string = 'offboarding';
 
 export type ServiceState =
   | 'active'
@@ -101,6 +112,7 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(Tenant) private readonly tenants: Repository<Tenant>,
     private readonly notifications: NotificationsService,
     private readonly audit: AuditService,
+    @Optional() private readonly operationalEvents?: OperationalEventsService,
   ) {}
 
   onModuleInit() {
@@ -342,6 +354,28 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
       }),
     ]);
 
+    // P1: billing-driven suspensions also raise the billing lifecycle event.
+    // payment_failed already notifies via billing.service — only wire the
+    // suspend/restore transitions here. Notification failure never breaks
+    // the suspension itself.
+    if (result.changed && input.source === 'billing') {
+      try {
+        await this.operationalEvents?.billingEvent({
+          tenantId: input.tenantId,
+          tenantName: result.tenant.name || undefined,
+          type: 'suspended',
+          detail: reason,
+        });
+      } catch (error: unknown) {
+        this.logger.warn(
+          operationalEvent('suspension_billing_event_failed', {
+            tenantId: input.tenantId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+    }
+
     return {
       changed: result.changed,
       clientId: input.tenantId,
@@ -376,8 +410,25 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
       if (tenant.lifecycleStatus !== 'SUSPENDED') {
         return { changed: false, tenant, restoredEnrollments: 0 };
       }
+      // P7: the offboarding terminal marker is never recoverable — not by
+      // billing recovery and not by manual restore. Offboarding is one-way;
+      // resurrecting a tenant mid-retention would corrupt scheduled deletion.
+      if (tenant.serviceSuspensionSource === OFFBOARDING_TERMINAL_SOURCE) {
+        return { changed: false, tenant, restoredEnrollments: 0 };
+      }
       if (input.billingRecoveryOnly && tenant.serviceSuspensionSource !== 'billing') {
         return { changed: false, tenant, restoredEnrollments: 0 };
+      }
+      if (input.billingRecoveryOnly) {
+        // P7: billing recovery must never resurrect a tenant with an active
+        // offboarding/cancellation, regardless of the suspension source
+        // marker — the anti-override guard alone is not enough.
+        const offboarding = await manager
+          .getRepository(OffboardingRequest)
+          .findOne({ where: { tenantId: input.tenantId } });
+        if (offboarding && ['scheduled', 'retention', 'failed'].includes(offboarding.status)) {
+          return { changed: false, tenant, restoredEnrollments: 0 };
+        }
       }
       const paymentConfirmed =
         tenant.status === 'active' && billingEligibility(tenant).allowed;
@@ -512,6 +563,45 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
         entityId: input.tenantId,
       }),
     ]);
+
+    // P1: billing recovery raises the billing lifecycle event; restoring to
+    // ACTIVE also resumes automations, which raises the automation lifecycle
+    // event. Notification failures never break the restore itself.
+    if (
+      result.changed &&
+      (input.billingRecoveryOnly || result.tenant.serviceSuspensionSource === 'billing')
+    ) {
+      try {
+        await this.operationalEvents?.billingEvent({
+          tenantId: input.tenantId,
+          tenantName: result.tenant.name || undefined,
+          type: 'recovered',
+          detail: 'Services restored after payment confirmation.',
+        });
+      } catch (error: unknown) {
+        this.logger.warn(
+          operationalEvent('restore_billing_event_failed', {
+            tenantId: input.tenantId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+    }
+    if (result.changed && result.tenant.lifecycleStatus === 'ACTIVE') {
+      try {
+        await this.operationalEvents?.automationResumed({
+          tenantId: input.tenantId,
+          tenantName: result.tenant.name || undefined,
+        });
+      } catch (error: unknown) {
+        this.logger.warn(
+          operationalEvent('restore_automation_event_failed', {
+            tenantId: input.tenantId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+    }
 
     if (result.changed) {
       await this.audit.record({

@@ -196,7 +196,7 @@ export class NotificationDigestService implements OnModuleInit {
         stats.humanHandoffs = await this.adminNotifications.count({
           where: {
             recipientUserId: In(tenantUserIds),
-            eventType: 'lead.ai_handoff',
+            eventType: 'handoff.created',
             createdAt: MoreThan(since),
           },
         });

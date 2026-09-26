@@ -16,6 +16,7 @@ function buildService(
     aiControl?: any;
     providerConfig?: any;
     sendDecisions?: any;
+    operationalEvents?: any;
   } = {},
 ) {
   const dataSource = {
@@ -61,6 +62,7 @@ function buildService(
     undefined,
     options.providerConfig,
     options.sendDecisions,
+    options.operationalEvents,
   );
 }
 
@@ -876,5 +878,69 @@ describe('outbound message worker safety', () => {
       errorCode: 'PROVIDER_RESULT_UNKNOWN',
     });
     expect(operations.createTask).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('terminal provider failure integration wiring (P1)', () => {
+  function failSetup() {
+    const messageRepo = { save: jest.fn(async (value) => value) };
+    const eventRepo = {
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => value),
+    };
+    const operations = { createTask: jest.fn().mockResolvedValue({}) };
+    const operationalEvents = { integrationFailed: jest.fn().mockResolvedValue({}) };
+    const service = buildService({
+      messageRepo: messageRepo as any,
+      eventRepo: eventRepo as any,
+      operations: operations as any,
+      operationalEvents: operationalEvents as any,
+    });
+    return { service, operationalEvents };
+  }
+
+  function emailMessage() {
+    return {
+      id: 'message-1',
+      channel: 'email',
+      lead: {
+        id: 'lead-1',
+        tenantId: 'tenant-1',
+        fullName: 'Jordan Buyer',
+        assignedToUserId: null,
+      },
+    } as any;
+  }
+
+  it('terminal SendGrid failure raises integrationFailed', async () => {
+    const { service, operationalEvents } = failSetup();
+    await (service as any).failPermanently(emailMessage(), 'PROVIDER_SEND_FAILED', 'SendGrid rejected the request');
+    expect(operationalEvents.integrationFailed).toHaveBeenCalledTimes(1);
+    expect(operationalEvents.integrationFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'SendGrid', tenantId: 'tenant-1' }),
+    );
+  });
+
+  it('data failures are not provider failures and stay silent', async () => {
+    const { service, operationalEvents } = failSetup();
+    await (service as any).failPermanently(emailMessage(), 'MISSING_LEAD', 'Message has no lead');
+    expect(operationalEvents.integrationFailed).not.toHaveBeenCalled();
+  });
+
+  it('sms failures do not raise the SendGrid integration incident', async () => {
+    const { service, operationalEvents } = failSetup();
+    const message = { ...emailMessage(), channel: 'sms' };
+    await (service as any).failPermanently(message, 'PROVIDER_SEND_FAILED', 'Twilio rejected the request');
+    expect(operationalEvents.integrationFailed).not.toHaveBeenCalled();
+  });
+
+  it('failure bookkeeping completes even when the notification facade throws', async () => {
+    const { service, operationalEvents } = failSetup();
+    operationalEvents.integrationFailed.mockRejectedValue(new Error('notify down'));
+    const message = emailMessage();
+    await expect(
+      (service as any).failPermanently(message, 'PROVIDER_SEND_FAILED', 'SendGrid rejected the request'),
+    ).resolves.toBeUndefined();
+    expect(message.status).toBe('failed');
   });
 });

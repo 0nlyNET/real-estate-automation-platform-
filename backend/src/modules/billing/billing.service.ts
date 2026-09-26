@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   Logger,
+  OnModuleInit,
   Optional,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
@@ -29,6 +30,7 @@ import { ServiceControlService } from '../service-control/service-control.servic
 import { TenantProvisioningService } from '../integrations/tenant-provisioning.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { OffboardingService } from '../offboarding/offboarding.service';
+import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 
 const OPEN_SUBSCRIPTION_STATES = new Set([
   'active',
@@ -39,6 +41,16 @@ const OPEN_SUBSCRIPTION_STATES = new Set([
   'unpaid',
 ]);
 const CHECKOUT_PENDING_MS = 30 * 60 * 1000;
+// P6: Stripe trial expiry warnings. syncSubscription stores trialEndsAt but
+// nothing scanned it and there is no customer.subscription.trial_will_end
+// handler — this daily durable job fills the gap. Each milestone (7/3/1 days)
+// fires once per tenant per trial end date via the notification
+// deduplication key (createForRecipients skips already-notified keys).
+const TRIAL_EXPIRY_SCAN_TASK_TYPE = 'billing.trial_expiry_scan';
+const TRIAL_EXPIRY_SCAN_DEDUPE_KEY = 'recurring:billing.trial_expiry_scan';
+const TRIAL_EXPIRY_SCAN_INTERVAL_MS = 24 * 60 * 60_000;
+const TRIAL_WARNING_MILESTONES = [1, 3, 7];
+const TRIAL_WARNING_HORIZON_DAYS = 7;
 
 function stripeDate(seconds?: number | null) {
   return seconds ? new Date(seconds * 1000) : null;
@@ -50,7 +62,7 @@ function sanitizedError(error: unknown) {
 }
 
 @Injectable()
-export class BillingService {
+export class BillingService implements OnModuleInit {
   private readonly logger = new Logger(BillingService.name);
   private readonly stripe: Stripe | null;
 
@@ -83,9 +95,34 @@ export class BillingService {
     private readonly onboarding?: OnboardingService,
     @Optional()
     private readonly offboarding?: OffboardingService,
+    // P6: recurring trial-expiry scan (Wave-1 injection pattern: optional).
+    @Optional()
+    private readonly durableJobs?: DurableJobsService,
   ) {
     const key = process.env.STRIPE_SECRET_KEY?.trim();
     this.stripe = key ? new Stripe(key) : null;
+  }
+
+  onModuleInit() {
+    if (!this.durableJobs || process.env.NODE_ENV === 'test') return;
+    this.durableJobs.register(TRIAL_EXPIRY_SCAN_TASK_TYPE, async () => {
+      await this.runTrialExpiryScan();
+      return {
+        nextRunAt: new Date(Date.now() + TRIAL_EXPIRY_SCAN_INTERVAL_MS),
+      };
+    });
+    void this.durableJobs
+      .schedule({
+        taskType: TRIAL_EXPIRY_SCAN_TASK_TYPE,
+        dedupeKey: TRIAL_EXPIRY_SCAN_DEDUPE_KEY,
+      })
+      .catch((error: unknown) =>
+        this.logger.warn(
+          operationalEvent('trial_expiry_scan_schedule_failed', {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+      );
   }
 
   private getStripe(): Stripe {
@@ -918,6 +955,107 @@ export class BillingService {
   async reconcileSubscription(subscription: Stripe.Subscription, tenantId: string) {
     await this.syncSubscription(subscription, tenantId, subscription.status === 'canceled');
     return this.tenants.findById(tenantId);
+  }
+
+  /**
+   * P6: daily Stripe trial-expiry scan. Warns the CLIENT OWNER (category
+   * 'billing' routes to workspace owners only, never agents) at 7, 3 and
+   * 1 day(s) before trialEndsAt. Skips canceled/past_due/unpaid tenants and
+   * trials already converted (Stripe no longer trialing, or payment
+   * confirmed). Trial expiry itself is still handled by Stripe webhook
+   * events; this only adds the advance warnings. Public so the durable-job
+   * handler and tests can drive it directly.
+   */
+  async runTrialExpiryScan(now = new Date()): Promise<{
+    scanned: number;
+    warned: number;
+  }> {
+    let scanned = 0;
+    let warned = 0;
+    if (!this.tenantRepo || !this.notifications) return { scanned, warned };
+    try {
+      const horizon = new Date(
+        now.getTime() + TRIAL_WARNING_HORIZON_DAYS * 86_400_000,
+      );
+      const candidates = await this.tenantRepo
+        .createQueryBuilder('tenant')
+        .where('tenant.trialEndsAt > :now', { now })
+        .andWhere('tenant.trialEndsAt <= :horizon', { horizon })
+        .andWhere('tenant.stripeSubscriptionId IS NOT NULL')
+        .getMany();
+      for (const tenant of candidates) {
+        scanned += 1;
+        try {
+          const stripeStatus = String(
+            tenant.stripeSubscriptionStatus || '',
+          ).toLowerCase();
+          // Only warn while the Stripe subscription is still trialing —
+          // converted (active), canceled, past_due or unpaid trials get no
+          // warning; their state changes are handled by webhook events.
+          if (stripeStatus !== 'trialing') continue;
+          if (
+            ['canceled', 'past_due', 'unpaid', 'incomplete_expired'].includes(
+              tenant.status,
+            )
+          ) {
+            continue;
+          }
+          if (tenant.paymentConfirmedAt) continue;
+          const trialEndsAt = tenant.trialEndsAt;
+          if (!trialEndsAt) continue;
+          const daysLeft = Math.ceil(
+            (trialEndsAt.getTime() - now.getTime()) / 86_400_000,
+          );
+          const milestone = TRIAL_WARNING_MILESTONES.find(
+            (days) => daysLeft <= days,
+          );
+          if (!milestone) continue;
+          const trialDay = trialEndsAt.toISOString().slice(0, 10);
+          const dayWord = daysLeft === 1 ? 'day' : 'days';
+          // Deduplication key embeds milestone + trial end date: each
+          // milestone fires once, and a re-extended trial warns again.
+          await this.notifications.createForTenant({
+            tenantId: tenant.id,
+            eventType: 'billing.trial_expiring',
+            category: 'billing',
+            severity: 'warning',
+            title: `Your trial ends in ${daysLeft} ${dayWord}`,
+            message:
+              `The trial for ${tenant.name || 'your workspace'} ends on ${trialDay}. ` +
+              `Add a payment method before then to keep your automations running without interruption.`,
+            deduplicationKey: `billing:trial-expiry:${milestone}d:${tenant.id}:${trialDay}`,
+            actionUrl: '/app/settings/billing',
+            templateId: 'billing.problem',
+            templateContext: {
+              summary: 'trial expiring',
+              tenantName: tenant.name,
+              explanation:
+                `Your trial ends in ${daysLeft} ${dayWord} (${trialDay}). ` +
+                `Add a payment method to keep your RealtyTechAI automations running.`,
+              ifIgnored:
+                'when the trial ends without payment, the subscription may be suspended for non-payment and automations will pause.',
+              actionPath: '/app/settings/billing',
+              actionLabel: 'View billing',
+            },
+          });
+          warned += 1;
+        } catch (error: unknown) {
+          this.logger.warn(
+            operationalEvent('trial_expiry_warning_failed', {
+              tenantId: tenant.id,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
+      }
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('trial_expiry_scan_failed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+    return { scanned, warned };
   }
 
   private async saveBillingEvent(
