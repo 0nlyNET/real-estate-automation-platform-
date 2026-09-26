@@ -30,6 +30,8 @@ type SendGridPlatformPayload = {
   configured: boolean;
   connected: boolean;
   apiKey: string;
+  fromEmail: string | null;
+  fromName: string | null;
   lastSync: string;
   error: string | null;
 };
@@ -226,6 +228,8 @@ export class PlatformIntegrationsService {
         error: sendgrid?.error || null,
         lastSync: sendgrid?.lastSync || null,
         apiKey: sendgrid?.apiKey ? `${sendgrid.apiKey.slice(0, 6)}...` : null,
+        fromEmail: sendgrid?.fromEmail || null,
+        fromName: sendgrid?.fromName || null,
       },
     };
   }
@@ -267,17 +271,55 @@ export class PlatformIntegrationsService {
     return this.platformSummary();
   }
 
-  async savePlatformSendGrid(dto: { apiKey: string }) {
+  async savePlatformSendGrid(dto: { apiKey?: string; fromEmail?: string; fromName?: string }) {
     // Fail loud (4xx) before any DB read/write or partial state change.
     assertEncryptionReady();
-    const apiKey = String(dto.apiKey || '').trim();
-    if (!apiKey.startsWith('SG.')) {
+
+    // Load existing payload to support partial updates without wiping fields.
+    const previous = (await this.platformPayload('sendgrid')) as SendGridPlatformPayload | null;
+
+    // Validate and normalize inputs. All fields are optional for partial updates.
+    let apiKey = previous?.apiKey || '';
+    if (dto.apiKey !== undefined) {
+      apiKey = String(dto.apiKey || '').trim();
+      if (!apiKey.startsWith('SG.')) {
+        throw new BadRequestException('A valid SendGrid API key is required');
+      }
+    }
+    if (!apiKey) {
       throw new BadRequestException('A valid SendGrid API key is required');
     }
+
+    let fromEmail = previous?.fromEmail || null;
+    if (dto.fromEmail !== undefined) {
+      const trimmed = String(dto.fromEmail || '').trim().toLowerCase();
+      if (trimmed) {
+        // Basic email format validation
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+          throw new BadRequestException('Invalid from email address format');
+        }
+        fromEmail = trimmed;
+      } else {
+        fromEmail = null;
+      }
+    }
+
+    let fromName = previous?.fromName || null;
+    if (dto.fromName !== undefined) {
+      const trimmed = String(dto.fromName || '').trim();
+      fromName = trimmed || null;
+    }
+    // Default platform sender name to RealtyTechAI if fromEmail is set but no name given
+    if (fromEmail && !fromName) {
+      fromName = 'RealtyTechAI';
+    }
+
     const payload: SendGridPlatformPayload = {
       configured: true,
       connected: false,
       apiKey,
+      fromEmail,
+      fromName,
       lastSync: nowIso(),
       error: null,
     };

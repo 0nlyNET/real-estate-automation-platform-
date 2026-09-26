@@ -20,6 +20,8 @@ type ProviderStatus = {
   lastSync: string | null
   accountSid?: string | null
   apiKey?: string | null
+  fromEmail?: string | null
+  fromName?: string | null
   managedByPlatform?: boolean
   display?: {
     fromNumber?: string | null
@@ -81,6 +83,7 @@ export default function ManagedIntegrations() {
 
   const [sendgridApiKey, setSendgridApiKey] = useState("")
   const [platformSendgridFrom, setPlatformSendgridFrom] = useState("")
+  const [platformSendgridFromName, setPlatformSendgridFromName] = useState("")
   const [platformSendgridTo, setPlatformSendgridTo] = useState("")
 
   const [tenantTwilioTestTo, setTenantTwilioTestTo] = useState("")
@@ -128,6 +131,13 @@ export default function ManagedIntegrations() {
       ])
       setPlatform(platformResult)
       setTenants(tenantResult)
+      // Populate platform SendGrid sender fields from saved configuration
+      if (platformResult.sendgrid.fromEmail) {
+        setPlatformSendgridFrom(platformResult.sendgrid.fromEmail)
+      }
+      if (platformResult.sendgrid.fromName) {
+        setPlatformSendgridFromName(platformResult.sendgrid.fromName)
+      }
       const nextTenantId = tenantId || tenantResult[0]?.id || ""
       setTenantId(nextTenantId)
       if (nextTenantId) await loadTenant(nextTenantId)
@@ -198,7 +208,11 @@ export default function ManagedIntegrations() {
       async () => {
         await apiFetch("/admin/platform-integrations/sendgrid", {
           method: "PUT",
-          body: { apiKey: sendgridApiKey },
+          body: {
+            apiKey: sendgridApiKey || undefined,
+            fromEmail: platformSendgridFrom || undefined,
+            fromName: platformSendgridFromName || undefined,
+          },
         })
         setSendgridApiKey("")
         setPlatform(await apiFetch<PlatformSummary>("/admin/platform-integrations"))
@@ -377,13 +391,14 @@ export default function ManagedIntegrations() {
             <div className="space-y-2"><Label>SendGrid API key</Label><Input type="password" value={sendgridApiKey} onChange={(event) => setSendgridApiKey(event.target.value)} placeholder="SG.…" autoComplete="new-password" /></div>
             <Button
               onClick={savePlatformSendGrid}
-              disabled={encryptionBlocked || Boolean(busy) || !sendgridApiKey}
+              disabled={encryptionBlocked || Boolean(busy) || (!sendgridApiKey && platformSendgridFrom === (platform?.sendgrid.fromEmail || "") && platformSendgridFromName === (platform?.sendgrid.fromName || ""))}
               title={encryptionBlocked ? encryptionBlockReason : undefined}
             >
               Save platform SendGrid
             </Button>
             <div className="grid gap-3 border-t pt-4 sm:grid-cols-2">
-              <div className="space-y-2"><Label>Verified from email</Label><Input type="email" value={platformSendgridFrom} onChange={(event) => setPlatformSendgridFrom(event.target.value)} /></div>
+              <div className="space-y-2"><Label>Verified from email</Label><Input type="email" value={platformSendgridFrom} onChange={(event) => setPlatformSendgridFrom(event.target.value)} placeholder="noreply@realtytechai.app" /></div>
+              <div className="space-y-2"><Label>Sender name</Label><Input type="text" value={platformSendgridFromName} onChange={(event) => setPlatformSendgridFromName(event.target.value)} placeholder="RealtyTechAI" /></div>
               <div className="space-y-2"><Label>Recipient for test</Label><Input type="email" value={platformSendgridTo} onChange={(event) => setPlatformSendgridTo(event.target.value)} /></div>
             </div>
             <Button variant="outline" onClick={testPlatformSendGrid} disabled={Boolean(busy) || !platform?.sendgrid.configured}>Test platform SendGrid</Button>
