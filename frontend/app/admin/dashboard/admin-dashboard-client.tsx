@@ -1131,14 +1131,20 @@ export function AdminDashboardClient({
     }
   }
 
-  async function changeService(action: "activate" | "pause") {
+  async function changeService(action: "activate" | "pause" | "resume") {
     if (!selectedTenant) return
     try {
       await apiFetch(`/admin/tenants/${selectedTenant.id}/${action}`, { method: "POST" })
       await Promise.all([refreshReadiness(), loadDataSection("clients", true)])
-      setNotice(action === "activate" ? "Client service activated." : "Client automations paused.")
+      setNotice(
+        action === "activate"
+          ? "Client service activated."
+          : action === "resume"
+            ? "Client automations resumed; the workspace was restored to its pre-pause state."
+            : "Client automations paused.",
+      )
     } catch (cause) {
-      setError(messageFor(cause, `Client service could not be ${action === "activate" ? "activated" : "paused"}`))
+      setError(messageFor(cause, `Client service could not be ${action === "activate" ? "activated" : action === "resume" ? "resumed" : "paused"}`))
       await refreshReadiness().catch(() => undefined)
     }
   }
@@ -2284,11 +2290,20 @@ export function AdminDashboardClient({
                       </Button>
                       <Button
                         variant="outline"
-                        disabled={selectedTenant.serviceState?.state === "suspended"}
+                        disabled={selectedTenant.serviceState?.state === "suspended" || selectedTenant.lifecycleStatus === "PAUSED"}
                         onClick={() => void changeService("pause")}
                       >
                         Pause automations
                       </Button>
+                      {selectedTenant.lifecycleStatus === "PAUSED" ? (
+                        <Button
+                          variant="outline"
+                          disabled={selectedTenant.serviceState?.state === "suspended"}
+                          onClick={() => void changeService("resume")}
+                        >
+                          Resume automations
+                        </Button>
+                      ) : null}
                     </div>
                   ) : null}
                 </Section>

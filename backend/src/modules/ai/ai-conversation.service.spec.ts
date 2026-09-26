@@ -567,3 +567,59 @@ describe('AI conversation workflow', () => {
     );
   });
 });
+
+describe('ai worker tick serialization', () => {
+  it('never overlaps a slow tick with the next one', async () => {
+    const service = new AiConversationService(
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+    );
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    (service as any).processPendingRuns = jest.fn(async () => {
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await gate;
+      concurrent -= 1;
+    });
+
+    const first = (service as any).tickWorker();
+    // Let the first tick start its (slow) work.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    // A second tick while the first is running must be skipped, not queued.
+    await (service as any).tickWorker();
+    expect((service as any).processPendingRuns).toHaveBeenCalledTimes(1);
+
+    release();
+    await first;
+    expect(maxConcurrent).toBe(1);
+
+    // Once the worker is idle, ticks run again.
+    (service as any).processPendingRuns = jest.fn().mockResolvedValue(undefined);
+    await (service as any).tickWorker();
+    expect((service as any).processPendingRuns).toHaveBeenCalledTimes(1);
+  });
+});

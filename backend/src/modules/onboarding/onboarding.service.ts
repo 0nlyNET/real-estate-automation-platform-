@@ -8,7 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { OnboardingRecord } from './onboarding-record.entity';
-import { Tenant } from '../tenants/tenant.entity';
+import { Tenant, WorkspaceLifecycleStatus } from '../tenants/tenant.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Credential } from '../settings/credential.entity';
 import { SequenceStep } from '../sequences/sequence-step.entity';
@@ -1189,41 +1189,69 @@ export class OnboardingService {
           'Open Connections and add or activate an appointment.created CRM webhook, then run its connection test.',
       },
     );
+    // The approved SMS sender identity is provisioned by RealtyTechAI during
+    // Twilio setup — the tenant form has no field for it — so a brand gate
+    // stuck only on that piece must say whose turn it is instead of asking
+    // the client to provide something they cannot.
+    const brandClientReady =
+      hasText(record.brandCommunication, 'brandName') &&
+      hasText(record.brandCommunication, 'brandVoice') &&
+      hasText(record.brandCommunication, 'requiredSignature') &&
+      record.brandCommunication.fairHousingReviewAcknowledged === true &&
+      (!record.emailEnabled ||
+        hasText(record.brandCommunication, 'approvedEmailIdentity'));
+    const brandSenderReady =
+      !record.smsEnabled ||
+      hasText(record.brandCommunication, 'approvedPhoneIdentity');
+    const awaitingSenderProvisioning = brandClientReady && !brandSenderReady;
     add(
       'brand',
       'Brand identity and voice are recorded',
-      hasText(record.brandCommunication, 'brandName') &&
-        hasText(record.brandCommunication, 'brandVoice') &&
-        hasText(record.brandCommunication, 'requiredSignature') &&
-        record.brandCommunication.fairHousingReviewAcknowledged === true &&
-        (!record.smsEnabled || hasText(record.brandCommunication, 'approvedPhoneIdentity')) &&
-        (!record.emailEnabled || hasText(record.brandCommunication, 'approvedEmailIdentity')),
+      brandClientReady && brandSenderReady,
       true,
       {
-        nextAction:
-          'Provide the brand name, voice, signature, fair-housing acknowledgement, and each enabled channel’s approved sender identity.',
+        responsibleParty: awaitingSenderProvisioning ? 'jayden' : 'client',
+        statusMessage: awaitingSenderProvisioning
+          ? 'Brand details are complete; the approved SMS sender identity is still being provisioned by RealtyTechAI.'
+          : undefined,
+        nextAction: awaitingSenderProvisioning
+          ? 'RealtyTechAI must finish provisioning the approved SMS sender identity for this workspace.'
+          : 'Provide the brand name, voice, signature, fair-housing acknowledgement, and each enabled channel’s approved sender identity.',
       },
     );
+    // Consent evidence is two-party by design: the client provides the
+    // disclosure evidence, then a RealtyTechAI operator must review it and
+    // record the acknowledgment. The gate must NOT weaken this, but it must
+    // say whose turn it is — otherwise the tenant sees "incomplete" for work
+    // only an operator can finish.
+    const consentEvidenceComplete =
+      hasText(record.consentConfiguration, 'exactConsentLanguage') &&
+      hasText(record.consentConfiguration, 'consentCollectionMethod') &&
+      hasText(record.consentConfiguration, 'sourceOwnership') &&
+      hasText(record.consentConfiguration, 'optOutProcess') &&
+      hasText(record.consentConfiguration, 'consentPolicyVersion') &&
+      record.consentConfiguration.purchasedOrColdListsExcluded === true &&
+      record.consentConfiguration.clientResponsibilityAcknowledged === true &&
+      record.consentConfiguration.lawfulLeadCollectionCertified === true &&
+      hasText(record.consentConfiguration, 'termsAcceptedVersion') &&
+      hasText(record.consentConfiguration, 'privacyAcceptedVersion') &&
+      hasText(record.consentConfiguration, 'acceptableUseAcceptedVersion') &&
+      hasText(record.consentConfiguration, 'dataRetentionAcceptedVersion');
+    const consentAcknowledged = Boolean(record.consentPolicyAcknowledgedAt);
+    const awaitingOperatorReview = consentEvidenceComplete && !consentAcknowledged;
     add(
       'consent_policy',
       'Consent policy and disclosure evidence are acknowledged',
-      Boolean(record.consentPolicyAcknowledgedAt) &&
-        hasText(record.consentConfiguration, 'exactConsentLanguage') &&
-        hasText(record.consentConfiguration, 'consentCollectionMethod') &&
-        hasText(record.consentConfiguration, 'sourceOwnership') &&
-        hasText(record.consentConfiguration, 'optOutProcess') &&
-        hasText(record.consentConfiguration, 'consentPolicyVersion') &&
-        record.consentConfiguration.purchasedOrColdListsExcluded === true &&
-        record.consentConfiguration.clientResponsibilityAcknowledged === true &&
-        record.consentConfiguration.lawfulLeadCollectionCertified === true &&
-        hasText(record.consentConfiguration, 'termsAcceptedVersion') &&
-        hasText(record.consentConfiguration, 'privacyAcceptedVersion') &&
-        hasText(record.consentConfiguration, 'acceptableUseAcceptedVersion') &&
-        hasText(record.consentConfiguration, 'dataRetentionAcceptedVersion'),
+      consentAcknowledged && consentEvidenceComplete,
       true,
       {
-        nextAction:
-          'Provide and acknowledge the exact consent language, collection method, source ownership, opt-out process, and evidence responsibilities.',
+        responsibleParty: awaitingOperatorReview ? 'jayden' : 'client',
+        statusMessage: awaitingOperatorReview
+          ? 'Consent evidence is complete and awaiting RealtyTechAI operator review.'
+          : undefined,
+        nextAction: awaitingOperatorReview
+          ? 'An operator must review the consent evidence and record the consent acknowledgment before launch.'
+          : 'Provide and acknowledge the exact consent language, collection method, source ownership, opt-out process, and evidence responsibilities.',
       },
     );
     add(
@@ -1880,6 +1908,16 @@ export class OnboardingService {
   async pause(tenantId: string) {
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException('Workspace not found');
+    // Record the pre-pause state so an operator resume can restore it
+    // exactly. Only a restorable state is recorded — never PAUSED,
+    // SUSPENDED, or CANCELED — so resume can never inherit a blocked state.
+    if (
+      tenant.lifecycleStatus !== 'PAUSED' &&
+      tenant.lifecycleStatus !== 'SUSPENDED' &&
+      tenant.lifecycleStatus !== 'CANCELED'
+    ) {
+      tenant.servicePreviousLifecycleStatus = tenant.lifecycleStatus;
+    }
     tenant.lifecycleStatus = 'PAUSED';
     tenant.servicePausedAt = new Date();
     let settings = await this.settings.findOne({ where: { tenantId } });
@@ -1909,5 +1947,188 @@ export class OnboardingService {
       );
     }
     return { ok: true, lifecycleStatus: tenant.lifecycleStatus };
+  }
+
+  /**
+   * Resumes a workspace paused by an operator. Restores the pre-pause
+   * lifecycle state, re-arms stale work with a jittered stagger so nothing
+   * fires in a burst, and emits exactly one audit event, one operational
+   * notification, and one recovery event.
+   *
+   * Fail-closed guarantees:
+   * - Only PAUSED workspaces can resume (SUSPENDED stays with
+   *   ServiceControlService.restore(), which owns the billing safety flow).
+   * - Resuming into ACTIVE requires Stripe-confirmed payment and an active
+   *   subscription; anything else (lapsed billing, never paid) is rejected.
+   * - When the pre-pause state is unknown or unrestorable it falls back to
+   *   ONBOARDING — never ACTIVE.
+   */
+  async resume(
+    tenantId: string,
+    actor: { id: string | null; email?: string | null },
+  ) {
+    const result = await this.tenants.manager.transaction(async (manager) => {
+      // Serialize concurrent pause/resume calls for this tenant.
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `service-control:${tenantId}`,
+      ]);
+      const tenantRepo = manager.getRepository(Tenant);
+      const settingsRepo = manager.getRepository(TenantSettings);
+      const recordRepo = manager.getRepository(OnboardingRecord);
+      const tenant = await tenantRepo.findOne({ where: { id: tenantId } });
+      if (!tenant) throw new NotFoundException('Workspace not found');
+      if (tenant.lifecycleStatus !== 'PAUSED') {
+        return { changed: false as const, tenant };
+      }
+      const restorable: WorkspaceLifecycleStatus[] = [
+        'DRAFT',
+        'ONBOARDING',
+        'TESTING',
+        'READY_FOR_UAT',
+        'UAT_FAILED',
+        'READY_FOR_ACTIVATION',
+        'ACTIVE',
+      ];
+      const previous = tenant.servicePreviousLifecycleStatus;
+      const target: WorkspaceLifecycleStatus =
+        previous && restorable.includes(previous) ? previous : 'ONBOARDING';
+      // A workspace may only re-enter ACTIVE with Stripe-confirmed payment.
+      if (target === 'ACTIVE') {
+        const eligible = billingEligibility(tenant);
+        if (tenant.status !== 'active' || !eligible.allowed) {
+          throw new BadRequestException(
+            'Payment must be confirmed before an active workspace can be resumed.',
+          );
+        }
+      }
+      const now = new Date();
+      const restoreToActive = target === 'ACTIVE';
+      const prePauseStatus = tenant.servicePreviousLifecycleStatus;
+      tenant.lifecycleStatus = target;
+      tenant.servicePausedAt = restoreToActive ? null : tenant.servicePausedAt;
+      tenant.serviceRestoredAt = now;
+      tenant.serviceRestoredById = actor.id;
+      tenant.servicePreviousLifecycleStatus = null;
+      await tenantRepo.save(tenant);
+      let settings = await settingsRepo.findOne({ where: { tenantId } });
+      if (!settings) settings = settingsRepo.create({ tenantId });
+      settings.automationsEnabled = restoreToActive;
+      await settingsRepo.save(settings);
+      const record = await recordRepo.findOne({ where: { tenantId } });
+      if (record) {
+        record.activationStatus = restoreToActive ? 'active' : 'incomplete';
+        record.blockedReason = null;
+        await recordRepo.save(record);
+      }
+      // Stagger stale work: overdue sequence enrollments and durable jobs get
+      // a jittered 5-15 minute push so resume never becomes an outbound burst.
+      const staggered = await manager.query(
+        `WITH moved_enrollments AS (
+           UPDATE sequence_enrollments
+              SET next_run_at = now() + interval '5 minutes' + (random() * interval '10 minutes'),
+                  locked_at = NULL,
+                  locked_by = NULL
+            WHERE tenant_id = $1 AND status = 'active' AND next_run_at < now()
+            RETURNING id
+         ),
+         moved_jobs AS (
+           UPDATE durable_jobs
+              SET next_run_at = now() + interval '5 minutes' + (random() * interval '10 minutes')
+            WHERE tenant_id = $1 AND status = 'scheduled' AND next_run_at < now()
+            RETURNING id
+         )
+         SELECT (SELECT count(*) FROM moved_enrollments) AS enrollments,
+                (SELECT count(*) FROM moved_jobs) AS jobs`,
+        [tenantId],
+      );
+      const staggerCounts = {
+        enrollments: Number(staggered?.[0]?.enrollments ?? 0),
+        jobs: Number(staggered?.[0]?.jobs ?? 0),
+      };
+      return {
+        changed: true as const,
+        tenant,
+        target,
+        prePauseStatus,
+        staggered: staggerCounts,
+      };
+    });
+
+    if (!result.changed) {
+      return {
+        ok: true,
+        changed: false,
+        lifecycleStatus: result.tenant.lifecycleStatus,
+      };
+    }
+    const tenant = result.tenant;
+    // One audit event. Never breaks the resume itself.
+    try {
+      await this.audit?.record({
+        tenantId,
+        actorType: 'platform_operator',
+        actorId: actor.id || 'operator',
+        actorEmail: actor.email || null,
+        action: 'workspace.resumed',
+        resourceType: 'tenant',
+        resourceId: tenantId,
+        method: 'POST',
+        path: `/admin/tenants/${tenantId}/resume`,
+        statusCode: 200,
+        metadata: {
+          restoredLifecycleStatus: result.target,
+          prePauseLifecycleStatus: result.prePauseStatus,
+          staggered: result.staggered,
+        },
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('resume_audit_failed', {
+          tenantId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+    // Exactly one recovery event (shares the incident key with the pause
+    // event, so the incident lifecycle closes on a single recovery).
+    try {
+      await this.operationalEvents?.automationResumed({
+        tenantId,
+        tenantName: tenant.name || undefined,
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('resume_recovery_event_failed', {
+          tenantId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+    // Exactly one operational notification.
+    try {
+      await this.notifications?.createForPlatform({
+        eventType: 'workspace.resumed',
+        category: 'system',
+        severity: 'success',
+        title: `Automations resumed for ${tenant.name || 'workspace'}`,
+        message: `Service resumed by operator; workspace restored to ${result.target}.`,
+        deduplicationKey: `workspace-resumed:${tenantId}:${new Date().toISOString().slice(0, 13)}`,
+        entityType: 'tenant',
+        entityId: tenantId,
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        operationalEvent('resume_notification_failed', {
+          tenantId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+    return {
+      ok: true,
+      changed: true,
+      lifecycleStatus: result.target,
+      staggered: result.staggered,
+    };
   }
 }

@@ -1,6 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
 import { OnboardingRecord } from './onboarding-record.entity';
 import { OnboardingService } from './onboarding.service';
+import { Tenant } from '../tenants/tenant.entity';
+import { TenantSettings } from '../settings/tenant-settings.entity';
 
 describe('operator-controlled workspace activation', () => {
   it('returns explicit blockers and cannot be completed by client-entered fields alone', async () => {
@@ -904,5 +906,304 @@ describe('onboarding operational event wiring (P1)', () => {
     await transition('tenant-1', { name: 'Lakeview Realty' }, { ready: false }, checklist);
     await transition('tenant-1', { name: 'Lakeview Realty' }, { ready: true }, checklist);
     expect(operationalEvents.readyForActivation).toHaveBeenCalledTimes(2);
+  });
+
+  it('consent gate names RealtyTechAI as the owner when client evidence is complete but the operator acknowledgment is missing', async () => {
+    const record = blockedRecord();
+    record.consentConfiguration = {
+      exactConsentLanguage: 'You agree to receive calls and texts.',
+      consentCollectionMethod: 'Checkbox on website lead form',
+      sourceOwnership: 'authorized',
+      optOutProcess: 'Reply STOP to opt out',
+      consentPolicyVersion: 'client-onboarding-v1',
+      purchasedOrColdListsExcluded: true,
+      clientResponsibilityAcknowledged: true,
+      lawfulLeadCollectionCertified: true,
+      termsAcceptedVersion: '2026-08-11',
+      privacyAcceptedVersion: '2026-08-11',
+      acceptableUseAcceptedVersion: '2026-08-11',
+      dataRetentionAcceptedVersion: '2026-08-11',
+    };
+    record.consentPolicyAcknowledgedAt = null;
+    const { service } = harnessWithEvents(record);
+
+    const readiness = await service.readiness('tenant-1');
+    const gate = readiness.required.find((item) => item.key === 'consent_policy');
+    expect(gate).toBeDefined();
+    // The two-party requirement is NOT weakened: the gate still fails.
+    expect(gate!.passed).toBe(false);
+    // ...but it now says whose turn it is.
+    expect(gate!.responsibleParty).toBe('jayden');
+    expect(gate!.statusMessage).toMatch(/awaiting RealtyTechAI operator review/);
+    expect(gate!.nextAction).toMatch(/operator must review/i);
+  });
+
+  it('consent gate passes once the operator records the acknowledgment', async () => {
+    const record = blockedRecord();
+    record.consentConfiguration = {
+      exactConsentLanguage: 'You agree to receive calls and texts.',
+      consentCollectionMethod: 'Checkbox on website lead form',
+      sourceOwnership: 'authorized',
+      optOutProcess: 'Reply STOP to opt out',
+      consentPolicyVersion: 'client-onboarding-v1',
+      purchasedOrColdListsExcluded: true,
+      clientResponsibilityAcknowledged: true,
+      lawfulLeadCollectionCertified: true,
+      termsAcceptedVersion: '2026-08-11',
+      privacyAcceptedVersion: '2026-08-11',
+      acceptableUseAcceptedVersion: '2026-08-11',
+      dataRetentionAcceptedVersion: '2026-08-11',
+    };
+    record.consentPolicyAcknowledgedAt = new Date();
+    const { service } = harnessWithEvents(record);
+
+    const readiness = await service.readiness('tenant-1');
+    const gate = readiness.required.find((item) => item.key === 'consent_policy');
+    expect(gate).toBeDefined();
+    expect(gate!.passed).toBe(true);
+  });
+
+  it('brand gate names RealtyTechAI as the owner when only the provisioned SMS sender identity is missing', async () => {
+    const record = blockedRecord();
+    record.smsEnabled = true;
+    record.brandCommunication = {
+      brandName: 'Harborlight Realty',
+      brandVoice: 'Warm and professional',
+      requiredSignature: '— Alex at Harborlight Realty',
+      fairHousingReviewAcknowledged: true,
+      // approvedPhoneIdentity is provisioned by RealtyTechAI during Twilio setup.
+    };
+    const { service } = harnessWithEvents(record);
+
+    const readiness = await service.readiness('tenant-1');
+    const gate = readiness.required.find((item) => item.key === 'brand');
+    expect(gate).toBeDefined();
+    expect(gate!.passed).toBe(false);
+    expect(gate!.responsibleParty).toBe('jayden');
+    expect(gate!.statusMessage).toMatch(/sender identity is still being provisioned/);
+  });
+});
+
+describe('operator pause/resume control', () => {
+  function buildResumeService(options: {
+    lifecycleStatus?: string;
+    previousLifecycleStatus?: string | null;
+    billingStatus?: string;
+    paymentConfirmed?: boolean;
+    withRecord?: boolean;
+  }) {
+    const tenantState: any = {
+      id: 'tenant-1',
+      name: 'Harborlight Realty',
+      status: options.billingStatus ?? 'active',
+      stripeSubscriptionId: 'sub_1',
+      paidSubscriptionId: 'sub_1',
+      paymentConfirmedAt: options.paymentConfirmed === false ? null : new Date(),
+      lifecycleStatus: options.lifecycleStatus ?? 'PAUSED',
+      servicePreviousLifecycleStatus:
+        options.previousLifecycleStatus === undefined
+          ? 'ACTIVE'
+          : options.previousLifecycleStatus,
+      servicePausedAt: new Date(),
+      serviceRestoredAt: null,
+      serviceRestoredById: null,
+    };
+    const settingsState: any = { tenantId: 'tenant-1', automationsEnabled: false };
+    const recordState: any = options.withRecord === false
+      ? null
+      : { tenantId: 'tenant-1', activationStatus: 'paused', blockedReason: 'x' };
+    const manager = {
+      query: jest.fn().mockResolvedValue([{ enrollments: '2', jobs: '1' }]),
+      getRepository: jest.fn((entity: any) => {
+        if (entity === Tenant) {
+          return {
+            findOne: jest.fn().mockResolvedValue(tenantState),
+            save: jest.fn(async (value: any) => Object.assign(tenantState, value)),
+          };
+        }
+        if (entity === TenantSettings) {
+          return {
+            findOne: jest.fn().mockResolvedValue(settingsState),
+            create: jest.fn((value: any) => ({ ...value })),
+            save: jest.fn(async (value: any) => Object.assign(settingsState, value)),
+          };
+        }
+        if (entity === OnboardingRecord) {
+          return {
+            findOne: jest.fn().mockResolvedValue(recordState),
+            save: jest.fn(async (value: any) => Object.assign(recordState ?? {}, value)),
+          };
+        }
+        throw new Error(`unexpected repository ${entity?.name}`);
+      }),
+    };
+    const tenants = {
+      findOne: jest.fn().mockResolvedValue(tenantState),
+      manager: { transaction: jest.fn(async (fn: any) => fn(manager)) },
+    };
+    const audit = { record: jest.fn().mockResolvedValue({}) };
+    const operationalEvents = { automationResumed: jest.fn().mockResolvedValue({}) };
+    const notifications = { createForPlatform: jest.fn().mockResolvedValue({}) };
+    const service = new OnboardingService(
+      {} as any,
+      tenants as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      notifications as any,
+      undefined,
+      undefined,
+      audit as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      operationalEvents as any,
+    );
+    return {
+      service,
+      manager,
+      audit,
+      operationalEvents,
+      notifications,
+      tenantState,
+      settingsState,
+      recordState,
+    };
+  }
+
+  it('resumes a paused workspace to its pre-pause state with one audit, one notification, one recovery event', async () => {
+    const { service, manager, audit, operationalEvents, notifications, tenantState, settingsState, recordState } =
+      buildResumeService({});
+
+    const result = await service.resume('tenant-1', { id: 'op-1', email: 'op@example.com' });
+
+    expect(result).toEqual(
+      expect.objectContaining({ ok: true, changed: true, lifecycleStatus: 'ACTIVE' }),
+    );
+    expect(tenantState.lifecycleStatus).toBe('ACTIVE');
+    expect(tenantState.servicePausedAt).toBeNull();
+    expect(tenantState.serviceRestoredAt).toBeInstanceOf(Date);
+    expect(tenantState.serviceRestoredById).toBe('op-1');
+    expect(tenantState.servicePreviousLifecycleStatus).toBeNull();
+    expect(settingsState.automationsEnabled).toBe(true);
+    expect(recordState.activationStatus).toBe('active');
+    expect(recordState.blockedReason).toBeNull();
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'workspace.resumed', tenantId: 'tenant-1' }),
+    );
+    expect(operationalEvents.automationResumed).toHaveBeenCalledTimes(1);
+    expect(notifications.createForPlatform).toHaveBeenCalledTimes(1);
+    // Advisory lock serializes pause/resume; stale work is staggered, not fired.
+    expect(manager.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      ['service-control:tenant-1'],
+    );
+    const staggerCall = manager.query.mock.calls.find((call: any[]) =>
+      String(call[0]).includes('sequence_enrollments'),
+    );
+    expect(staggerCall).toBeDefined();
+    expect(staggerCall[1]).toEqual(['tenant-1']);
+  });
+
+  it('refuses to resume into ACTIVE when Stripe has not confirmed payment', async () => {
+    const { service, audit, operationalEvents, notifications, tenantState } = buildResumeService({
+      billingStatus: 'past_due',
+      paymentConfirmed: false,
+    });
+
+    await expect(
+      service.resume('tenant-1', { id: 'op-1', email: 'op@example.com' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(tenantState.lifecycleStatus).toBe('PAUSED');
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(operationalEvents.automationResumed).not.toHaveBeenCalled();
+    expect(notifications.createForPlatform).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the workspace is not paused', async () => {
+    const { service, audit, operationalEvents, notifications } = buildResumeService({
+      lifecycleStatus: 'ONBOARDING',
+    });
+
+    const result = await service.resume('tenant-1', { id: 'op-1', email: 'op@example.com' });
+    expect(result).toEqual(
+      expect.objectContaining({ ok: true, changed: false, lifecycleStatus: 'ONBOARDING' }),
+    );
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(operationalEvents.automationResumed).not.toHaveBeenCalled();
+    expect(notifications.createForPlatform).not.toHaveBeenCalled();
+  });
+
+  it('never resumes a SUSPENDED workspace (suspension owns its own restore path)', async () => {
+    const { service, audit, tenantState } = buildResumeService({ lifecycleStatus: 'SUSPENDED' });
+
+    const result = await service.resume('tenant-1', { id: 'op-1', email: 'op@example.com' });
+    expect(result.changed).toBe(false);
+    expect(tenantState.lifecycleStatus).toBe('SUSPENDED');
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('falls back to ONBOARDING, never ACTIVE, when the pre-pause state is unknown', async () => {
+    const { service, tenantState, settingsState, recordState } = buildResumeService({
+      previousLifecycleStatus: null,
+      billingStatus: 'incomplete',
+      paymentConfirmed: false,
+    });
+
+    const result = await service.resume('tenant-1', { id: 'op-1', email: 'op@example.com' });
+    expect(result.lifecycleStatus).toBe('ONBOARDING');
+    expect(tenantState.lifecycleStatus).toBe('ONBOARDING');
+    expect(settingsState.automationsEnabled).toBe(false);
+    expect(recordState.activationStatus).toBe('incomplete');
+  });
+
+  it('pause records the pre-pause state so resume can restore it', async () => {
+    const tenantState: any = {
+      id: 'tenant-1',
+      name: 'Harborlight Realty',
+      lifecycleStatus: 'TESTING',
+      servicePausedAt: null,
+      servicePreviousLifecycleStatus: null,
+    };
+    const tenants = {
+      findOne: jest.fn().mockResolvedValue(tenantState),
+      manager: {
+        transaction: jest.fn(async (fn: any) =>
+          fn({
+            save: jest.fn(async (value: any) => Object.assign(tenantState, value)),
+          }),
+        ),
+      },
+    };
+    const settingsState: any = { tenantId: 'tenant-1', automationsEnabled: true };
+    const settings = {
+      findOne: jest.fn().mockResolvedValue(settingsState),
+      create: jest.fn((value: any) => ({ ...value })),
+    };
+    const recordState: any = { tenantId: 'tenant-1', activationStatus: 'incomplete' };
+    const records = {
+      findOne: jest.fn().mockResolvedValue(recordState),
+      create: jest.fn((value: any) => ({ ...value })),
+      save: jest.fn(async (value: any) => value),
+    };
+    const service = new OnboardingService(
+      records as any,
+      tenants as any,
+      settings as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await service.pause('tenant-1');
+    expect(tenantState.lifecycleStatus).toBe('PAUSED');
+    expect(tenantState.servicePreviousLifecycleStatus).toBe('TESTING');
+    expect(tenantState.servicePausedAt).toBeInstanceOf(Date);
+    expect(settingsState.automationsEnabled).toBe(false);
+    expect(recordState.activationStatus).toBe('paused');
   });
 });

@@ -188,6 +188,15 @@ export class AdminController {
     return this.onboarding.pause(tenantId);
   }
 
+  @Post('tenants/:tenantId/resume')
+  @UseGuards(PlatformAdminGuard)
+  resume(@Param('tenantId') tenantId: string, @Req() req: any) {
+    return this.onboarding.resume(tenantId, {
+      id: req.user?.sub || null,
+      email: req.user?.email || null,
+    });
+  }
+
   @Post('tenants/:tenantId/offboarding')
   @UseGuards(PlatformAdminGuard)
   requestOffboarding(
