@@ -54,7 +54,7 @@ describe('cookie sessions and notification HTTP/database regression', () => {
     const userService = new UsersService(repo, {} as any);
     jwt = new JwtService({ secret: process.env.JWT_SECRET, signOptions: JWT_SIGN_OPTIONS });
     const auth = new AuthService(userService, jwt, {} as any, {} as any, {} as any);
-    const notifications = new NotificationsService(ds.getRepository(AdminNotification), ds.getRepository(AdminPushSubscription), ds.getRepository(AdminNotificationPreference), repo);
+    const notifications = new NotificationsService(ds.getRepository(AdminNotification), ds.getRepository(AdminPushSubscription), ds.getRepository(AdminNotificationPreference), repo, { sendEmail: jest.fn().mockResolvedValue(undefined) } as any);
     for (const email of ['client-a@example.test', 'client-b@example.test', 'operator@example.test']) {
       const tenant = await ds.getRepository(Tenant).save({ name: email, status: 'incomplete', lifecycleStatus: 'ONBOARDING' });
       users.push(await repo.save({ email, tenantId: tenant.id, role: 'owner', passwordHash: await bcrypt.hash(password, 4), isActive: true, isEmailVerified: true, sessionVersion: 0 }));

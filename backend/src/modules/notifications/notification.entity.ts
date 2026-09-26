@@ -66,6 +66,9 @@ export class AdminNotification {
   @Column({ name: 'incident_key', type: 'varchar', length: 255, nullable: true })
   incidentKey?: string | null;
 
+  @Column({ name: 'template_id', type: 'varchar', length: 80, nullable: true })
+  templateId?: string | null;
+
   @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })
   metadata!: Record<string, string | number | boolean | null>;
 
@@ -80,6 +83,24 @@ export class AdminNotification {
 
   @Column({ name: 'push_attempt_count', type: 'int', default: 0 })
   pushAttemptCount!: number;
+
+  @Column({ name: 'email_delivery_status', type: 'varchar', length: 30, default: 'pending' })
+  emailDeliveryStatus!: 'pending' | 'sent' | 'skipped' | 'failed';
+
+  @Column({ name: 'email_sent_at', type: 'timestamptz', nullable: true })
+  emailSentAt?: Date | null;
+
+  @Column({ name: 'email_attempt_count', type: 'int', default: 0 })
+  emailAttemptCount!: number;
+
+  @Column({ name: 'provider_message_id', type: 'varchar', length: 120, nullable: true })
+  providerMessageId?: string | null;
+
+  @Column({ name: 'email_last_error', type: 'varchar', length: 500, nullable: true })
+  emailLastError?: string | null;
+
+  @Column({ name: 'email_retry_at', type: 'timestamptz', nullable: true })
+  emailRetryAt?: Date | null;
 
   @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt?: Date | null;

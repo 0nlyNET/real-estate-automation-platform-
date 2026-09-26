@@ -27,6 +27,7 @@ import { LeadStageEvent } from '../modules/leads/lead-stage-event.entity';
 import { AdminNotification } from '../modules/notifications/notification.entity';
 import { AdminNotificationPreference } from '../modules/notifications/notification-preference.entity';
 import { AdminPushSubscription } from '../modules/notifications/push-subscription.entity';
+import { NotificationIncident } from '../modules/notifications/notification-incident.entity';
 import { BillingEvent } from '../modules/billing/billing-event.entity';
 import { LeadHandoff } from '../modules/client-operations/lead-handoff.entity';
 import { Appointment } from '../modules/client-operations/appointment.entity';
@@ -97,6 +98,7 @@ export const databaseEntities = [
   AdminNotification,
   AdminNotificationPreference,
   AdminPushSubscription,
+  NotificationIncident,
   BillingEvent,
   LeadHandoff,
   Appointment,

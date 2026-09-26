@@ -50,6 +50,12 @@ export class AdminNotificationPreference {
   @Column({ name: 'quiet_hours_end', type: 'varchar', length: 5, default: '08:00' })
   quietHoursEnd!: string;
 
+  @Column({ name: 'daily_digest_enabled', type: 'boolean', default: true })
+  dailyDigestEnabled!: boolean;
+
+  @Column({ name: 'weekly_digest_enabled', type: 'boolean', default: false })
+  weeklyDigestEnabled!: boolean;
+
   @Column({ type: 'varchar', length: 100, default: 'America/New_York' })
   timezone!: string;
 
