@@ -26,4 +26,28 @@ describe('operational logging redaction', () => {
   it('bounds untrusted error text', () => {
     expect(sanitizeOperationalText('x'.repeat(2_000), 100)).toHaveLength(100);
   });
+
+  it('redacts bare webhook signing secrets and restricted keys', () => {
+    // A Stripe webhook signing secret echoed unlabeled in an error message
+    // must not survive into logs in cleartext.
+    const whsec = 'whsec_abcDEF123-_xyz';
+    const out = sanitizeOperationalText(
+      `Stripe signature verification failed for secret ${whsec} retry`,
+    );
+    expect(out).not.toContain(whsec);
+    expect(out).toContain('[redacted]');
+
+    // Restricted API keys get the same treatment as secret keys.
+    const rk = 'rk_live_abcDEF123';
+    expect(sanitizeOperationalText(`call failed with key ${rk}`)).not.toContain(
+      rk,
+    );
+
+    // The object-field path also redacts webhook secrets under any key name
+    // that ends in a sensitive word.
+    const event = operationalEvent('stripe_webhook_failed', {
+      webhookSecret: whsec,
+    });
+    expect(event).not.toContain(whsec);
+  });
 });

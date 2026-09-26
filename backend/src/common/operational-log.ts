@@ -5,7 +5,11 @@ export function sanitizeOperationalText(value: unknown, limit = 1_000) {
   return String(value ?? '')
     .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
     .replace(/\bBasic\s+[^\s,;]+/gi, 'Basic [redacted]')
-    .replace(/\bsk_(?:live|test)_[A-Za-z0-9_-]+/g, '[redacted]')
+    .replace(/\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9_-]+/g, '[redacted]')
+    // Stripe webhook signing secrets are bearer-equivalent credentials; they
+    // must never appear in cleartext in operational logs, even when echoed
+    // unlabeled inside a provider error message.
+    .replace(/\bwhsec_[A-Za-z0-9_-]+/g, '[redacted]')
     .replace(/\bSG\.[A-Za-z0-9._-]+/g, '[redacted]')
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]')
     .replace(
