@@ -2,6 +2,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
   Optional,
@@ -338,7 +339,15 @@ export class AiConversationService
         row.leadId,
         'AI processing was interrupted repeatedly. Review the latest inbound message and respond personally.',
         'high',
-      );
+      ).catch((error) => {
+        // Lead was deleted after the ai_run was queued (orphaned run from test
+        // cleanup). The audit task above is already created; skip the handoff
+        // instead of crashing the recovery loop every 3 seconds.
+        if (error instanceof NotFoundException) {
+          return;
+        }
+        throw error;
+      });
     }
     return rows.length;
   }
