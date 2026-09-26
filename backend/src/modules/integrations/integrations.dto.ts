@@ -55,8 +55,17 @@ export class TestPlatformTwilioDto extends TestTwilioDto {
 }
 
 export class PlatformSendGridDto {
+  @IsOptional()
   @IsString()
-  apiKey!: string;
+  apiKey?: string;
+
+  @IsOptional()
+  @IsString()
+  fromEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  fromName?: string;
 }
 
 export class TestPlatformSendGridDto extends TestSendGridDto {
