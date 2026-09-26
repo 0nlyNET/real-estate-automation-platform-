@@ -4,7 +4,7 @@ import * as crypto from 'crypto';
 import { Repository } from 'typeorm';
 import { normalizePhoneE164 } from '../../common/phone';
 import { Credential } from '../settings/credential.entity';
-import { decryptIntegrationPayload } from './integration-crypto';
+import { decryptIntegrationPayload } from './integrations.service';
 import { PlatformCredential } from './platform-credential.entity';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { sanitizeOperationalText } from '../../common/operational-log';
