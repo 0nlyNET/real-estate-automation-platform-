@@ -26,6 +26,12 @@ export class AuthController {
   @Get('session')
   @UseGuards(JwtAuthGuard)
   session(@Req() req: any) {
+    // Operator context must match the /me contract so OperatorModeBanner
+    // renders correctly regardless of which endpoint the frontend prefers.
+    // Only expose the already verified/signed context from req.user —
+    // never accept tenant context from client-supplied query/body values.
+    const isOperator = req.user.platformAdmin === true || req.user.platformOperator === true;
+    const hasExplicitTenant = Boolean(req.user.impersonatedBy || req.user.operatorMode?.tenantId);
     return {
       userId: req.user.sub,
       tenantId: req.user.tenantId,
@@ -35,6 +41,10 @@ export class AuthController {
       platformRole: req.user.platformRole || null,
       impersonated: Boolean(req.user.impersonatedBy),
       impersonatedBy: req.user.impersonatedBy || null,
+      operatorMode: req.user.operatorMode || null,
+      // Fail-closed signal for the /app/* UI: a platform operator without an
+      // explicitly selected tenant must not see tenant UI.
+      operatorTenantRequired: isOperator && !hasExplicitTenant,
       sessionExpiresAt: req.user.sessionExpiresAt || null,
     };
   }
