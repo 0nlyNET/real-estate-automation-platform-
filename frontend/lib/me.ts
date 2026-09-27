@@ -1,5 +1,13 @@
 import { ApiError, apiFetch } from "@/lib/api";
 
+export type OperatorMode = {
+  tenantId: string;
+  tenantName: string;
+  startedByUserId: string;
+  startedByEmail: string;
+  startedAt: string;
+};
+
 export type Me = {
   userId: string;
   tenantId: string;
@@ -9,6 +17,8 @@ export type Me = {
   platformRole: "super_admin" | "staff" | null;
   impersonated: boolean;
   impersonatedBy: { userId: string; email: string } | null;
+  operatorMode: OperatorMode | null;
+  operatorTenantRequired: boolean;
   sessionExpiresAt: string | null;
 };
 

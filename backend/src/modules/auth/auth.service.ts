@@ -74,6 +74,38 @@ export class AuthService {
     return this.jwtService.sign(payload, { expiresIn: '15m' });
   }
 
+  /**
+   * Explicit tenant-scoped operator session. Unlike impersonation (which signs
+   * in AS a specific tenant user), operator mode keeps the platform operator's
+   * own identity but pins the effective tenant to an explicitly selected one.
+   * The JWT is signed server-side; clients cannot forge or alter the context.
+   */
+  signForOperatorMode(
+    operator: User,
+    tenant: { id: string; name: string },
+  ) {
+    const startedAt = new Date().toISOString();
+    const payload = {
+      sub: operator.id,
+      email: operator.email,
+      role: operator.role,
+      // Effective tenant is the EXPLICITLY selected one — never the operator's
+      // own tenant record.
+      tenantId: tenant.id,
+      platformAdmin: isPlatformAdminEmail(operator.email),
+      platformRole: resolvePlatformRole(operator.email, operator.platformRole),
+      operatorMode: {
+        tenantId: tenant.id,
+        tenantName: tenant.name,
+        startedByUserId: operator.id,
+        startedByEmail: operator.email,
+        startedAt,
+      },
+      sessionVersion: operator.sessionVersion,
+    };
+    return this.jwtService.sign(payload, { expiresIn: '8h' });
+  }
+
   async login(email: string, password: string, rememberMe = false) {
     const startedAt = Date.now();
     const user = await this.usersService.findByEmail(email);

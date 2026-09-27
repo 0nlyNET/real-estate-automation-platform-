@@ -13,6 +13,8 @@ export class MeController {
   @UseGuards(JwtAuthGuard)
   @Get()
   async me(@Req() req: any) {
+    const isOperator = req.user?.platformAdmin === true || req.user?.platformOperator === true;
+    const hasExplicitTenant = Boolean(req.user?.impersonatedBy || req.user?.operatorMode?.tenantId);
     return {
       serviceAccess: await this.entitlements.workspaceAccess(req.user?.tenantId),
       userId: req.user?.sub || null,
@@ -23,6 +25,10 @@ export class MeController {
       platformRole: req.user?.platformRole || null,
       impersonated: Boolean(req.user?.impersonatedBy),
       impersonatedBy: req.user?.impersonatedBy || null,
+      operatorMode: req.user?.operatorMode || null,
+      // Fail-closed signal for the /app/* UI: a platform operator without an
+      // explicitly selected tenant must not see tenant UI.
+      operatorTenantRequired: isOperator && !hasExplicitTenant,
       sessionExpiresAt: req.user?.sessionExpiresAt || null,
     };
   }

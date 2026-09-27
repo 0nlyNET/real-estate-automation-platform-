@@ -7,8 +7,15 @@ import { apiFetch } from "@/lib/api"
 import { clientNavigation, isSetupPath } from "@/lib/client-navigation"
 import { AppShell } from "@/components/app-shell/app-shell"
 import { Button } from "@/components/ui/button"
+import type { OperatorMode } from "@/lib/me"
 
-type Access = { platformRole: string | null; serviceAccess: { allowed: boolean; billingEligible: boolean; reason: string | null } }
+type Access = {
+  platformRole: string | null
+  serviceAccess: { allowed: boolean; billingEligible: boolean; reason: string | null }
+  operatorMode: OperatorMode | null
+  operatorTenantRequired: boolean
+  impersonated: boolean
+}
 
 export function ClientAccessGuard({ children }: { children: ReactNode }) {
   const pathname = usePathname()
@@ -48,9 +55,38 @@ export function ClientAccessGuard({ children }: { children: ReactNode }) {
     }
   }, [verify])
 
+  // Fail closed: a platform operator without an explicitly selected tenant must
+  // never see tenant UI. They must pick a client workspace from Admin first.
+  // No implicit tenant fallback, no silent writes to the wrong workspace.
+  if (!checking && !error && access?.operatorTenantRequired) {
+    return (
+      <AppShell>
+        <div className="space-y-4">
+          <h1 className="text-2xl font-semibold">Select a client workspace</h1>
+          <div className="space-y-3 rounded-lg border p-5">
+            <p className="text-sm text-muted-foreground">
+              You are signed in as a platform operator. Tenant pages require an explicitly
+              selected client workspace — RealtyTechAI will not guess which client you mean.
+            </p>
+            <div className="flex gap-2">
+              <Button asChild><Link href="/admin/dashboard">Open Admin — choose a client</Link></Button>
+              <Button variant="outline" onClick={() => void verify()}>Check again</Button>
+            </div>
+          </div>
+        </div>
+      </AppShell>
+    )
+  }
+
+  // Operators in explicit operator mode (or impersonating) see the tenant UI
+  // for the selected tenant, with a persistent banner identifying the context.
+  const explicitTenantContext = Boolean(access?.operatorMode?.tenantId || access?.impersonated)
+
   // Setup and payment recovery stay reachable. A slow access check never
   // redirects or mounts operational page effects before authorization.
-  if (isSetupPath(pathname) || (!checking && !error && (access?.platformRole || access?.serviceAccess.allowed))) return children
+  // Note: platformRole alone no longer grants tenant UI — operators need
+  // explicitTenantContext (operator mode or impersonation).
+  if (isSetupPath(pathname) || (!checking && !error && (explicitTenantContext || (!access?.platformRole && access?.serviceAccess.allowed)))) return children
   const title = clientNavigation.find((item) => item.href === pathname)?.label || "Workspace"
   return (
     <AppShell>

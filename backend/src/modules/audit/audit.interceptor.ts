@@ -34,8 +34,9 @@ export class AuditInterceptor implements NestInterceptor {
     const tenantId = request?.user?.tenantId;
     const subjectUserId = request?.user?.sub;
     const acting = request?.user?.impersonatedBy;
-    const actorId = acting?.userId || subjectUserId;
-    const actorEmail = acting?.email || request?.user?.email;
+    const operatorMode = request?.user?.operatorMode;
+    const actorId = acting?.userId || operatorMode?.startedByUserId || subjectUserId;
+    const actorEmail = acting?.email || operatorMode?.startedByEmail || request?.user?.email;
 
     if (!MUTATION_METHODS.has(method) || !tenantId || !actorId) {
       return next.handle();
@@ -71,7 +72,7 @@ export class AuditInterceptor implements NestInterceptor {
           this.audit.record({
             tenantId,
             actorId,
-            actorType: acting ? 'platform_operator' : 'user',
+            actorType: acting || operatorMode ? 'platform_operator' : 'user',
             actorEmail,
             action: `${method} ${path}`,
             eventType: `${method} ${path}`,
@@ -88,6 +89,20 @@ export class AuditInterceptor implements NestInterceptor {
               subjectUserId,
               subjectRole: request?.user?.role || null,
               impersonated: Boolean(acting),
+              // Explicit operator-assisted tenant context: every operator-mode
+              // write is audited with the platform operator, target tenant,
+              // and source context.
+              ...(operatorMode
+                ? {
+                    operatorMode: true,
+                    operatorTenantId: operatorMode.tenantId || null,
+                    operatorTenantName: operatorMode.tenantName || null,
+                    operatorStartedByUserId: operatorMode.startedByUserId || null,
+                    operatorStartedByEmail: operatorMode.startedByEmail || null,
+                    operatorStartedAt: operatorMode.startedAt || null,
+                    source: 'operator-mode',
+                  }
+                : {}),
             },
           }),
         ).pipe(

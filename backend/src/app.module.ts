@@ -5,6 +5,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 
 import { AppController } from "./app.controller";
 import { WorkspaceAccessInterceptor } from './modules/entitlements/workspace-access.interceptor';
+import { OperatorTenantInterceptor } from "./common/guards/operator-tenant.interceptor";
 
 import { TenantsModule } from "./modules/tenants/tenants.module";
 import { UsersModule } from "./modules/users/users.module";
@@ -121,6 +122,10 @@ import {
   controllers: [AppController],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Fail-closed tenant scoping for platform operators: runs before the
+    // workspace interceptor so an operator without explicit tenant context is
+    // rejected before any tenant logic executes.
+    { provide: APP_INTERCEPTOR, useClass: OperatorTenantInterceptor },
     { provide: APP_INTERCEPTOR, useClass: WorkspaceAccessInterceptor },
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
   ],
