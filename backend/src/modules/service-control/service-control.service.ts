@@ -10,6 +10,7 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { operationalEvent } from '../../common/operational-log';
+import { updateReturningRows } from '../../common/db/raw-query-rows';
 import { AuditService } from '../audit/audit.service';
 import { billingEligibility } from '../entitlements/entitlement.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -201,8 +202,11 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
       settings.automationsEnabled = false;
       await settingsRepo.save(settings);
 
-      const stopped: Array<{ id: string }> = await manager.query(
-        `UPDATE sequence_enrollments
+      // UPDATE raw queries return [rows, rowCount] on the pg driver;
+      // normalize before reading .length (see common/db/raw-query-rows).
+      const stopped = updateReturningRows<{ id: string }>(
+        await manager.query(
+          `UPDATE sequence_enrollments
          SET status = 'stopped',
              stopped_reason = 'service_suspended',
              locked_at = NULL,
@@ -210,7 +214,8 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
          WHERE tenant_id = $1
            AND status IN ('active', 'paused')
          RETURNING id`,
-        [input.tenantId],
+          [input.tenantId],
+        ),
       );
 
       await manager.query(

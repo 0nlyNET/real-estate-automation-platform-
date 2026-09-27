@@ -155,23 +155,47 @@ export class OperationsService {
     if (input.assignedOperatorId) {
       await this.platformOperators?.requireAssignable(input.assignedOperatorId);
     }
-    const task = await this.repo.save(
-      this.repo.create({
-        tenantId: input.tenantId ?? null,
-        applicationId: input.applicationId ?? null,
-        category: input.category,
-        title: input.title,
-        description: input.description,
-        priority: input.priority || 'normal',
-        status: 'open',
-        assignedOperatorId: input.assignedOperatorId ?? null,
-        dueAt: input.dueAt ?? null,
-        relatedEntityType: input.relatedEntityType ?? null,
-        relatedEntityId: input.relatedEntityId ?? null,
-        evidenceNote: input.evidenceNote ?? null,
-      }),
-    );
-    return { task, created: true };
+    try {
+      const task = await this.repo.save(
+        this.repo.create({
+          tenantId: input.tenantId ?? null,
+          applicationId: input.applicationId ?? null,
+          category: input.category,
+          title: input.title,
+          description: input.description,
+          priority: input.priority || 'normal',
+          status: 'open',
+          assignedOperatorId: input.assignedOperatorId ?? null,
+          dueAt: input.dueAt ?? null,
+          relatedEntityType: input.relatedEntityType ?? null,
+          relatedEntityId: input.relatedEntityId ?? null,
+          evidenceNote: input.evidenceNote ?? null,
+        }),
+      );
+      return { task, created: true };
+    } catch (error) {
+      // Defensive: if a partial unique dedupe index is added in a future
+      // migration (deferred until after the 2026-09-27 incident evidence is
+      // preserved), a lost cross-process race surfaces as 23505. Return the
+      // existing task instead of duplicating or erroring.
+      if (
+        String((error as any)?.code || '') === '23505' &&
+        input.relatedEntityType &&
+        input.relatedEntityId
+      ) {
+        const existing = await this.repo.findOne({
+          where: {
+            category: input.category,
+            relatedEntityType: input.relatedEntityType,
+            relatedEntityId: input.relatedEntityId,
+            status: In(['open', 'in_progress', 'blocked']),
+          },
+          order: { createdAt: 'DESC' },
+        });
+        if (existing) return { task: existing, created: false };
+      }
+      throw error;
+    }
   }
 
   async list(filters: {

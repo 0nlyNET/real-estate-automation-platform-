@@ -11,6 +11,7 @@ import * as crypto from 'crypto';
 import { validateRequest as validateTwilioRequest } from 'twilio/lib/webhooks/webhooks';
 
 import { normalizePhoneDigits, normalizePhoneE164 } from '../../common/phone';
+import { updateReturningRows } from '../../common/db/raw-query-rows';
 import { isOptOutMessage, normalizeOptOutBody } from '../../common/opt-out';
 import { Credential } from '../settings/credential.entity';
 import { Lead } from '../leads/lead.entity';
@@ -1091,8 +1092,11 @@ export class WebhooksService {
           revocationSource: 'twilio_inbound_sms',
         },
       );
-      const canceled: Array<{ id: string }> = await manager.query(
-        `UPDATE messages
+      // UPDATE raw queries return [rows, rowCount] on the pg driver;
+      // normalize before reading .length (see common/db/raw-query-rows).
+      const canceled = updateReturningRows<{ id: string }>(
+        await manager.query(
+          `UPDATE messages
          SET status = 'canceled',
              canceled_at = $3,
              cancellation_reason = 'Cancelled by inbound SMS opt-out',
@@ -1112,7 +1116,8 @@ export class WebhooksService {
                AND leads.tenant_id = $2
            )
          RETURNING id`,
-        [lead.id, input.tenantId, receivedAt],
+          [lead.id, input.tenantId, receivedAt],
+        ),
       );
       canceledJobs = canceled.length;
       await manager.query(

@@ -11,6 +11,26 @@ import { Sequence } from '../sequences/sequence.entity';
 import { LeadConsentDto, ConsentEvidenceDto } from '../compliance/consent.dto';
 import { IntakeLeadDto } from '../leads/dto/intake-lead.dto';
 
+const CONTROLLED_LEAD_TYPES = ['buyer', 'seller', 'renter', 'investor'] as const;
+type ControlledLeadType = (typeof CONTROLLED_LEAD_TYPES)[number];
+const CONTROLLED_TEMPERATURES = ['cold', 'warm', 'hot'] as const;
+type ControlledTemperature = (typeof CONTROLLED_TEMPERATURES)[number];
+
+/** Type-safe narrowing of the free-form sequence fields; no `as any`. */
+function asControlledLeadType(value: string): ControlledLeadType | undefined {
+  return (CONTROLLED_LEAD_TYPES as readonly string[]).includes(value)
+    ? (value as ControlledLeadType)
+    : undefined;
+}
+
+function asControlledTemperature(
+  value: string,
+): ControlledTemperature | undefined {
+  return (CONTROLLED_TEMPERATURES as readonly string[]).includes(value)
+    ? (value as ControlledTemperature)
+    : undefined;
+}
+
 @Injectable()
 export class TestingService implements OnModuleInit {
   constructor(
@@ -147,24 +167,16 @@ export class TestingService implements OnModuleInit {
         };
         consent.sms = smsEvidence;
       }
-      const intakeDto = {
+      const intakeDto: Omit<IntakeLeadDto, 'phone'> & { phone?: string } = {
         fullName: 'RealtyTechAI Controlled Test',
         email: email || undefined,
         phone: phone || undefined,
         source: 'controlled_uat',
-        leadType: (['buyer', 'seller', 'renter', 'investor'] as const).includes(
-          sequence.leadType as any,
-        )
-          ? (sequence.leadType as 'buyer' | 'seller' | 'renter' | 'investor')
-          : undefined,
-        temperature: (['cold', 'warm', 'hot'] as const).includes(
-          sequence.temperature as any,
-        )
-          ? (sequence.temperature as 'cold' | 'warm' | 'hot')
-          : undefined,
+        leadType: asControlledLeadType(sequence.leadType),
+        temperature: asControlledTemperature(sequence.temperature),
         message: `Controlled test run ${run.id}`,
         consent,
-      } as IntakeLeadDto;
+      };
       const lead = await this.leads.intake(
         tenantId,
         intakeDto,

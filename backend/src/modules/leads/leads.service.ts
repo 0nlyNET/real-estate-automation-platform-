@@ -278,7 +278,10 @@ export class LeadsService {
 
   async intake(
     tenantId: string,
-    payload: IntakeLeadDto,
+    // Phone is optional at the service layer (email-only intake); the HTTP
+    // DTO requires it via validation, but programmatic callers (controlled
+    // UAT, CRM sync) may omit it.
+    payload: Omit<IntakeLeadDto, 'phone'> & { phone?: string },
     acceptance: LeadAcceptanceContext = { source: 'external' },
   ): Promise<Lead> {
     const tenant = await this.requireTenant(tenantId);
