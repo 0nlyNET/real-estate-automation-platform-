@@ -72,15 +72,28 @@ export default function AutomationsPage() {
     } catch (e: any) { setError(e?.message || "Failed to add step") }
   }
 
+  const [approvingStepId, setApprovingStepId] = useState<string | null>(null)
+  const [approveIdentity, setApproveIdentity] = useState("")
+
   async function approveStep(stepId: string, currentIdentity?: string | null) {
     if (!selected) return
-    const identity = window.prompt("Confirm the sender identity exactly as it appears in this template", currentIdentity || identityLabel)
+    // Open inline confirmation dialog instead of window.prompt() (which is
+    // auto-dismissed in automated browsers and provides poor UX)
+    setApprovingStepId(stepId)
+    setApproveIdentity(currentIdentity || identityLabel || "")
+  }
+
+  async function confirmApproveStep() {
+    if (!selected || !approvingStepId) return
+    const identity = approveIdentity.trim()
     if (!identity) return
     try {
-      await apiFetch(`/sequences/${selected.id}/steps/${stepId}/approve`, {
+      await apiFetch(`/sequences/${selected.id}/steps/${approvingStepId}/approve`, {
         method: "POST",
         body: { identityLabel: identity },
       })
+      setApprovingStepId(null)
+      setApproveIdentity("")
       await open(selected.id)
       await refresh()
     } catch (e: any) { setError(e?.message || "Template approval failed") }
@@ -165,6 +178,26 @@ export default function AutomationsPage() {
           </CardContent>
         </Card>
       </div>
+      {approvingStepId ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <Card className="w-full max-w-md">
+            <CardHeader><CardTitle>Approve template</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">Confirm the sender identity exactly as it appears in this template.</p>
+              <Input
+                value={approveIdentity}
+                onChange={(e) => setApproveIdentity(e.target.value)}
+                placeholder="Sender identity"
+                aria-label="Sender identity"
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => { setApprovingStepId(null); setApproveIdentity("") }}>Cancel</Button>
+                <Button disabled={!approveIdentity.trim()} onClick={confirmApproveStep}>Confirm approval</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
     </PageShell>
   )
 }
