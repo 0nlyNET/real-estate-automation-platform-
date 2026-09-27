@@ -345,10 +345,55 @@ describe('outbound message worker safety', () => {
       'Newest Lead',
       'Second Lead',
     ]);
-    expect(query.andWhere.mock.calls[1][0]).toContain('NOT EXISTS');
+    const andWhereSql = query.andWhere.mock.calls.map(
+      (call: any[]) => call[0],
+    );
+    expect(andWhereSql.some((sql: string) => sql.includes('NOT EXISTS'))).toBe(
+      true,
+    );
+    // Phase 3: normal conversation listing excludes test/UAT conversations.
+    expect(
+      andWhereSql.some((sql: string) => sql.includes('lead.testRunId IS NULL')),
+    ).toBe(true);
     expect(query.orderBy).toHaveBeenCalledWith('message.createdAt', 'DESC');
     expect(query.addOrderBy).toHaveBeenCalledWith('message.id', 'DESC');
     expect(query.take).toHaveBeenCalledWith(3);
+  });
+
+  it('permits test/UAT conversations when includeTest=true', async () => {
+    const tenantId = '00000000-0000-4000-8000-000000000001';
+    const query = {
+      andWhere: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    const service = buildService({
+      messageRepo: { createQueryBuilder: jest.fn().mockReturnValue(query) },
+    });
+
+    await service.listThreads(
+      tenantId,
+      25,
+      0,
+      { userId: 'user-1', role: 'owner', scope: 'shared' },
+      false,
+      true,
+    );
+
+    const andWhereSql = query.andWhere.mock.calls.map(
+      (call: any[]) => call[0],
+    );
+    // includeTest=true must NOT add the testRunId exclusion.
+    expect(
+      andWhereSql.some((sql: string) => sql.includes('lead.testRunId IS NULL')),
+    ).toBe(false);
   });
 
   it('loads bounded chronological pages and then only changed messages', async () => {
