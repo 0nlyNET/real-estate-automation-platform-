@@ -10,6 +10,13 @@ import {
 @Entity({ name: 'operations_tasks' })
 @Index(['status', 'priority', 'dueAt'])
 @Index(['tenantId', 'status'])
+// NOTE: Cross-process dedupe is handled at the service layer via
+// findOrInsertTask (check-then-insert serialized per dedupe key in-process).
+// A partial unique index on (category, related_entity_type, related_entity_id)
+// for unresolved tasks is deferred to a follow-up migration AFTER the
+// 2026-09-27 incident evidence is preserved — creating it now would require
+// resolving the 100 existing duplicate incident tasks, which must not be
+// modified (no database edits during the incident).
 export class OperationsTask {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

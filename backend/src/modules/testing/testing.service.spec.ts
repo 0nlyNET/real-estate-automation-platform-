@@ -1,4 +1,5 @@
 import { TestingService } from './testing.service';
+import { ComplianceService } from '../compliance/compliance.service';
 
 describe('TestingService production-pipeline UAT', () => {
   it.each(['explicit', 'saved'])('creates a run-bound lead using %s controlled recipients', async (recipientSource) => {
@@ -262,5 +263,113 @@ describe('TestingService production-pipeline UAT', () => {
       sourceIdentifier: 'run-both',
       clientAttested: true,
     });
+  });
+
+  it('never synthesizes controlled_uat consent on the ordinary live intake path', async () => {
+    // Regression: the synthetic controlled_uat consent must ONLY ever be
+    // created by TestingService.start. Ordinary live intake (LeadsService.intake
+    // called without a consent payload) must not receive synthetic consent.
+    // ComplianceService.recordLeadConsent with no consent payload creates
+    // nothing — it never invents controlled_uat evidence.
+    const consentRepo = {
+      findOne: jest.fn(),
+      create: jest.fn((v: any) => v),
+      save: jest.fn(async (v: any) => v),
+    };
+    const compliance = new ComplianceService(
+      {} as any,
+      { create: jest.fn((v: any) => v), save: jest.fn(async (v: any) => v) } as any,
+      {} as any,
+      {} as any,
+      consentRepo as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    // Live intake passes payload.consent through; when absent, nothing is recorded.
+    const saved = await compliance.recordLeadConsent('tenant-1', 'lead-live', undefined);
+    expect(saved).toEqual([]);
+    expect(consentRepo.create).not.toHaveBeenCalled();
+    expect(consentRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('produces synthetic consent that satisfies communicationEligibility', async () => {
+    // End-to-end regression for PR #99: the consent DTO built by
+    // TestingService.start, once recorded, must make communicationEligibility()
+    // return allowed. A malformed synthetic consent would fail closed here.
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({ id: value.id || 'run-elig', ...value })),
+    };
+    const leads = { intake: jest.fn().mockResolvedValue({ id: 'lead-elig' }) };
+    const service = new TestingService(
+      runs as any,
+      {
+        find: jest.fn().mockResolvedValue([
+          {
+            leadType: 'buyer',
+            temperature: 'warm',
+            steps: [{ active: true, approvalStatus: 'approved', channel: 'email' }],
+          },
+        ]),
+      } as any,
+      {
+        getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: false, emailEnabled: true }),
+        beginTesting: jest.fn(),
+      } as any,
+      leads as any,
+      { createForTenant: jest.fn() } as any,
+    );
+    await service.start('tenant-1', 'operator-1', { emailRecipient: 'owner@example.com' });
+    const consentDto = (leads.intake as jest.Mock).mock.calls[0][1].consent;
+    expect(consentDto.email.source).toBe('controlled_uat');
+
+    // Record it through the real ComplianceService logic (mocked repos).
+    const savedRecords: any[] = [];
+    const consentRepo = {
+      findOne: jest.fn(async () => null),
+      create: jest.fn((v: any) => v),
+      save: jest.fn(async (v: any) => {
+        savedRecords.push(v);
+        return v;
+      }),
+    };
+    const compliance = new ComplianceService(
+      { findOne: jest.fn(async () => null) } as any,
+      { create: jest.fn((v: any) => v), save: jest.fn(async (v: any) => v) } as any,
+      {} as any,
+      {} as any,
+      consentRepo as any,
+      {} as any,
+      {} as any,
+      { findOne: jest.fn(async () => null) } as any,
+    );
+    await compliance.recordLeadConsent('tenant-1', 'lead-elig', consentDto);
+    expect(savedRecords).toHaveLength(1);
+    expect(savedRecords[0]).toMatchObject({
+      status: 'affirmative',
+      source: 'controlled_uat',
+    });
+    expect(savedRecords[0].consentedAt).toBeInstanceOf(Date);
+    expect(savedRecords[0].disclosureText).toContain('Synthetic controlled UAT');
+
+    // Now eligibility must allow with the saved record.
+    const eligibilityService = new ComplianceService(
+      { findOne: jest.fn(async () => null) } as any,
+      { create: jest.fn((v: any) => v), save: jest.fn(async (v: any) => v) } as any,
+      {} as any,
+      {} as any,
+      { findOne: jest.fn(async () => savedRecords[0]) } as any,
+      {} as any,
+      {} as any,
+      { findOne: jest.fn(async () => null) } as any,
+    );
+    const result = await eligibilityService.communicationEligibility(
+      'tenant-1',
+      { id: 'lead-elig', email: 'owner@example.com' } as any,
+      'email',
+    );
+    expect(result).toMatchObject({ allowed: true });
   });
 });

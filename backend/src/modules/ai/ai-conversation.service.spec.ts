@@ -474,6 +474,7 @@ describe('AI conversation workflow', () => {
     await expect(item.service.processPendingRuns(10)).resolves.toEqual({
       claimed: 0,
       recovered: 1,
+      paused: false,
     });
     expect(item.dependencies.operations.createTask).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -621,5 +622,144 @@ describe('ai worker tick serialization', () => {
     (service as any).processPendingRuns = jest.fn().mockResolvedValue(undefined);
     await (service as any).tickWorker();
     expect((service as any).processPendingRuns).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ai worker incident regression (2026-09-27)', () => {
+  function pausedFixture() {
+    const item = fixture('controlled_autopilot');
+    const query = jest.fn(async () => []);
+    item.dependencies.dataSource.transaction.mockImplementation(
+      async (callback) => callback({ query }),
+    );
+    item.dependencies.platform.findOne.mockResolvedValue({ paused: true });
+    return { item, query };
+  }
+
+  it('platform emergency pause stops recovery, claims, and processing', async () => {
+    const { item, query } = pausedFixture();
+    const result = await item.service.processPendingRuns(10);
+    expect(result).toEqual({ claimed: 0, recovered: 0, paused: true });
+    // No worker SQL ran at all: no recoverExhaustedRuns, no claimRuns.
+    expect(query).not.toHaveBeenCalled();
+    expect(item.dependencies.operations.createTask).not.toHaveBeenCalled();
+    expect(
+      item.dependencies.control.markWaitingForHuman,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('GLOBAL_AUTOMATIONS_DISABLED stops all worker activity', async () => {
+    const item = fixture('controlled_autopilot');
+    const query = jest.fn(async () => []);
+    item.dependencies.dataSource.transaction.mockImplementation(
+      async (callback) => callback({ query }),
+    );
+    const previous = process.env.GLOBAL_AUTOMATIONS_DISABLED;
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
+    try {
+      const result = await item.service.processPendingRuns(10);
+      expect(result).toEqual({ claimed: 0, recovered: 0, paused: true });
+      expect(query).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.GLOBAL_AUTOMATIONS_DISABLED;
+      else process.env.GLOBAL_AUTOMATIONS_DISABLED = previous;
+    }
+  });
+
+  it('recovery normalizes the real [rows, rowCount] driver shape', async () => {
+    // Regression: the pg driver returns [rows, rowCount] for UPDATE ...
+    // RETURNING. Iterating the tuple visited the inner array and the count
+    // as "rows", so row.id/leadId were undefined and every tick minted a
+    // task + notification with "Exhausted ai_run undefined".
+    const item = fixture('controlled_autopilot');
+    const row = {
+      id: item.run.id,
+      tenantId: item.tenantId,
+      leadId: item.lead.id,
+    };
+    item.dependencies.dataSource.transaction.mockImplementation(
+      async (callback) =>
+        callback({
+          query: jest.fn(async (sql: string) =>
+            sql.includes('AI_RUN_ATTEMPTS_EXHAUSTED') ? [[row], 1] : [],
+          ),
+        }),
+    );
+    const result = await item.service.processPendingRuns(10);
+    expect(result).toEqual({ claimed: 0, recovered: 1, paused: false });
+    expect(item.dependencies.operations.createTask).toHaveBeenCalledTimes(1);
+    expect(item.dependencies.operations.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: item.tenantId,
+        relatedEntityType: 'lead',
+        relatedEntityId: item.lead.id,
+        evidenceNote: `Exhausted ai_run ${item.run.id}`,
+      }),
+    );
+    const evidenceNote =
+      item.dependencies.operations.createTask.mock.calls[0][0].evidenceNote;
+    expect(evidenceNote).not.toContain('undefined');
+  });
+
+  it('recovery skips rows with missing identifiers instead of minting undefined tasks', async () => {
+    const item = fixture('controlled_autopilot');
+    const errorSpy = jest
+      .spyOn((item.service as any).logger, 'error')
+      .mockImplementation(() => undefined);
+    item.dependencies.dataSource.transaction.mockImplementation(
+      async (callback) =>
+        callback({
+          // Malformed driver result: ids absent at runtime despite the
+          // declared TypeScript type.
+          query: jest.fn(async (sql: string) =>
+            sql.includes('AI_RUN_ATTEMPTS_EXHAUSTED')
+              ? [[{ id: undefined, tenantId: undefined, leadId: undefined }], 1]
+              : [],
+          ),
+        }),
+    );
+    const result = await item.service.processPendingRuns(10);
+    expect(result).toEqual({ claimed: 0, recovered: 0, paused: false });
+    expect(item.dependencies.operations.createTask).not.toHaveBeenCalled();
+    expect(
+      item.dependencies.control.markWaitingForHuman,
+    ).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('exhausted runs are terminal: recovery only targets queued/processing runs', async () => {
+    const item = fixture('controlled_autopilot');
+    const seen: string[] = [];
+    item.dependencies.dataSource.transaction.mockImplementation(
+      async (callback) =>
+        callback({
+          query: jest.fn(async (sql: string) => {
+            if (sql.includes('AI_RUN_ATTEMPTS_EXHAUSTED')) seen.push(sql);
+            return [];
+          }),
+        }),
+    );
+    await item.service.processPendingRuns(10);
+    expect(seen).toHaveLength(1);
+    // A run already marked failed/AI_RUN_ATTEMPTS_EXHAUSTED must never be
+    // eligible for recovery again, across ticks and restarts: the candidate
+    // selection is restricted to queued/processing runs.
+    expect(seen[0]).toContain("status IN ('queued', 'processing')");
+    const candidatesCte = seen[0].split('UPDATE ai_runs')[0];
+    expect(candidatesCte).not.toContain("'failed'");
+  });
+
+  it('claimRuns normalizes the [rows, rowCount] shape and drops invalid ids', async () => {
+    const item = fixture('controlled_autopilot');
+    item.dependencies.dataSource.transaction.mockImplementation(
+      async (callback) =>
+        callback({
+          query: jest.fn(async () => [[{ id: item.run.id }], 1]),
+        }),
+    );
+    await expect((item.service as any).claimRuns(1)).resolves.toEqual([
+      item.run.id,
+    ]);
   });
 });

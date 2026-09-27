@@ -392,4 +392,86 @@ describe('OperationsService follow-up alert dedup and throttle', () => {
       await dataSource.destroy();
     }
   });
+
+  it('collapses 100 exhausted-run alerts for one lead into one task and one notification', async () => {
+    // Incident regression (2026-09-27): the runaway recovery loop fired one
+    // alert per worker tick. With a valid lead dedupe key, 100 sequential
+    // alerts must produce exactly one open task and one notification.
+    const database = newDb();
+    database.public.registerFunction({
+      name: 'current_database',
+      returns: DataType.text,
+      implementation: () => 'operations_100_test',
+    });
+    database.public.registerFunction({
+      name: 'version',
+      returns: DataType.text,
+      implementation: () => 'PostgreSQL 16.0',
+    });
+    database.public.registerFunction({
+      name: 'uuid_generate_v4',
+      returns: DataType.uuid,
+      impure: true,
+      implementation: randomUUID,
+    });
+    const dataSource = database.adapters.createTypeormDataSource({
+      type: 'postgres',
+      entities: [OperationsTask],
+      synchronize: true,
+    });
+    await dataSource.initialize();
+    try {
+      const repo = dataSource.getRepository(OperationsTask);
+      const notifications = { createForPlatform: jest.fn().mockResolvedValue({}) };
+      const service = new OperationsService(repo, notifications as any);
+      for (let i = 0; i < 100; i++) {
+        await service.createTask(followUpInput(LEAD_1));
+      }
+      expect(await repo.count()).toBe(1);
+      const task = await repo.findOne({ where: {} });
+      expect(task?.status).toBe('open');
+      expect(task?.relatedEntityId).toBe(LEAD_1);
+      expect(notifications.createForPlatform).toHaveBeenCalledTimes(1);
+    } finally {
+      await dataSource.destroy();
+    }
+  });
+
+  it('recovers from a lost cross-process dedupe race via the unique index', async () => {
+    // The in-process lock cannot serialize workers in different processes.
+    // When a future partial unique index rejects the second insert (23505),
+    // the service must return the existing task instead of erroring.
+    // (Index deferred until after 2026-09-27 incident evidence is preserved;
+    // this test guards the defensive 23505 handler.)
+    const { dataSource, repo, service } = await buildService();
+    try {
+      const first = await service.createTask(followUpInput(LEAD_1));
+      // Simulate the race window: the dedupe and throttle checks run
+      // before the other process's insert is visible, so both miss; the
+      // insert then hits the unique index. The recovery lookup sees it.
+      const findOne = jest.spyOn(repo, 'findOne');
+      findOne.mockResolvedValueOnce(null as any);
+      findOne.mockResolvedValueOnce(null as any);
+      findOne.mockImplementation(async () => first as any);
+      const save = jest.spyOn(repo, 'save');
+      save.mockImplementationOnce(async () => {
+        const error: any = new Error(
+          'duplicate key value violates unique constraint "uq_operations_tasks_open_dedupe"',
+        );
+        error.code = '23505';
+        throw error;
+      });
+      // Bypass the in-process lock to simulate a second process racing in.
+      const second = await (service as any).findOrInsertTask(
+        followUpInput(LEAD_1),
+      );
+      expect(second.created).toBe(false);
+      expect(second.task.id).toBe(first.id);
+      expect(await repo.count()).toBe(1);
+      save.mockRestore();
+      findOne.mockRestore();
+    } finally {
+      await dataSource.destroy();
+    }
+  });
 });

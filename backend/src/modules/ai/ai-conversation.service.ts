@@ -9,6 +9,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { ConversationLockService } from '../../common/conversation-lock.service';
+import {
+  isValidRowId,
+  updateReturningRows,
+} from '../../common/db/raw-query-rows';
 import { nextAllowedSendTime } from '../../common/time';
 import { operationalEvent, sanitizeOperationalText } from '../../common/operational-log';
 import { ClientOperationsService } from '../client-operations/client-operations.service';
@@ -295,46 +299,94 @@ export class AiConversationService
   }
 
   async processPendingRuns(limit = 10) {
+    // Fix A: the worker must honor the platform emergency pause (and the
+    // global automations kill-switch) BEFORE doing any recovery or claim
+    // work. Previously recoverExhaustedRuns() ran unconditionally every
+    // tick, so a paused platform still minted tasks/notifications.
+    if (await this.isWorkerPaused()) {
+      return { claimed: 0, recovered: 0, paused: true as const };
+    }
     const boundedLimit = Math.min(Math.max(limit, 1), 50);
     const recovered = await this.recoverExhaustedRuns(boundedLimit);
     const ids = await this.claimRuns(boundedLimit);
     for (const id of ids) {
       await this.processRun(id);
     }
-    return { claimed: ids.length, recovered };
+    return { claimed: ids.length, recovered, paused: false as const };
+  }
+
+  /**
+   * True when the AI worker must not claim or recover any runs: the
+   * platform emergency pause is active, or the global automations
+   * kill-switch is set. Checked at the top of every worker tick, before
+   * recoverExhaustedRuns/claimRuns/processRun.
+   */
+  private async isWorkerPaused(): Promise<boolean> {
+    if (process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true') return true;
+    const control = await this.platformControls.findOne({
+      where: { id: 'global' },
+    });
+    return !!control?.paused;
   }
 
   private async recoverExhaustedRuns(limit: number) {
-    const rows: Array<{ id: string; tenantId: string; leadId: string }> =
-      await this.dataSource.transaction(async (manager) =>
-        manager.query(
-          `WITH candidates AS (
-             SELECT id
-             FROM ai_runs
-             WHERE status IN ('queued', 'processing')
-               AND attempt_count >= $2
-               AND (
-                 status = 'queued'
-                 OR locked_at IS NULL
-                 OR locked_at < now() - ($1 * interval '1 second')
-               )
-             ORDER BY created_at ASC
-             FOR UPDATE SKIP LOCKED
-             LIMIT $3
-           )
-           UPDATE ai_runs AS run
-           SET status = 'failed',
-               error_code = 'AI_RUN_ATTEMPTS_EXHAUSTED',
-               sanitized_error = 'AI processing was interrupted repeatedly and requires human review.',
-               locked_at = NULL,
-               locked_by = NULL
-           FROM candidates
-           WHERE run.id = candidates.id
-           RETURNING run.id, run.tenant_id AS "tenantId", run.lead_id AS "leadId"`,
-          [AI_RUN_LEASE_SECONDS, MAX_AI_RUN_ATTEMPTS, limit],
-        ),
+    // NOTE: the postgres driver returns [rows, rowCount] for UPDATE/DELETE
+    // raw queries, NOT the rows array. updateReturningRows normalizes this;
+    // iterating the raw tuple used to visit the inner array and the count
+    // as "rows", yielding undefined ids and a task/notification per tick.
+    const raw: unknown = await this.dataSource.transaction(async (manager) =>
+      manager.query(
+        `WITH candidates AS (
+           SELECT id
+           FROM ai_runs
+           WHERE status IN ('queued', 'processing')
+             AND attempt_count >= $2
+             AND (
+               status = 'queued'
+               OR locked_at IS NULL
+               OR locked_at < now() - ($1 * interval '1 second')
+             )
+           ORDER BY created_at ASC
+           FOR UPDATE SKIP LOCKED
+           LIMIT $3
+         )
+         UPDATE ai_runs AS run
+         SET status = 'failed',
+             error_code = 'AI_RUN_ATTEMPTS_EXHAUSTED',
+             sanitized_error = 'AI processing was interrupted repeatedly and requires human review.',
+             locked_at = NULL,
+             locked_by = NULL
+         FROM candidates
+         WHERE run.id = candidates.id
+         RETURNING run.id, run.tenant_id AS "tenantId", run.lead_id AS "leadId"`,
+        [AI_RUN_LEASE_SECONDS, MAX_AI_RUN_ATTEMPTS, limit],
+      ),
+    );
+    const rows =
+      updateReturningRows<{ id: string; tenantId: string; leadId: string }>(
+        raw,
       );
+    let recovered = 0;
     for (const row of rows) {
+      // Fix B: never use raw recovery results without runtime validation.
+      // The declared TypeScript type does not reflect the raw DB result;
+      // an absent identifier must not mint a task with an undefined dedupe
+      // key (which is what produced the per-tick notification flood).
+      if (
+        !isValidRowId(row?.id) ||
+        !isValidRowId(row?.tenantId) ||
+        !isValidRowId(row?.leadId)
+      ) {
+        this.logger.error(
+          operationalEvent('ai_worker_recovery_row_invalid', {
+            // Bounded, sanitized incident: one log line per bad row, no
+            // operations task, no notification, no retry loop.
+            reason: 'recovered ai_run row is missing id/tenantId/leadId',
+          }),
+        );
+        continue;
+      }
+      recovered++;
       await this.operations.createTask({
         tenantId: row.tenantId,
         category: 'ai_provider_failure',
@@ -344,6 +396,9 @@ export class AiConversationService
         priority: 'high',
         // Dedupe per lead (not per ai_run): each exhausted run used to mint
         // its own task, which is what flooded the queue with duplicates.
+        // Fix C: createTask dedupes on (category, relatedEntityType,
+        // relatedEntityId) = (ai_provider_failure, lead, leadId) with a
+        // 24h throttle; a valid leadId is required for the dedupe key.
         relatedEntityType: 'lead',
         relatedEntityId: row.leadId,
         evidenceNote: `Exhausted ai_run ${row.id}`,
@@ -357,12 +412,15 @@ export class AiConversationService
         'high',
       );
     }
-    return rows.length;
+    return recovered;
   }
 
   private claimRuns(limit: number): Promise<string[]> {
+    // Same driver-shape note as recoverExhaustedRuns: UPDATE returns
+    // [rows, rowCount]; mapping the raw tuple produced [undefined, ...]
+    // so no run was ever actually claimed.
     return this.dataSource.transaction(async (manager) => {
-      const rows: Array<{ id: string }> = await manager.query(
+      const raw: unknown = await manager.query(
         `WITH candidates AS (
            SELECT id
            FROM ai_runs
@@ -387,7 +445,9 @@ export class AiConversationService
          RETURNING run.id`,
         [AI_RUN_LEASE_SECONDS, limit, this.workerId, MAX_AI_RUN_ATTEMPTS],
       );
-      return rows.map((row) => row.id);
+      return updateReturningRows<{ id: string }>(raw)
+        .map((row) => row?.id)
+        .filter(isValidRowId);
     });
   }
 

@@ -94,6 +94,61 @@ describe('ComplianceService.leadEligibility', () => {
     );
   });
 
+  it('allows communicationEligibility for a controlled UAT lead with synthetic consent', async () => {
+    // Regression for PR #99: the synthetic controlled_uat consent must be
+    // well-formed enough that communicationEligibility() returns allowed.
+    // A malformed synthetic consent (missing affirmative/source/consentedAt/
+    // disclosure) would block the controlled UAT outbound.
+    const { service } = createService({
+      lead: providerLead,
+      consent: {
+        status: 'affirmative',
+        consentedAt: new Date('2026-09-27T00:00:00Z'),
+        source: 'controlled_uat',
+        disclosureText:
+          'Synthetic controlled UAT recipient explicitly authorized test messages.',
+        sourceIdentifier: 'run-1',
+        clientAttested: true,
+        revokedAt: null,
+      },
+    });
+    const sms = await service.communicationEligibility(
+      'tenant-1',
+      providerLead,
+      'sms',
+    );
+    const email = await service.communicationEligibility(
+      'tenant-1',
+      providerLead,
+      'email',
+    );
+    expect(sms).toMatchObject({ allowed: true });
+    expect(email).toMatchObject({ allowed: true });
+  });
+
+  it('blocks communicationEligibility when synthetic consent is malformed', async () => {
+    // Guards the PR #99 fix: if the synthetic consent ever regresses to the
+    // malformed shape (e.g. missing disclosure or consentedAt), eligibility
+    // must fail closed rather than silently allowing.
+    const { service } = createService({
+      lead: providerLead,
+      consent: {
+        status: 'unknown',
+        consentedAt: null,
+        source: 'controlled_uat',
+        disclosureText: null,
+        revokedAt: null,
+      },
+    });
+    const sms = await service.communicationEligibility(
+      'tenant-1',
+      providerLead,
+      'sms',
+    );
+    expect(sms.allowed).toBe(false);
+    expect(sms.code).toBe('MISSING_AFFIRMATIVE_CONSENT');
+  });
+
   it('scopes the lead lookup to the requester tenant', async () => {
     const { service, leadRepo } = createService({ lead: providerLead });
     await service.leadEligibility('tenant-1', 'lead-1');

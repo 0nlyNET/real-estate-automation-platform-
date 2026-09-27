@@ -16,6 +16,10 @@ import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { Message } from '../messaging/message.entity';
 import { isSafeBookingUrl } from '../../common/booking-link';
+import {
+  isValidRowId,
+  updateReturningRows,
+} from '../../common/db/raw-query-rows';
 import { Tenant } from '../tenants/tenant.entity';
 import { formatHHMM, isWithinQuietHours, nextAllowedSendTime } from '../../common/time';
 import { ComplianceService } from '../compliance/compliance.service';
@@ -505,7 +509,9 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
 
   private claimDueEnrollments(limit: number): Promise<string[]> {
     return this.dataSource.transaction(async (manager) => {
-      const rows: Array<{ id: string }> = await manager.query(
+      // UPDATE raw queries return [rows, rowCount] on the pg driver;
+      // normalize before mapping ids (see common/db/raw-query-rows).
+      const raw: unknown = await manager.query(
         `WITH candidates AS (
            SELECT id
            FROM sequence_enrollments
@@ -524,7 +530,9 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
          RETURNING enrollment.id`,
         [LEASE_SECONDS, limit, this.workerId],
       );
-      return rows.map((row) => row.id);
+      return updateReturningRows<{ id: string }>(raw)
+        .map((row) => row?.id)
+        .filter(isValidRowId);
     });
   }
 

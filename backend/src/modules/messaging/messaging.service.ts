@@ -25,6 +25,10 @@ import { operationalEvent, sanitizeOperationalText } from '../../common/operatio
 import { ClientOperationsService } from '../client-operations/client-operations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OperationalEventsService } from '../notifications/operational-events.service';
+import {
+  isValidRowId,
+  updateReturningRows,
+} from '../../common/db/raw-query-rows';
 import { AiConversationControlService } from '../ai/ai-conversation-control.service';
 import { MessageSafetyService } from './message-safety.service';
 import { LimitsService } from '../limits/limits.service';
@@ -349,7 +353,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
   ): Promise<number> {
     const ids = await this.dataSource.transaction(
       async (manager): Promise<string[]> => {
-        const rows: Array<{ id: string }> = await manager.query(
+        // UPDATE raw queries return [rows, rowCount] on the pg driver;
+        // normalize before mapping ids (see common/db/raw-query-rows).
+        const raw: unknown = await manager.query(
           `WITH candidates AS (
              SELECT id
              FROM messages
@@ -369,7 +375,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
            RETURNING message.id`,
           [MESSAGE_LEASE_SECONDS, limit, this.workerId, leadId || null],
         );
-        return rows.map((row) => row.id);
+        return updateReturningRows<{ id: string }>(raw)
+          .map((row) => row?.id)
+          .filter(isValidRowId);
       },
     );
     for (const id of ids) {
@@ -397,7 +405,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
 
   private claimMessages(limit: number, leadId?: string): Promise<string[]> {
     return this.dataSource.transaction(async (manager) => {
-      const rows: Array<{ id: string }> = await manager.query(
+      // UPDATE raw queries return [rows, rowCount] on the pg driver;
+      // normalize before mapping ids (see common/db/raw-query-rows).
+      const raw: unknown = await manager.query(
         `WITH candidates AS (
            SELECT id
            FROM messages
@@ -419,7 +429,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
          RETURNING message.id`,
         [MESSAGE_LEASE_SECONDS, limit, this.workerId, leadId || null],
       );
-      return rows.map((row) => row.id);
+      return updateReturningRows<{ id: string }>(raw)
+        .map((row) => row?.id)
+        .filter(isValidRowId);
     });
   }
 
