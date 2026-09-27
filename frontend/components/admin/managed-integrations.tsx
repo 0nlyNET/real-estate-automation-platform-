@@ -88,6 +88,9 @@ export default function ManagedIntegrations() {
 
   const [tenantTwilioTestTo, setTenantTwilioTestTo] = useState("")
   const [tenantEmailTestTo, setTenantEmailTestTo] = useState("")
+  const [tenantSendgridFromEmail, setTenantSendgridFromEmail] = useState("")
+  const [tenantSendgridFromName, setTenantSendgridFromName] = useState("")
+  const [tenantSendgridInboundAddress, setTenantSendgridInboundAddress] = useState("")
   const [twilioComplianceStatus, setTwilioComplianceStatus] = useState<"pending" | "approved" | "blocked">("pending")
   const [twilioCustomerProfileSid, setTwilioCustomerProfileSid] = useState("")
   const [twilioBrandSid, setTwilioBrandSid] = useState("")
@@ -303,6 +306,32 @@ export default function ManagedIntegrations() {
       tenantEmailTestTo ? "Client SendGrid test email sent." : "Client SendGrid assignment verified.",
     )
 
+  // Direct operator assignment of the managed SendGrid identity. This calls the
+  // ungated PUT endpoint (no onboarding-readiness gate): reconcile cannot
+  // provision the identity on its own because the brand readiness check
+  // requires the approved email identity that only exists after provisioning.
+  const assignTenantSendGrid = () =>
+    run(
+      "tenant-sendgrid-assign",
+      async () => {
+        const fromEmail = tenantSendgridFromEmail.trim()
+        if (!fromEmail) throw new Error("Enter the managed sender email address.")
+        await apiFetch(`/admin/tenants/${tenantId}/integrations/sendgrid`, {
+          method: "PUT",
+          body: {
+            fromEmail,
+            fromName: tenantSendgridFromName.trim() || undefined,
+            inboundAddress: tenantSendgridInboundAddress.trim() || undefined,
+          },
+        })
+        setTenantSendgridFromEmail("")
+        setTenantSendgridFromName("")
+        setTenantSendgridInboundAddress("")
+        await loadTenant(tenantId)
+      },
+      `Managed SendGrid identity assigned for ${selectedTenant?.name || "client"}.`,
+    )
+
   if (loading) {
     return <div className="py-16 text-center text-sm text-muted-foreground">Loading managed integrations…</div>
   }
@@ -449,6 +478,18 @@ export default function ManagedIntegrations() {
                   {tenant?.sendgrid.error ? <Alert variant="destructive"><AlertDescription>{tenant.sendgrid.error}</AlertDescription></Alert> : null}
                   <div className="space-y-2"><Label>Managed sender</Label><Input readOnly value={tenant?.sendgrid.display?.fromEmail || "Provisioning not complete"} /></div>
                   <div className="space-y-2"><Label>Sender name</Label><Input readOnly value={tenant?.sendgrid.display?.fromName || selectedTenant?.name || ""} /></div>
+                  <div className="space-y-2"><Label>Inbound reply address</Label><Input readOnly value={tenant?.sendgrid.display?.inboundAddress || "Provisioning not complete"} /></div>
+                  <div className="space-y-2 border-t pt-4"><Label>Assign managed identity</Label>
+                    <p className="text-xs text-muted-foreground">Assigns the managed SendGrid sender and inbound reply address directly, without waiting for the full onboarding checklist. The inbound domain is fixed by the backend environment.</p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2"><Label>From email</Label><Input type="email" placeholder="client@realtytechai.app" value={tenantSendgridFromEmail} onChange={(event) => setTenantSendgridFromEmail(event.target.value)} /></div>
+                    <div className="space-y-2"><Label>From name</Label><Input type="text" placeholder={selectedTenant?.name || "Client name"} value={tenantSendgridFromName} onChange={(event) => setTenantSendgridFromName(event.target.value)} /></div>
+                  </div>
+                  <div className="space-y-2"><Label>Inbound address (optional)</Label><Input type="text" placeholder="auto-generated if blank" value={tenantSendgridInboundAddress} onChange={(event) => setTenantSendgridInboundAddress(event.target.value)} /></div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={assignTenantSendGrid} disabled={Boolean(busy) || !tenantId}>Assign managed identity</Button>
+                  </div>
                   <div className="space-y-2 border-t pt-4"><Label>Test recipient</Label><Input type="email" value={tenantEmailTestTo} onChange={(event) => setTenantEmailTestTo(event.target.value)} /></div>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" onClick={testTenantSendGrid} disabled={Boolean(busy) || !tenant?.sendgrid.configured}>Test client email</Button>
