@@ -87,6 +87,61 @@ describe('OperatorTenantInterceptor', () => {
     }
   });
 
+  it('allows super admin without tenant context on /support/admin/* platform routes', () => {
+    const user = {
+      sub: 'admin1',
+      email: 'admin@example.com',
+      tenantId: 'operator-own-tenant',
+      platformAdmin: true,
+      platformRole: 'super_admin',
+      platformOperator: true,
+    };
+    for (const url of [
+      '/support/admin/tickets',
+      '/support/admin/tickets/abc-123',
+      '/support/admin/tickets?status=open',
+    ]) {
+      const { threw, value } = run(user, url);
+      expect(threw).toBeNull();
+      expect(value).toBe('ok');
+    }
+  });
+
+  it('fail-closes: tenant-facing /support/* routes stay blocked without tenant context', () => {
+    const user = {
+      sub: 'admin1',
+      email: 'admin@example.com',
+      tenantId: 'operator-own-tenant',
+      platformAdmin: true,
+      platformRole: 'super_admin',
+      platformOperator: true,
+    };
+    for (const url of [
+      '/support/contact',
+      '/support/cancellation-request',
+      '/support/deletion-request',
+    ]) {
+      const { threw } = run(user, url);
+      expect(threw).toBeInstanceOf(ForbiddenException);
+      const response = (threw as ForbiddenException).getResponse() as any;
+      expect(response.code).toBe(OPERATOR_TENANT_REQUIRED_CODE);
+    }
+  });
+
+  it('allows normal tenant users on /support/* tenant routes (unaffected)', () => {
+    const user = { sub: 'u1', email: 'owner@example.com', tenantId: 'tenant-a' };
+    for (const url of [
+      '/support/contact',
+      '/support/cancellation-request',
+      '/support/deletion-request',
+      '/support/admin/tickets',
+    ]) {
+      const { threw, value } = run(user, url);
+      expect(threw).toBeNull();
+      expect(value).toBe('ok');
+    }
+  });
+
   it('allows super admin without tenant context on /auth and /me', () => {
     const user = {
       sub: 'admin1',
