@@ -59,12 +59,23 @@ test("owner sees honest readiness, disabled testing, and a responsive workspace 
   await page
     .getByRole("button", { name: "Open client workspace", exact: true })
     .click()
-  await expect(page).toHaveURL(/view=clients/)
+  // Operator mode enters the tenant-facing /app/* workspace (not the admin client view)
+  await expect(page).toHaveURL(/\/app\/dashboard/)
+  // Operator-mode banner is visible with the selected tenant name
+  await expect(
+    page.getByLabel("Operator mode active", { exact: true }),
+  ).toBeVisible()
   await expect(
     page.getByText("Browser pending workspace", { exact: true }).first(),
   ).toBeVisible()
+  // Tenant-facing dashboard loads without errors
   expect(errors).toEqual([])
   expect(failedRequests).toEqual([])
+  // Exit Operator Mode restores the platform-admin session
+  await page
+    .getByRole("button", { name: "Exit Operator Mode", exact: true })
+    .click()
+  await expect(page).toHaveURL(/\/admin\/dashboard/)
 })
 
 test("staff sees an explained invitation restriction and cannot call owner APIs", async ({
