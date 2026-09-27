@@ -125,11 +125,13 @@ export class AdminClientOperationsController {
     @Query('tenantId') tenantId?: string,
     @Query('status') status?: string,
     @Query('take') take?: string,
+    @Query('includeTest') includeTest?: string,
   ) {
     return this.operations.listHandoffsForAdmin({
       tenantId,
       status,
       take: Number(take || 100),
+      includeTest: includeTest === 'true',
     });
   }
 

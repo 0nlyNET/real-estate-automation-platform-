@@ -952,15 +952,24 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async listHandoffsForAdmin(filters: { tenantId?: string; status?: string; take?: number }) {
+  async listHandoffsForAdmin(filters: {
+    tenantId?: string;
+    status?: string;
+    take?: number;
+    includeTest?: boolean;
+  }) {
     const query = this.handoffs
       .createQueryBuilder('handoff')
       .leftJoinAndSelect('handoff.tenant', 'tenant')
       .leftJoinAndSelect('handoff.lead', 'lead')
       .leftJoinAndSelect('handoff.assignedUser', 'assignedUser')
+      // Phase 3 follow-up: the human-response/handoff queue is a normal
+      // operator view, so test/UAT handoffs are excluded by default.
+      // Test handoffs remain available via includeTest=true (evidence access).
+      .andWhere(filters.includeTest ? '1=1' : 'lead.testRunId IS NULL')
       .orderBy('handoff.createdAt', 'DESC')
       .take(Math.min(Math.max(filters.take || 100, 1), 200));
-    if (filters.tenantId) query.where('handoff.tenantId = :tenantId', { tenantId: filters.tenantId });
+    if (filters.tenantId) query.andWhere('handoff.tenantId = :tenantId', { tenantId: filters.tenantId });
     if (filters.status && ['open', 'opened', 'snoozed', 'completed'].includes(filters.status)) {
       query.andWhere('handoff.status = :status', { status: filters.status });
     }
