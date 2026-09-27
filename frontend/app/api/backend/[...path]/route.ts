@@ -42,7 +42,7 @@ async function forward(
   target.search = request.nextUrl.search
 
   const headers = new Headers()
-  for (const name of ["accept", "content-type", "cookie", "idempotency-key", "origin"]) {
+  for (const name of ["accept", "content-type", "cookie", "idempotency-key", "origin", "x-intake-key"]) {
     const value = request.headers.get(name)
     if (value) headers.set(name, value)
   }
