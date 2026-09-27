@@ -63,6 +63,9 @@ test("owner sees honest readiness, disabled testing, and a responsive workspace 
   await expect(page).toHaveURL(/\/app\/dashboard/)
   // Operator-mode banner is visible with the selected tenant name
   const operatorBanner = page.getByRole("banner", { name: "Operator mode active" });
+  // Exactly one global operator banner (dedupe guard: AppShell must not render
+  // a second copy inside /app layout).
+  await expect(operatorBanner).toHaveCount(1);
   await expect(operatorBanner).toBeVisible();
   // Tenant name is rendered inside the banner text (not as an exact standalone
   // match), so scope the assertion to the banner and use substring matching.
