@@ -16,6 +16,7 @@ import {
   UserPlus,
 } from "lucide-react"
 import { apiFetch } from "@/lib/api"
+import { enterOperatorMode } from "@/lib/operator-mode"
 import { launchProgress, nextReadinessStep, unmappedReadinessChecks } from "@/lib/launch-readiness"
 import { cn } from "@/lib/utils"
 import { useAdminSession } from "@/app/admin/admin-access-guard"
@@ -1025,6 +1026,19 @@ export function AdminDashboardClient({
       await navigator.clipboard.writeText(`${window.location.origin}/app/onboarding`)
       setNotice("Client onboarding link copied.")
     } catch { setError("The onboarding link could not be copied. Open the client workspace and copy /app/onboarding.") }
+  }
+
+  async function openClientWorkspace() {
+    if (!selectedTenant) return
+    setError("")
+    setNotice("Entering operator mode…")
+    const result = await enterOperatorMode(selectedTenant.id)
+    if (!result.ok) {
+      setError(`Could not open the client workspace: ${result.error || "request failed"}`)
+      setNotice("")
+      return
+    }
+    window.location.assign("/app/dashboard")
   }
 
   function runLaunchStep(step: LaunchStep) {
@@ -2870,7 +2884,7 @@ export function AdminDashboardClient({
                     <p className="mt-4 text-sm"><span className="font-medium">Current blocker:</span> {nextLaunchStep?.action || (readiness.ready ? "All required launch checks pass." : "Review the remaining launch prerequisites.")}</p></div>
                   {nextLaunchStep ? <Button className="w-full shrink-0 lg:w-auto" disabled={Boolean(nextLaunchStep.disabledReason)} onClick={() => runLaunchStep(nextLaunchStep)}>Next step: {nextLaunchStep.cta}<ArrowRight className="ml-2 h-4 w-4" /></Button> : null}
                 </div>
-                <div className="mt-5 flex flex-wrap gap-2 border-t pt-4">{!selectedOwnerUser?.passwordConfigured && isOwner ? <Button size="sm" variant="outline" onClick={() => void resendSelectedInvitation()}>Resend invite</Button> : null}<Button size="sm" variant="outline" onClick={() => void copyClientOnboardingLink()}>Copy client link</Button><Button size="sm" variant="outline" onClick={() => switchView("clients", selectedTenant.id, "overview")}>Open client workspace</Button><Button size="sm" variant="outline" onClick={() => switchView("clients", selectedTenant.id, "setup")}>Configure integrations</Button>{isOwner ? <Button size="sm" variant="outline" onClick={() => switchView("clients", selectedTenant.id, "billing")}>Open billing</Button> : null}{selectedTenant.serviceState?.state === "suspended" && isOwner ? <Button size="sm" variant="outline" onClick={() => setServiceAction("restore")}>Restore services</Button> : null}{selectedTenant.lifecycleStatus === "ACTIVE" && selectedTenant.serviceState?.state !== "suspended" && isOwner ? <Button size="sm" variant="destructive" onClick={() => setServiceAction("suspend")}>Suspend services</Button> : null}</div>
+                <div className="mt-5 flex flex-wrap gap-2 border-t pt-4">{!selectedOwnerUser?.passwordConfigured && isOwner ? <Button size="sm" variant="outline" onClick={() => void resendSelectedInvitation()}>Resend invite</Button> : null}<Button size="sm" variant="outline" onClick={() => void copyClientOnboardingLink()}>Copy client link</Button><Button size="sm" variant="default" onClick={() => void openClientWorkspace()}>Open client workspace</Button><Button size="sm" variant="outline" onClick={() => switchView("clients", selectedTenant.id, "setup")}>Configure integrations</Button>{isOwner ? <Button size="sm" variant="outline" onClick={() => switchView("clients", selectedTenant.id, "billing")}>Open billing</Button> : null}{selectedTenant.serviceState?.state === "suspended" && isOwner ? <Button size="sm" variant="outline" onClick={() => setServiceAction("restore")}>Restore services</Button> : null}{selectedTenant.lifecycleStatus === "ACTIVE" && selectedTenant.serviceState?.state !== "suspended" && isOwner ? <Button size="sm" variant="destructive" onClick={() => setServiceAction("suspend")}>Suspend services</Button> : null}</div>
               </CardContent></Card>
               {clientDetailsError ? <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{clientDetailsError}</div> : null}
               <Card><CardHeader><CardTitle>Guided setup</CardTitle><p className="text-sm text-muted-foreground">Complete the first non-complete step; every status is derived from persisted account, billing, provider, or readiness state.</p></CardHeader><CardContent className="space-y-2">

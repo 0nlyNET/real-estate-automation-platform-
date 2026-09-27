@@ -37,6 +37,7 @@ import { AuditService } from '../audit/audit.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { OperatorOnboardingEvidenceDto } from '../onboarding/onboarding.dto';
 import {
+  clearSessionCookie,
   PRIMARY_SESSION_COOKIE,
   readCookie,
   SESSION_COOKIE,
@@ -724,6 +725,120 @@ export class AdminController {
       },
       expiresInSeconds: 15 * 60,
     };
+  }
+
+  /**
+   * Enter explicit tenant-scoped operator mode.
+   *
+   * The super admin selects a tenant in Admin and enters operator mode for it.
+   * The backend issues a signed operator-mode session (primary admin session is
+   * preserved in a separate cookie, same pattern as impersonation). From then
+   * on, the effective tenant for every tenant-scoped API route is the EXPLICITLY
+   * selected tenant — never the operator's own tenant, never a client-supplied ID.
+   */
+  @Post('operator-mode')
+  @UseGuards(PlatformAdminGuard)
+  async enterOperatorMode(
+    @Body() body: { tenantId?: string },
+    @Req() req: Request & { user?: any },
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const tenantId = String(body?.tenantId || '').trim();
+    if (!tenantId) throw new BadRequestException('Missing tenantId');
+
+    const tenant = await this.admin.findTenantById(tenantId);
+    if (!tenant) throw new NotFoundException('Tenant not found');
+
+    const actorId = String(req.user?.sub || '');
+    const actorEmail = String(req.user?.email || '');
+    const operator = await this.admin.findUserById(actorId);
+    if (!operator) throw new ForbiddenException('Operator account not found');
+
+    const token = this.auth.signForOperatorMode(operator, {
+      id: tenant.id,
+      name: tenant.name || tenant.id,
+    });
+    const primary =
+      readCookie(req, PRIMARY_SESSION_COOKIE) || readCookie(req, SESSION_COOKIE);
+    if (!primary) throw new ForbiddenException('Primary admin session is unavailable');
+    setSessionCookie(response, primary, PRIMARY_SESSION_COOKIE);
+    setSessionCookie(response, token, SESSION_COOKIE, 8 * 60 * 60 * 1000);
+
+    await this.audit.record({
+      tenantId: tenant.id,
+      actorId,
+      actorEmail,
+      actorType: 'platform_operator',
+      action: 'support.operator_mode.started',
+      method: 'POST',
+      path: '/admin/operator-mode',
+      statusCode: 201,
+      metadata: {
+        tenantName: tenant.name || null,
+        operatorMode: true,
+        source: 'operator-mode',
+      },
+    });
+
+    return {
+      tenant: { id: tenant.id, name: tenant.name || tenant.id },
+      operatorMode: {
+        tenantId: tenant.id,
+        tenantName: tenant.name || tenant.id,
+        startedByUserId: actorId,
+        startedByEmail: actorEmail,
+        startedAt: new Date().toISOString(),
+      },
+      expiresInSeconds: 8 * 60 * 60,
+    };
+  }
+
+  /**
+   * Current operator-mode status for the calling session.
+   */
+  @Get('operator-mode')
+  @UseGuards(PlatformAdminGuard)
+  async operatorModeStatus(@Req() req: Request & { user?: any }) {
+    const mode = req.user?.operatorMode;
+    if (!mode?.tenantId) return { active: false, operatorMode: null };
+    return { active: true, operatorMode: mode };
+  }
+
+  /**
+   * Exit operator mode and restore the primary admin session.
+   */
+  @Post('operator-mode/exit')
+  @UseGuards(PlatformAdminGuard)
+  async exitOperatorMode(
+    @Req() req: Request & { user?: any },
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const actorId = String(req.user?.sub || '');
+    const actorEmail = String(req.user?.email || '');
+    const mode = req.user?.operatorMode;
+
+    const primary = readCookie(req, PRIMARY_SESSION_COOKIE);
+    if (!primary) throw new ForbiddenException('Primary admin session is unavailable');
+    setSessionCookie(response, primary, SESSION_COOKIE);
+    clearSessionCookie(response, PRIMARY_SESSION_COOKIE);
+
+    await this.audit.record({
+      tenantId: mode?.tenantId || req.user?.tenantId,
+      actorId,
+      actorEmail,
+      actorType: 'platform_operator',
+      action: 'support.operator_mode.exited',
+      method: 'POST',
+      path: '/admin/operator-mode/exit',
+      statusCode: 201,
+      metadata: {
+        tenantName: mode?.tenantName || null,
+        operatorMode: true,
+        source: 'operator-mode',
+      },
+    });
+
+    return { active: false };
   }
 
 }

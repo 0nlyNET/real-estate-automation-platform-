@@ -145,4 +145,91 @@ describe('JwtStrategy', () => {
       strategy.validate({ sub: 'user-1', sessionVersion: 3 }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
+
+  describe('operator mode', () => {
+    const operatorUser = {
+      id: 'admin-1',
+      email: 'owner@example.com',
+      role: 'admin',
+      tenantId: 'operator-own-tenant',
+      isActive: true,
+      isEmailVerified: true,
+      mustChangePassword: false,
+      sessionVersion: 1,
+    };
+
+    it('pins the effective tenant to the explicitly selected tenant, not the operator own tenant', async () => {
+      const strategy = new JwtStrategy({
+        findById: jest.fn().mockResolvedValue(operatorUser),
+      } as any);
+      const result = await strategy.validate({
+        sub: 'admin-1',
+        sessionVersion: 1,
+        operatorMode: {
+          tenantId: 'tenant-b',
+          tenantName: 'Client B',
+          startedByUserId: 'admin-1',
+          startedByEmail: 'owner@example.com',
+          startedAt: '2026-09-27T00:00:00.000Z',
+        },
+      });
+      expect(result.tenantId).toBe('tenant-b');
+      expect(result.operatorMode).toEqual({
+        tenantId: 'tenant-b',
+        tenantName: 'Client B',
+        startedByUserId: 'admin-1',
+        startedByEmail: 'owner@example.com',
+        startedAt: '2026-09-27T00:00:00.000Z',
+      });
+      // The operator keeps their own identity for audit purposes.
+      expect(result.email).toBe('owner@example.com');
+      expect(result.platformAdmin).toBe(true);
+    });
+
+    it('rejects operator mode when the actor is no longer a platform admin', async () => {
+      const strategy = new JwtStrategy({
+        findById: jest.fn().mockResolvedValue({
+          ...operatorUser,
+          email: 'not-an-admin@example.com',
+        }),
+      } as any);
+      await expect(
+        strategy.validate({
+          sub: 'admin-1',
+          sessionVersion: 1,
+          operatorMode: { tenantId: 'tenant-b' },
+        }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('rejects operator mode with an empty tenant id', async () => {
+      const strategy = new JwtStrategy({
+        findById: jest.fn().mockResolvedValue(operatorUser),
+      } as any);
+      await expect(
+        strategy.validate({
+          sub: 'admin-1',
+          sessionVersion: 1,
+          operatorMode: { tenantId: '   ' },
+        }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('does not enter operator mode for normal tenant owners', async () => {
+      const strategy = new JwtStrategy({
+        findById: jest.fn().mockResolvedValue({
+          id: 'user-9',
+          email: 'owner-b@example.com',
+          role: 'admin',
+          tenantId: 'tenant-b',
+          isActive: true,
+          isEmailVerified: true,
+          sessionVersion: 1,
+        }),
+      } as any);
+      const result = await strategy.validate({ sub: 'user-9', sessionVersion: 1 });
+      expect(result.tenantId).toBe('tenant-b');
+      expect(result.operatorMode).toBeUndefined();
+    });
+  });
 });

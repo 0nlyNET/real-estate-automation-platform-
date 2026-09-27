@@ -353,6 +353,10 @@ export class AdminService {
     return this.usersRepo.findOne({ where: { id } as any });
   }
 
+  async findTenantById(id: string): Promise<Tenant | null> {
+    return this.tenantsRepo.findOne({ where: { id } as any });
+  }
+
   listOperators() {
     return this.platformOperators?.listActive() || [];
   }

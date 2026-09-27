@@ -14,6 +14,13 @@ type JwtPayload = {
     userId?: string;
     email?: string;
   };
+  operatorMode?: {
+    tenantId?: string;
+    tenantName?: string;
+    startedByUserId?: string;
+    startedByEmail?: string;
+    startedAt?: string;
+  };
   sessionVersion?: number;
 };
 
@@ -64,15 +71,51 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     const platformRole = impersonatedBy
       ? null
       : resolvePlatformRole(user.email, user.platformRole);
+
+    // Explicit tenant-scoped operator session: the operator keeps their own
+    // identity, but the effective tenant is the one they explicitly selected in
+    // Admin. The actor must still be an active, verified platform admin —
+    // otherwise the operator session is rejected. The tenantId comes from the
+    // signed payload (created server-side by POST /admin/operator-mode), never
+    // from client-supplied request parameters.
+    let operatorMode:
+      | {
+          tenantId: string;
+          tenantName: string;
+          startedByUserId: string;
+          startedByEmail: string;
+          startedAt: string;
+        }
+      | undefined;
+    let effectiveTenantId = user.tenantId;
+    if (payload.operatorMode?.tenantId) {
+      if (!isPlatformAdminEmail(user.email)) {
+        throw new UnauthorizedException('Operator session is no longer authorized');
+      }
+      const operatorTenantId = String(payload.operatorMode.tenantId).trim();
+      if (!operatorTenantId) {
+        throw new UnauthorizedException('Operator session has no tenant context');
+      }
+      effectiveTenantId = operatorTenantId;
+      operatorMode = {
+        tenantId: operatorTenantId,
+        tenantName: String(payload.operatorMode.tenantName || '').trim(),
+        startedByUserId: String(payload.operatorMode.startedByUserId || user.id),
+        startedByEmail: String(payload.operatorMode.startedByEmail || user.email),
+        startedAt: String(payload.operatorMode.startedAt || ''),
+      };
+    }
+
     return {
       sub: user.id,
       email: user.email,
       role: user.role,
-      tenantId: user.tenantId,
+      tenantId: effectiveTenantId,
       platformAdmin: impersonatedBy ? false : isPlatformAdminEmail(user.email),
       platformRole,
       platformOperator: platformRole !== null,
       ...(impersonatedBy ? { impersonatedBy } : {}),
+      ...(operatorMode ? { operatorMode } : {}),
       sessionExpiresAt: payload.exp
         ? new Date(payload.exp * 1000).toISOString()
         : null,
