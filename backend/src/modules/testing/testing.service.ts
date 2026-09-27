@@ -8,6 +8,8 @@ import { OnboardingService } from '../onboarding/onboarding.service';
 import { TestRun } from './test-run.entity';
 import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 import { Sequence } from '../sequences/sequence.entity';
+import { LeadConsentDto, ConsentEvidenceDto } from '../compliance/consent.dto';
+import { IntakeLeadDto } from '../leads/dto/intake-lead.dto';
 
 @Injectable()
 export class TestingService implements OnModuleInit {
@@ -117,22 +119,55 @@ export class TestingService implements OnModuleInit {
       }),
     );
     try {
+      // Build proper LeadConsentDto with nested ConsentEvidenceDto for controlled UAT.
+      // This creates explicit, auditable synthetic consent evidence ONLY for the
+      // controlled test recipient. Normal/live leads remain fail-closed (no synthetic consent).
+      const consentedAt = new Date().toISOString();
+      const disclosureText = 'Synthetic controlled UAT recipient explicitly authorized for RealtyTechAI staging testing.';
+      const consent: LeadConsentDto = {};
+      if (email) {
+        const emailEvidence: ConsentEvidenceDto = {
+          affirmative: true,
+          source: 'controlled_uat',
+          consentedAt,
+          disclosureText,
+          sourceIdentifier: run.id,
+          clientAttested: true,
+        };
+        consent.email = emailEvidence;
+      }
+      if (phone) {
+        const smsEvidence: ConsentEvidenceDto = {
+          affirmative: true,
+          source: 'controlled_uat',
+          consentedAt,
+          disclosureText,
+          sourceIdentifier: run.id,
+          clientAttested: true,
+        };
+        consent.sms = smsEvidence;
+      }
+      const intakeDto = {
+        fullName: 'RealtyTechAI Controlled Test',
+        email: email || undefined,
+        phone: phone || undefined,
+        source: 'controlled_uat',
+        leadType: (['buyer', 'seller', 'renter', 'investor'] as const).includes(
+          sequence.leadType as any,
+        )
+          ? (sequence.leadType as 'buyer' | 'seller' | 'renter' | 'investor')
+          : undefined,
+        temperature: (['cold', 'warm', 'hot'] as const).includes(
+          sequence.temperature as any,
+        )
+          ? (sequence.temperature as 'cold' | 'warm' | 'hot')
+          : undefined,
+        message: `Controlled test run ${run.id}`,
+        consent,
+      } as IntakeLeadDto;
       const lead = await this.leads.intake(
         tenantId,
-        {
-          fullName: 'RealtyTechAI Controlled Test',
-          email: email || undefined,
-          phone: phone || undefined,
-          source: 'controlled_uat',
-          leadType: sequence.leadType || undefined,
-          temperature: sequence.temperature || undefined,
-          message: `Controlled test run ${run.id}`,
-          consent: {
-            sms: Boolean(phone),
-            email: Boolean(email),
-            source: 'controlled_uat',
-          },
-        } as any,
+        intakeDto,
         { source: 'controlled_uat', controlledTest: true, testRunId: run.id },
       );
       run.testLeadId = lead.id;

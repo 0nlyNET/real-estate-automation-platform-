@@ -148,9 +148,119 @@ describe('TestingService production-pipeline UAT', () => {
       expect.objectContaining({
         email: 'owner@example.com',
         phone: undefined,
-        consent: { sms: false, email: true, source: 'controlled_uat' },
+        consent: expect.objectContaining({
+          email: expect.objectContaining({
+            affirmative: true,
+            source: 'controlled_uat',
+            sourceIdentifier: 'run-email',
+            clientAttested: true,
+            disclosureText: expect.stringContaining('Synthetic controlled UAT'),
+          }),
+        }),
       }),
       expect.objectContaining({ controlledTest: true }),
     );
+    // Email-only should NOT create SMS consent
+    const consentArg = (leads.intake as jest.Mock).mock.calls[0][1].consent;
+    expect(consentArg.sms).toBeUndefined();
+    expect(consentArg.email).toBeDefined();
+  });
+
+  it('creates sufficient SMS consent for SMS-only controlled UAT', async () => {
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({ id: value.id || 'run-sms', ...value })),
+    };
+    const leads = { intake: jest.fn().mockResolvedValue({ id: 'lead-sms' }) };
+    const service = new TestingService(
+      runs as any,
+      {
+        find: jest.fn().mockResolvedValue([
+          {
+            leadType: 'buyer',
+            temperature: 'warm',
+            steps: [{ active: true, approvalStatus: 'approved', channel: 'sms' }],
+          },
+        ]),
+      } as any,
+      {
+        getOrCreate: jest.fn().mockResolvedValue({ 
+          smsEnabled: true, 
+          emailEnabled: false,
+          contacts: { controlledTestPhone: '+15550000001' },
+        }),
+        beginTesting: jest.fn(),
+      } as any,
+      leads as any,
+      { createForTenant: jest.fn() } as any,
+    );
+    await service.start('tenant-1', 'operator-1', { smsRecipient: '+15550000001' });
+    const consentArg = (leads.intake as jest.Mock).mock.calls[0][1].consent;
+    // SMS-only should create SMS consent but NOT email consent
+    expect(consentArg.sms).toMatchObject({
+      affirmative: true,
+      source: 'controlled_uat',
+      sourceIdentifier: 'run-sms',
+      clientAttested: true,
+    });
+    expect(consentArg.sms.disclosureText).toContain('Synthetic controlled UAT');
+    expect(consentArg.sms.consentedAt).toBeDefined();
+    expect(consentArg.email).toBeUndefined();
+  });
+
+  it('creates both SMS and email consent for combined controlled UAT', async () => {
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({ id: value.id || 'run-both', ...value })),
+    };
+    const leads = { intake: jest.fn().mockResolvedValue({ id: 'lead-both' }) };
+    const service = new TestingService(
+      runs as any,
+      {
+        find: jest.fn().mockResolvedValue([
+          {
+            leadType: 'buyer',
+            temperature: 'warm',
+            steps: [
+              { active: true, approvalStatus: 'approved', channel: 'sms' },
+              { active: true, approvalStatus: 'approved', channel: 'email' },
+            ],
+          },
+        ]),
+      } as any,
+      {
+        getOrCreate: jest.fn().mockResolvedValue({ 
+          smsEnabled: true, 
+          emailEnabled: true,
+          contacts: { 
+            controlledTestPhone: '+15550000001',
+            controlledTestEmail: 'owner@example.com',
+          },
+        }),
+        beginTesting: jest.fn(),
+      } as any,
+      leads as any,
+      { createForTenant: jest.fn() } as any,
+    );
+    await service.start('tenant-1', 'operator-1', { 
+      smsRecipient: '+15550000001',
+      emailRecipient: 'owner@example.com',
+    });
+    const consentArg = (leads.intake as jest.Mock).mock.calls[0][1].consent;
+    // Combined should create BOTH consents with same test run ID
+    expect(consentArg.sms).toMatchObject({
+      affirmative: true,
+      source: 'controlled_uat',
+      sourceIdentifier: 'run-both',
+      clientAttested: true,
+    });
+    expect(consentArg.email).toMatchObject({
+      affirmative: true,
+      source: 'controlled_uat',
+      sourceIdentifier: 'run-both',
+      clientAttested: true,
+    });
   });
 });
