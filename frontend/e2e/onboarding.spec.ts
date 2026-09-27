@@ -62,11 +62,10 @@ test("owner sees honest readiness, disabled testing, and a responsive workspace 
   // Operator mode enters the tenant-facing /app/* workspace (not the admin client view)
   await expect(page).toHaveURL(/\/app\/dashboard/)
   // Operator-mode banner is visible with the selected tenant name
-  // The banner has role="banner" and aria-label="Operator mode active".
+  const operatorBanner = page.getByRole("banner", { name: "Operator mode active" });
+  await expect(operatorBanner).toBeVisible();
   // Tenant name is rendered inside the banner text (not as an exact standalone
   // match), so scope the assertion to the banner and use substring matching.
-  const operatorBanner = page.locator('div[role="banner"][aria-label="Operator mode active"]');
-  await expect(operatorBanner).toBeVisible();
   await expect(operatorBanner).toContainText("Browser pending workspace");
   // Tenant-facing dashboard loads without errors
   expect(errors).toEqual([])
