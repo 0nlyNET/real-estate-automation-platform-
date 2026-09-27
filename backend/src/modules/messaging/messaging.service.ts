@@ -160,6 +160,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     skip = 0,
     ctx?: { userId?: string; role?: UserRole; scope?: 'shared' | 'mine' },
     includeMeta = false,
+    includeTest = false,
   ) {
     const tenantId = this.requireTenant(tenantIdRaw);
     const pageSize = Math.min(
@@ -172,6 +173,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       .createQueryBuilder('message')
       .leftJoinAndSelect('message.lead', 'lead')
       .where('lead.tenantId = :tenantId', { tenantId })
+      // Phase 3: exclude test/UAT conversations from the normal inbox.
+      // Test conversations remain available via includeTest=true.
+      .andWhere(includeTest ? '1=1' : 'lead.testRunId IS NULL')
       .andWhere(assignedOnly ? 'lead.assignedToUserId = :userId' : '1=1', {
         userId: ctx?.userId,
       })

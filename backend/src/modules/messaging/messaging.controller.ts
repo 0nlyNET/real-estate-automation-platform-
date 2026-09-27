@@ -45,6 +45,7 @@ export class MessagingController {
     @Query('take') take?: string,
     @Query('skip') skip?: string,
     @Query('includeMeta') includeMeta?: string,
+    @Query('includeTest') includeTest?: string,
   ) {
     const tenantId = req.user?.tenantId;
     if (!tenantId) throw new ForbiddenException('Missing tenant');
@@ -59,6 +60,7 @@ export class MessagingController {
         scope: scope === 'mine' ? 'mine' : 'shared',
       },
       includeMeta === '1' || includeMeta === 'true',
+      includeTest === 'true',
     );
     const items = Array.isArray(page) ? page : page.items;
     const leadIds = items.flatMap((item) => item.leadId ? [item.leadId] : []);

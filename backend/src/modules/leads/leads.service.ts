@@ -900,7 +900,7 @@ export class LeadsService {
   // Protected: list and get
   // -------------------------
 
-  async listLeads(params: { tenantId?: string; userId?: string; role?: UserRole; take: number; skip: number }): Promise<Lead[]> {
+  async listLeads(params: { tenantId?: string; userId?: string; role?: UserRole; take: number; skip: number; includeTest?: boolean }): Promise<Lead[]> {
     if (!params.tenantId) return [];
 
     const canSeeAll = params.role ? hasAtLeastRole(params.role, 'admin') : true;
@@ -908,6 +908,11 @@ export class LeadsService {
     if (!canSeeAll && params.userId) {
       // Agents/TCs see only leads assigned to them.
       where.assignedToUserId = params.userId;
+    }
+    // Phase 3: exclude test/UAT leads from normal views by default.
+    // Test leads remain available via includeTest=true (Test/UAT History).
+    if (!params.includeTest) {
+      where.testRunId = IsNull();
     }
 
     return this.leadsRepository.find({

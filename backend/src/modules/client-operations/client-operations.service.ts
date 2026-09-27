@@ -133,6 +133,8 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
         scopeUserId: ctx?.userId || '00000000-0000-0000-0000-000000000000',
       });
     }
+    // Phase 3: exclude test/UAT leads from Today/appointments/handoffs.
+    query.andWhere(`${leadAlias}.testRunId IS NULL`);
     return query;
   }
 

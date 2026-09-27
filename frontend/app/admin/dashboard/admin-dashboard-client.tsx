@@ -625,6 +625,8 @@ export function AdminDashboardClient({
   const [clientFilter, setClientFilter] = useState("needs_attention")
   const [leadFilter, setLeadFilter] = useState("requires_response")
   const [taskFilter, setTaskFilter] = useState("open")
+  const taskFilterRef = useRef(taskFilter)
+  taskFilterRef.current = taskFilter
   const [supportFilter, setSupportFilter] = useState("open")
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [evidence, setEvidence] = useState<Record<string, string>>({})
@@ -685,7 +687,16 @@ export function AdminDashboardClient({
           setApplications(nextApplications)
           setNotes(Object.fromEntries(nextApplications.map((item) => [item.id, item.operatorNotes || ""])))
         }
-        if (section === "tasks") setTasks(await apiFetch<OperationsTask[]>("/admin/operations?take=100"))
+        if (section === "tasks") {
+          // Phase 4: incident tasks are excluded by default (backend); the
+          // Incident history filter fetches them explicitly for evidence review.
+          const incidentOnly = taskFilterRef.current === "incident"
+          setTasks(await apiFetch<OperationsTask[]>(
+            incidentOnly
+              ? "/admin/operations?take=100&includeIncident=true&category=ai_provider_failure"
+              : "/admin/operations?take=100",
+          ))
+        }
         if (section === "support") setSupport(await apiFetch<SupportTicket[]>("/support/admin/tickets"))
         if (section === "operators") setOperators(await apiFetch<Operator[]>("/admin/operators"))
         if (section === "leadAttention")
@@ -748,6 +759,18 @@ export function AdminDashboardClient({
     inFlightSections.current.set(section, request)
     return request
   }, [])
+
+  // Phase 4: refetch tasks when switching to/from the Incident history filter,
+  // since the backend excludes incident tasks from the default response.
+  useEffect(() => {
+    if (!loadedSections.current.has("tasks")) return
+    const incidentOnly = taskFilter === "incident"
+    void apiFetch<OperationsTask[]>(
+      incidentOnly
+        ? "/admin/operations?take=100&includeIncident=true&category=ai_provider_failure"
+        : "/admin/operations?take=100",
+    ).then(setTasks).catch(() => undefined)
+  }, [taskFilter])
 
   useEffect(() => {
     const sections = [...viewDataSections[view]]
@@ -1333,7 +1356,9 @@ export function AdminDashboardClient({
     )
     .filter(
       (item) =>
-        taskFilter === "all" || (taskFilter === "open" ? item.status !== "resolved" : item.status === taskFilter),
+        taskFilter === "all" ||
+        taskFilter === "incident" ||
+        (taskFilter === "open" ? item.status !== "resolved" : item.status === taskFilter),
     )
     .sort((a, b) => {
       const priority = { critical: 4, high: 3, normal: 2, low: 1 }
@@ -2916,6 +2941,7 @@ export function AdminDashboardClient({
                   <option value="in_progress">In progress</option>
                   <option value="blocked">Blocked</option>
                   <option value="resolved">Resolved</option>
+                  <option value="incident">Incident history</option>
                 </select>
                 <OwnerFilter value={ownerFilter} operators={operators} onChange={setOwnerFilter} />
               </div>

@@ -56,6 +56,7 @@ export class LeadsController {
     @Req() req: any,
     @Query("take") take?: string,
     @Query("skip") skip?: string,
+    @Query("includeTest") includeTest?: string,
   ) {
     return this.leadsService.listLeads({
       tenantId: req.user?.tenantId,
@@ -63,6 +64,7 @@ export class LeadsController {
       role: req.user?.role,
       take: take ? parseInt(take, 10) : 50,
       skip: skip ? parseInt(skip, 10) : 0,
+      includeTest: includeTest === "true",
     });
   }
 

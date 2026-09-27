@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, IsNull, LessThan, MoreThan, Repository } from 'typeorm';
+import { FindOptionsWhere, In, IsNull, LessThan, MoreThan, Not, Repository } from 'typeorm';
 import { OperationsTask } from './operations-task.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlatformOperatorsService } from '../../common/platform-operators.service';
@@ -206,6 +206,7 @@ export class OperationsService {
     overdue?: boolean;
     take?: number;
     skip?: number;
+    includeIncident?: boolean;
   }) {
     const where: FindOptionsWhere<OperationsTask> = {};
     if (filters.status) where.status = filters.status as OperationsTask['status'];
@@ -213,6 +214,12 @@ export class OperationsService {
     if (filters.tenantId) where.tenantId = filters.tenantId;
     if (filters.priority)
       where.priority = filters.priority as OperationsTask['priority'];
+    // Phase 4: collapse the ~100 ai_provider_failure incident tasks from the
+    // default view. They remain in the database untouched and are visible via
+    // includeIncident=true (Incident history filter).
+    if (!filters.includeIncident && !filters.category) {
+      where.category = Not('ai_provider_failure');
+    }
     if (filters.overdue) {
       where.dueAt = LessThan(new Date());
       if (!filters.status) where.status = 'open';
