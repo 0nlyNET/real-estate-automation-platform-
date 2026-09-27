@@ -1,5 +1,5 @@
 import { SequencesModule } from "../sequences/sequences.module";
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 
 import { Lead } from "./lead.entity";
@@ -19,6 +19,7 @@ import { RoutingModule } from "../routing/routing.module";
 import { SettingsModule } from "../settings/settings.module";
 import { ComplianceModule } from "../compliance/compliance.module";
 import { LeadStageEvent } from "./lead-stage-event.entity";
+import { AiModule } from "../ai/ai.module";
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { LeadStageEvent } from "./lead-stage-event.entity";
     RoutingModule,
     SettingsModule,
     ComplianceModule,
+    forwardRef(() => AiModule),
   ],
   controllers: [LeadsController],
   providers: [LeadsService],
