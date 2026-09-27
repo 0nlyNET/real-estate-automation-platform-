@@ -137,3 +137,13 @@ export class SetTwilioComplianceDto {
   @Matches(/^[A-Za-z0-9_-]+$/)
   campaignSid?: string;
 }
+
+export class ConsentReviewDto {
+  @IsIn(['approve', 'reject'])
+  decision!: 'approve' | 'reject';
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 2000)
+  notes?: string;
+}

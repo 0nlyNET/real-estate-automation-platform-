@@ -455,6 +455,99 @@ export class OnboardingService {
     return saved;
   }
 
+  /**
+   * Explicit operator Review → Approve / Reject workflow for consent evidence.
+   * The client provides disclosure evidence; a RealtyTechAI operator reviews it
+   * and records the decision. Approval sets consentPolicyAcknowledgedAt (the
+   * readiness gate). Rejection clears it and records the reason so the client
+   * knows what to fix. Every decision is timestamped, attributed, and audited.
+   */
+  async reviewConsent(
+    tenantId: string,
+    decision: 'approve' | 'reject',
+    notes: string | undefined,
+    operator: { userId: string; email: string },
+  ) {
+    const record = await this.getOrCreate(tenantId);
+    const config = record.consentConfiguration || {};
+
+    // Verify the client actually provided complete evidence before approval.
+    // This must match the full readiness evaluator requirement.
+    const evidenceComplete =
+      Boolean(String(config.exactConsentLanguage || '').trim()) &&
+      Boolean(String(config.consentCollectionMethod || '').trim()) &&
+      Boolean(String(config.sourceOwnership || '').trim()) &&
+      Boolean(String(config.optOutProcess || '').trim()) &&
+      Boolean(String(config.consentPolicyVersion || '').trim()) &&
+      Boolean(String(config.termsAcceptedVersion || '').trim()) &&
+      Boolean(String(config.privacyAcceptedVersion || '').trim()) &&
+      Boolean(String(config.acceptableUseAcceptedVersion || '').trim()) &&
+      Boolean(String(config.dataRetentionAcceptedVersion || '').trim()) &&
+      config.purchasedOrColdListsExcluded === true &&
+      config.clientResponsibilityAcknowledged === true &&
+      config.lawfulLeadCollectionCertified === true;
+
+    if (decision === 'approve' && !evidenceComplete) {
+      throw new BadRequestException(
+        'Consent evidence is incomplete. The client must provide all required disclosure evidence before operator approval.',
+      );
+    }
+    if (decision === 'reject' && !String(notes || '').trim()) {
+      throw new BadRequestException(
+        'A rejection reason is required so the client knows what to fix.',
+      );
+    }
+
+    const now = new Date();
+    // Scope: tenant-wide for this email-only rehearsal. The consent evidence
+    // covers all messaging channels the tenant is approved for.
+    const scope = 'tenant-wide';
+    const verifiedItems = {
+      ...(record.verifiedItems || {}),
+      consent_policy: {
+        verifiedAt: now.toISOString(),
+        verifiedBy: operator.email,
+        verifiedByUserId: operator.userId,
+        decision,
+        scope,
+        notes: String(notes || '').trim() || null,
+      },
+    };
+
+    const result = await this.recordOperatorEvidence(
+      tenantId,
+      {
+        consentPolicyAcknowledgedAt:
+          decision === 'approve' ? now.toISOString() : null,
+        verifiedItems,
+      },
+      operator.userId,
+    );
+
+    // Write an explicit audit record for the consent decision.
+    await this.audit?.record({
+      tenantId,
+      actorId: operator.userId,
+      actorType: 'user',
+      actorEmail: operator.email,
+      action: decision === 'approve' ? 'consent.approved' : 'consent.rejected',
+      eventType: decision === 'approve' ? 'consent.approved' : 'consent.rejected',
+      resourceType: 'onboarding_consent',
+      resourceId: tenantId,
+      method: 'POST',
+      path: `/admin/tenants/${tenantId}/consent-review`,
+      statusCode: 200,
+      metadata: {
+        decision,
+        scope,
+        notes: String(notes || '').trim() || null,
+        reviewedAt: now.toISOString(),
+      },
+    });
+
+    return result;
+  }
+
   async recordAutomatedTestEvidence(
     tenantId: string,
     evidence: {

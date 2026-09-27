@@ -1207,3 +1207,143 @@ describe('operator pause/resume control', () => {
     expect(recordState.activationStatus).toBe('paused');
   });
 });
+
+describe('operator consent review (Review → Approve / Reject)', () => {
+  const completeEvidence = {
+    exactConsentLanguage: 'I consent to receive marketing messages.',
+    consentCollectionMethod: 'Website form checkbox',
+    sourceOwnership: 'Client owns the lead list',
+    optOutProcess: 'Reply STOP to opt out',
+    consentPolicyVersion: 'v1.0',
+    termsAcceptedVersion: '2026-08-11',
+    privacyAcceptedVersion: '2026-08-11',
+    acceptableUseAcceptedVersion: '2026-08-11',
+    dataRetentionAcceptedVersion: '2026-08-11',
+    purchasedOrColdListsExcluded: true,
+    clientResponsibilityAcknowledged: true,
+    lawfulLeadCollectionCertified: true,
+  };
+
+  function buildService(consentConfiguration: any, existingAcknowledgedAt: Date | null = null) {
+    const recordState: any = {
+      tenantId: 'tenant-1',
+      consentConfiguration,
+      consentPolicyAcknowledgedAt: existingAcknowledgedAt,
+      verifiedItems: {},
+      providerTests: {},
+    };
+    const records = {
+      findOne: jest.fn().mockResolvedValue(recordState),
+      create: jest.fn((value: any) => ({ ...value })),
+      save: jest.fn(async (value: any) => value),
+    };
+    const audit = {
+      record: jest.fn().mockResolvedValue({}),
+    };
+    const service = new OnboardingService(
+      records as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      audit as any,
+    );
+    return { service, recordState, audit };
+  }
+
+  it('approves when client evidence is complete: timestamps, attributes, scope, and audits', async () => {
+    const { service, recordState, audit } = buildService({ ...completeEvidence });
+    const operator = { userId: 'op-1', email: 'jayden@realtytechai.app' };
+
+    await service.reviewConsent('tenant-1', 'approve', 'Evidence looks good.', operator);
+
+    expect(recordState.consentPolicyAcknowledgedAt).toBeInstanceOf(Date);
+    const evidence = recordState.verifiedItems.consent_policy;
+    expect(evidence.decision).toBe('approve');
+    expect(evidence.verifiedBy).toBe('jayden@realtytechai.app');
+    expect(evidence.verifiedByUserId).toBe('op-1');
+    expect(evidence.scope).toBe('tenant-wide');
+    expect(evidence.notes).toBe('Evidence looks good.');
+    expect(evidence.verifiedAt).toBeTruthy();
+    // Audit record written with decision, scope, operator identity.
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        actorId: 'op-1',
+        actorEmail: 'jayden@realtytechai.app',
+        action: 'consent.approved',
+        resourceType: 'onboarding_consent',
+        metadata: expect.objectContaining({
+          decision: 'approve',
+          scope: 'tenant-wide',
+        }),
+      }),
+    );
+  });
+
+  it('refuses approval when policy version fields are missing', async () => {
+    const { termsAcceptedVersion, privacyAcceptedVersion, ...partial } = completeEvidence;
+    const { service } = buildService(partial);
+    const operator = { userId: 'op-1', email: 'jayden@realtytechai.app' };
+
+    await expect(
+      service.reviewConsent('tenant-1', 'approve', undefined, operator),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('writes an audit record on rejection', async () => {
+    const { service, audit } = buildService({ ...completeEvidence });
+    const operator = { userId: 'op-1', email: 'jayden@realtytechai.app' };
+
+    await service.reviewConsent('tenant-1', 'reject', 'Missing opt-out details.', operator);
+
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'consent.rejected',
+        metadata: expect.objectContaining({
+          decision: 'reject',
+          scope: 'tenant-wide',
+          notes: 'Missing opt-out details.',
+        }),
+      }),
+    );
+  });
+
+  it('refuses approval when client evidence is incomplete', async () => {
+    const { service } = buildService({ exactConsentLanguage: 'partial' });
+    const operator = { userId: 'op-1', email: 'jayden@realtytechai.app' };
+
+    await expect(
+      service.reviewConsent('tenant-1', 'approve', undefined, operator),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects with a reason: clears acknowledgment and records rejection', async () => {
+    const { service, recordState } = buildService(
+      { ...completeEvidence },
+      new Date('2026-09-26T00:00:00Z'),
+    );
+    const operator = { userId: 'op-1', email: 'jayden@realtytechai.app' };
+
+    await service.reviewConsent('tenant-1', 'reject', 'Missing opt-out details on the form.', operator);
+
+    expect(recordState.consentPolicyAcknowledgedAt).toBeNull();
+    const evidence = recordState.verifiedItems.consent_policy;
+    expect(evidence.decision).toBe('reject');
+    expect(evidence.verifiedBy).toBe('jayden@realtytechai.app');
+    expect(evidence.notes).toBe('Missing opt-out details on the form.');
+  });
+
+  it('refuses rejection without a reason so the client knows what to fix', async () => {
+    const { service } = buildService({ ...completeEvidence });
+    const operator = { userId: 'op-1', email: 'jayden@realtytechai.app' };
+
+    await expect(
+      service.reviewConsent('tenant-1', 'reject', '   ', operator),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});

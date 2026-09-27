@@ -24,6 +24,7 @@ import { PlatformAdminGuard } from '../../common/guards/platform-admin.guard';
 import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
 import {
   AssignClientDto,
+  ConsentReviewDto,
   CreateClientDto,
   ImpersonateDto,
   SetPlatformStaffDto,
@@ -96,6 +97,34 @@ export class AdminController {
   @Get('tenants/:tenantId/readiness')
   readiness(@Param('tenantId') tenantId: string) {
     return this.onboarding.readiness(tenantId);
+  }
+
+  @Get('tenants/:tenantId/onboarding-record')
+  async onboardingRecord(@Param('tenantId') tenantId: string) {
+    const record = await this.onboarding.getOrCreate(tenantId);
+    return {
+      tenantId: record.tenantId,
+      consentConfiguration: record.consentConfiguration || {},
+      consentPolicyAcknowledgedAt: record.consentPolicyAcknowledgedAt || null,
+      verifiedItems: record.verifiedItems || {},
+      businessIdentity: record.businessIdentity || {},
+      contacts: record.contacts || {},
+    };
+  }
+
+  @Post('tenants/:tenantId/consent-review')
+  @UseGuards(PlatformAdminGuard)
+  async consentReview(
+    @Param('tenantId') tenantId: string,
+    @Body() body: ConsentReviewDto,
+    @Req() req: any,
+  ) {
+    return this.onboarding.reviewConsent(
+      tenantId,
+      body.decision,
+      body.notes,
+      { userId: req.user?.sub, email: req.user?.email },
+    );
   }
 
   @Get('tenants/:tenantId/usage-policy')
