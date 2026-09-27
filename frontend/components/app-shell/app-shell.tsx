@@ -8,7 +8,6 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { apiFetch } from "@/lib/api"
 import { ImpersonationBanner } from './impersonation-banner'
-import { OperatorModeBanner } from './operator-mode-banner'
 import { Bot, CalendarDays, Inbox, LayoutDashboard, Plug, Users } from "lucide-react"
 
 const mobileNavItems = [
@@ -76,7 +75,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <ImpersonationBanner />
-        <OperatorModeBanner />
 
         {(serviceAttention || canceling) && (
           <div className={`border-b px-4 py-3 ${suspended ? "border-red-500/30 bg-red-500/10" : "bg-muted/50"}`}>
