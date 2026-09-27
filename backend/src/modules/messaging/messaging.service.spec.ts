@@ -365,6 +365,8 @@ describe('outbound message worker safety', () => {
     const query = {
       andWhere: jest.fn().mockReturnThis(),
       leftJoin: jest.fn().mockReturnThis(),
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
       select: jest.fn().mockReturnThis(),
       addSelect: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),

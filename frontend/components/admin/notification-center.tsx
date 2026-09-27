@@ -184,8 +184,7 @@ export function NotificationCenter({ audience = "admin" }: { audience?: "admin" 
         <div className="space-y-3 border-t p-4">
           {/* Device push is disabled product-wide: notifications are email + in-app only.
               The backend push infrastructure remains for now; only the customer-facing
-              push UI (connect device, phone alerts, device check, VAPID status,
-              subscriptions, push categories, quiet hours) is hidden. */}
+              push controls are hidden. */}
           {preferences ? (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3 rounded-md bg-muted p-3">
