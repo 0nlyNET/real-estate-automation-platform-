@@ -41,6 +41,8 @@ describe('TestingService production-pipeline UAT', () => {
     const service = new TestingService(
       runs as any,
       sequences as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
       onboarding as any,
       leads as any,
       notifications as any,
@@ -98,6 +100,8 @@ describe('TestingService production-pipeline UAT', () => {
     const service = new TestingService(
       runs as any,
       sequences as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
       {
         getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: true, emailEnabled: false }),
         beginTesting: jest.fn(),
@@ -133,7 +137,9 @@ describe('TestingService production-pipeline UAT', () => {
             steps: [{ active: true, approvalStatus: 'approved', channel: 'email' }],
           },
         ]),
-      } as any,
+      } as any,      { count: jest.fn().mockResolvedValue(0) } as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+
       {
         getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: false, emailEnabled: true }),
         beginTesting: jest.fn(),
@@ -184,7 +190,9 @@ describe('TestingService production-pipeline UAT', () => {
             steps: [{ active: true, approvalStatus: 'approved', channel: 'sms' }],
           },
         ]),
-      } as any,
+      } as any,      { count: jest.fn().mockResolvedValue(0) } as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+
       {
         getOrCreate: jest.fn().mockResolvedValue({ 
           smsEnabled: true, 
@@ -230,7 +238,9 @@ describe('TestingService production-pipeline UAT', () => {
             ],
           },
         ]),
-      } as any,
+      } as any,      { count: jest.fn().mockResolvedValue(0) } as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+
       {
         getOrCreate: jest.fn().mockResolvedValue({ 
           smsEnabled: true, 
@@ -313,7 +323,9 @@ describe('TestingService production-pipeline UAT', () => {
             steps: [{ active: true, approvalStatus: 'approved', channel: 'email' }],
           },
         ]),
-      } as any,
+      } as any,      { count: jest.fn().mockResolvedValue(0) } as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+
       {
         getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: false, emailEnabled: true }),
         beginTesting: jest.fn(),
@@ -371,5 +383,104 @@ describe('TestingService production-pipeline UAT', () => {
       'email',
     );
     expect(result).toMatchObject({ allowed: true });
+  });
+
+  it('expires a stuck run and starts a fresh one', async () => {
+    const oldDate = new Date(Date.now() - 20 * 60_000);
+    const stuckRun = {
+      id: 'run-stuck',
+      tenantId: 'tenant-1',
+      status: 'running',
+      createdAt: oldDate,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60_000),
+      testLeadId: 'lead-stuck',
+      checks: { intake: 'passed', outbound: 'awaiting_provider_callbacks' },
+      failureReason: null,
+    };
+    const savedRuns: any[] = [];
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(stuckRun),
+      create: jest.fn((value: any) => value),
+      save: jest.fn(async (value: any) => {
+        savedRuns.push({ ...value });
+        if (!value.id) value.id = 'run-fresh';
+        return value;
+      }),
+    };
+    const enrollments = { count: jest.fn().mockResolvedValue(0) };
+    const aiRuns = { count: jest.fn().mockResolvedValue(0) };
+    const onboarding = {
+      getOrCreate: jest.fn().mockResolvedValue({
+        smsEnabled: false,
+        emailEnabled: true,
+        contacts: { controlledTestEmail: 'owner@example.com' },
+      }),
+      beginTesting: jest.fn().mockResolvedValue({ lifecycleStatus: 'TESTING' }),
+    };
+    const leads = { intake: jest.fn().mockResolvedValue({ id: 'lead-fresh' }) };
+    const notifications = { createForTenant: jest.fn().mockResolvedValue({}) };
+    const sequences = {
+      find: jest.fn().mockResolvedValue([
+        {
+          leadType: 'buyer',
+          temperature: 'warm',
+          steps: [{ active: true, approvalStatus: 'approved', channel: 'email' }],
+        },
+      ]),
+    };
+    const service = new TestingService(
+      runs as any,
+      sequences as any,
+      enrollments as any,
+      aiRuns as any,
+      onboarding as any,
+      leads as any,
+      notifications as any,
+    );
+    const result = await service.start('tenant-1', 'operator-1', {});
+    // The stuck run must have been expired...
+    expect(savedRuns[0]).toMatchObject({ id: 'run-stuck', status: 'expired' });
+    // ...and a fresh run created with a new lead intake.
+    expect(leads.intake).toHaveBeenCalled();
+    expect(result.id).toBe('run-fresh');
+  });
+
+  it('returns the existing run when it is not stuck', async () => {
+    const recentDate = new Date(Date.now() - 2 * 60_000);
+    const healthyRun = {
+      id: 'run-healthy',
+      tenantId: 'tenant-1',
+      status: 'running',
+      createdAt: recentDate,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60_000),
+      testLeadId: 'lead-healthy',
+      checks: { intake: 'passed', outbound: 'awaiting_provider_callbacks' },
+      failureReason: null,
+    };
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(healthyRun),
+      create: jest.fn((v: any) => v),
+      save: jest.fn(async (v: any) => v),
+    };
+    const enrollments = { count: jest.fn().mockResolvedValue(0) };
+    const aiRuns = { count: jest.fn().mockResolvedValue(1) };
+    const onboarding = {
+      getOrCreate: jest.fn().mockResolvedValue({
+        smsEnabled: false,
+        emailEnabled: true,
+        contacts: { controlledTestEmail: 'owner@example.com' },
+      }),
+    };
+    const service = new TestingService(
+      runs as any,
+      { find: jest.fn() } as any,
+      enrollments as any,
+      aiRuns as any,
+      onboarding as any,
+      { intake: jest.fn() } as any,
+      {} as any,
+    );
+    const result = await service.start('tenant-1', 'operator-1', {});
+    expect(result.id).toBe('run-healthy');
   });
 });
