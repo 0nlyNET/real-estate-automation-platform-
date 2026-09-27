@@ -61,7 +61,7 @@ test("owner sees honest readiness, disabled testing, and a responsive workspace 
     .click()
   // Operator mode enters the tenant-facing /app/* workspace (not the admin client view)
   await expect(page).toHaveURL(/\/app\/dashboard/)
-  // Operator-mode banner is visible with the selected tenant name (re-run)
+  // Operator-mode banner is visible with the selected tenant name
   const operatorBanner = page.getByRole("banner", { name: "Operator mode active" });
   await expect(operatorBanner).toBeVisible();
   // Tenant name is rendered inside the banner text (not as an exact standalone
