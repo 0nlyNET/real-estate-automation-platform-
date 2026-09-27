@@ -28,6 +28,10 @@ import { Observable } from 'rxjs';
  *  - /public/*  (public endpoints)
  *  - /health*   (health checks)
  *  - /me, /me/* (returns operatorTenantRequired so the UI can fail closed too)
+ *  - /support/admin/* (platform-admin support ticket management; guarded by
+ *    JwtAuthGuard + PlatformOperatorGuard. Tenant-facing /support/* routes
+ *    such as /support/contact, /support/cancellation-request and
+ *    /support/deletion-request remain tenant-scoped and are NOT allowlisted.)
  */
 const OPERATOR_ALLOWLIST: RegExp[] = [
   /^\/admin(\/|$)/,
@@ -35,6 +39,7 @@ const OPERATOR_ALLOWLIST: RegExp[] = [
   /^\/public(\/|$)/,
   /^\/health(\/|$)/,
   /^\/me(\/|$)/,
+  /^\/support\/admin(\/|$)/,
 ];
 
 export const OPERATOR_TENANT_REQUIRED_CODE = 'OPERATOR_TENANT_REQUIRED';
