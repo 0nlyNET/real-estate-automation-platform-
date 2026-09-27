@@ -307,6 +307,8 @@ export class AdminService {
         .where('lead.stage NOT IN (:...finished)', {
           finished: ['closed', 'lost'],
         })
+        // Phase 3: exclude test/UAT leads from admin attention views.
+        .andWhere('lead.testRunId IS NULL')
         .andWhere(
           '(lead.stage = :newStage OR lead.temperature = :hot OR lead.readinessLevel = :urgent)',
           { newStage: 'new', hot: 'hot', urgent: 'urgent' },

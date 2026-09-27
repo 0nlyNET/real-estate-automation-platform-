@@ -26,6 +26,7 @@ export class OperationsController {
     @Query('overdue') overdue?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('includeIncident') includeIncident?: string,
   ) {
     return this.operations.list({
       status,
@@ -35,6 +36,7 @@ export class OperationsController {
       overdue: overdue === 'true',
       take: Number(take || 50),
       skip: Number(skip || 0),
+      includeIncident: includeIncident === 'true',
     });
   }
 
