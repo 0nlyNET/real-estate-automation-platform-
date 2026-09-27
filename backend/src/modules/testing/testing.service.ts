@@ -8,6 +8,8 @@ import { OnboardingService } from '../onboarding/onboarding.service';
 import { TestRun } from './test-run.entity';
 import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 import { Sequence } from '../sequences/sequence.entity';
+import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
+import { AiRun } from '../ai/ai-run.entity';
 import { LeadConsentDto, ConsentEvidenceDto } from '../compliance/consent.dto';
 import { IntakeLeadDto } from '../leads/dto/intake-lead.dto';
 
@@ -38,6 +40,10 @@ export class TestingService implements OnModuleInit {
     private readonly runs: Repository<TestRun>,
     @InjectRepository(Sequence)
     private readonly sequences: Repository<Sequence>,
+    @InjectRepository(SequenceEnrollment)
+    private readonly enrollments: Repository<SequenceEnrollment>,
+    @InjectRepository(AiRun)
+    private readonly aiRuns: Repository<AiRun>,
     private readonly onboarding: OnboardingService,
     private readonly leads: LeadsService,
     private readonly notifications: NotificationsService,
@@ -79,11 +85,22 @@ export class TestingService implements OnModuleInit {
       where: { tenantId, status: 'running' },
       order: { createdAt: 'DESC' },
     });
-    if (existing && existing.expiresAt.getTime() > Date.now()) return existing;
     if (existing) {
+      // A 'running' test run whose intake-time automation decision is final
+      // and which can never complete (no AI run was queued, no outbound was
+      // delivered, no active sequence enrollment remains) would otherwise
+      // block retries for 24h. Detect it as stuck, expire it, and start fresh.
+      // This covers the operator sending the test lead before the AI
+      // configuration is approved: intake correctly fail-closes (no AI run),
+      // but the run must be retryable once AI is approved.
+      if (existing.expiresAt.getTime() > Date.now() && !(await this.isStuckRun(existing))) {
+        return existing;
+      }
       existing.status = 'expired';
       existing.completedAt = new Date();
-      existing.failureReason = 'Controlled test run expired before completion';
+      if (!existing.failureReason) {
+        existing.failureReason = 'Controlled test run expired before completion';
+      }
       await this.runs.save(existing);
     }
     const sequence = (await this.sequences.find({
@@ -210,6 +227,34 @@ export class TestingService implements OnModuleInit {
       await this.runs.save(run);
       throw error;
     }
+  }
+
+  /**
+   * True when a 'running' test run can never complete and is safe to replace.
+   * The intake-time automation decision is final: if no AI run was queued for
+   * the test lead, none ever will be. The run is stuck when, after a grace
+   * period for the sequence fallback to fire, there is still no AI run, no
+   * delivered outbound, and no active sequence enrollment for the test lead.
+   */
+  private async isStuckRun(run: TestRun): Promise<boolean> {
+    const STUCK_AFTER_MS = 10 * 60_000;
+    if (Date.now() - run.createdAt.getTime() < STUCK_AFTER_MS) return false;
+    const checks = (run.checks || {}) as Record<string, unknown>;
+    if (checks.outbound === 'delivered') return false;
+    if (!run.testLeadId) return true;
+    const [aiRunCount, activeEnrollments] = await Promise.all([
+      this.aiRuns.count({
+        where: { tenantId: run.tenantId, leadId: run.testLeadId },
+      }),
+      this.enrollments.count({
+        where: {
+          tenantId: run.tenantId,
+          leadId: run.testLeadId,
+          status: 'active',
+        },
+      }),
+    ]);
+    return aiRunCount === 0 && activeEnrollments === 0;
   }
 
   list(tenantId: string) {
