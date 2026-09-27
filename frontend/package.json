@@ -9,7 +9,7 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
-    "test": "node scripts/verify-client-readiness.mjs && node scripts/verify-admin-routing.mjs && node scripts/verify-assistant-workflows.mjs && node scripts/verify-security-boundaries.mjs && node scripts/verify-first-client.mjs && node scripts/verify-session-navigation.mjs && node scripts/verify-onboarding-workspace.mjs",
+    "test": "node scripts/verify-client-readiness.mjs && node scripts/verify-admin-routing.mjs && node scripts/verify-assistant-workflows.mjs && node scripts/verify-security-boundaries.mjs && node scripts/verify-first-client.mjs && node scripts/verify-session-navigation.mjs && node scripts/verify-onboarding-workspace.mjs && node scripts/verify-managed-sendgrid-assign.mjs",
     "test:e2e": "playwright test --project=desktop && playwright test --project=mobile",
     "start": "next start"
   },
