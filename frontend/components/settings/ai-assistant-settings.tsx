@@ -99,6 +99,7 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
+  const [confirmingAutopilot, setConfirmingAutopilot] = useState(false)
 
   const load = useCallback(async () => {
     const next = await apiFetch<AiConfiguration>("/ai/settings")
@@ -166,14 +167,18 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
 
   function saveSettings() {
     const controlled = mode === "controlled_autopilot"
-    if (
-      controlled &&
-      !window.confirm(
-        "Save controlled autopilot mode? It cannot be enabled until the configuration and business information are separately approved.",
-      )
-    ) {
+    if (controlled) {
+      // Show inline confirmation dialog instead of window.confirm() (which is
+      // auto-dismissed in automated browsers and provides poor UX)
+      setConfirmingAutopilot(true)
       return
     }
+    doSaveSettings()
+  }
+
+  function doSaveSettings() {
+    const controlled = mode === "controlled_autopilot"
+    setConfirmingAutopilot(false)
     void action(
       "settings",
       "/ai/settings",
@@ -630,6 +635,28 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
           </div>
         </section>
       </CardContent>
+      {confirmingAutopilot ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>Save controlled autopilot mode?</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                It cannot be enabled until the configuration and business information are separately approved.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setConfirmingAutopilot(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={doSaveSettings}>
+                  Confirm save
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
     </Card>
   )
 }
