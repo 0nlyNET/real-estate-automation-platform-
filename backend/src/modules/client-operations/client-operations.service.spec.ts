@@ -248,4 +248,29 @@ describe('ClientOperationsService', () => {
     );
     expect(invalidLimit.actions).toHaveLength(8);
   });
+
+  it('excludes test handoffs from the normal admin handoff queue by default', async () => {
+    const { service, handoffs } = workflowHarness();
+    const tenantId = '20000000-0000-4000-8000-000000000001';
+
+    await service.listHandoffsForAdmin({ tenantId });
+
+    const builder = handoffs.createQueryBuilder.mock.results[0].value;
+    const andWhereSql = builder.andWhere.mock.calls.map((call: any[]) => call[0]);
+    expect(andWhereSql.some((sql: string) => sql.includes('lead.testRunId IS NULL'))).toBe(true);
+    expect(
+      andWhereSql.some((sql: string) => sql.includes('handoff.tenantId = :tenantId')),
+    ).toBe(true);
+  });
+
+  it('restores test handoffs in the admin handoff queue when includeTest=true', async () => {
+    const { service, handoffs } = workflowHarness();
+    const tenantId = '20000000-0000-4000-8000-000000000001';
+
+    await service.listHandoffsForAdmin({ tenantId, includeTest: true });
+
+    const builder = handoffs.createQueryBuilder.mock.results[0].value;
+    const andWhereSql = builder.andWhere.mock.calls.map((call: any[]) => call[0]);
+    expect(andWhereSql.some((sql: string) => sql.includes('lead.testRunId IS NULL'))).toBe(false);
+  });
 });
