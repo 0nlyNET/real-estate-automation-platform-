@@ -63,7 +63,7 @@ test("owner sees honest readiness, disabled testing, and a responsive workspace 
   await expect(page).toHaveURL(/\/app\/dashboard/)
   // Operator-mode banner is visible with the selected tenant name
   await expect(
-    page.getByLabel("Operator mode active", { exact: true }),
+    page.getByRole("banner", { name: "Operator mode active" }),
   ).toBeVisible()
   await expect(
     page.getByText("Browser pending workspace", { exact: true }).first(),
