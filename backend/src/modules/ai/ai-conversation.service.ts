@@ -121,6 +121,14 @@ export class AiConversationService
   ) {}
 
   onModuleInit() {
+    // Worker lifecycle observability: prove the worker timer is registered.
+    this.logger.log(
+      JSON.stringify({
+        event: 'AI_WORKER_INIT',
+        nodeEnv: process.env.NODE_ENV,
+        willStartTimer: process.env.NODE_ENV !== 'test',
+      }),
+    );
     if (process.env.NODE_ENV === 'test') return;
     this.workerTimer = setInterval(() => {
       void this.tickWorker();
