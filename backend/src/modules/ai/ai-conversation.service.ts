@@ -83,6 +83,7 @@ export class AiConversationService
   private readonly workerId = `ai-${process.env.HOSTNAME || process.pid}`;
   private workerTimer?: NodeJS.Timeout;
   private workerRunning = false;
+  private lastPauseLogAt?: number;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -429,12 +430,37 @@ export class AiConversationService
     // global automations kill-switch) BEFORE doing any recovery or claim
     // work. Previously recoverExhaustedRuns() ran unconditionally every
     // tick, so a paused platform still minted tasks/notifications.
-    if (await this.isWorkerPaused()) {
+    const paused = await this.isWorkerPaused();
+    // Worker observability: log pause state and claim results so we can
+    // prove whether the worker is polling and why runs aren't claimed.
+    if (paused) {
+      // Throttle: log pause state once per minute, not every 3s tick.
+      const now = Date.now();
+      if (!this.lastPauseLogAt || now - this.lastPauseLogAt > 60_000) {
+        this.lastPauseLogAt = now;
+        this.logger.warn(
+          JSON.stringify({
+            event: 'AI_WORKER_PAUSED',
+            reason: 'isWorkerPaused=true',
+            globalAutomationsDisabled: process.env.GLOBAL_AUTOMATIONS_DISABLED,
+          }),
+        );
+      }
       return { claimed: 0, recovered: 0, paused: true as const };
     }
     const boundedLimit = Math.min(Math.max(limit, 1), 50);
     const recovered = await this.recoverExhaustedRuns(boundedLimit);
     const ids = await this.claimRuns(boundedLimit);
+    if (ids.length > 0) {
+      this.logger.log(
+        JSON.stringify({
+          event: 'AI_WORKER_CLAIMED',
+          claimedCount: ids.length,
+          claimedIds: ids,
+          recovered,
+        }),
+      );
+    }
     for (const id of ids) {
       await this.processRun(id);
     }
