@@ -437,11 +437,15 @@ export class AiConversationService
   }
 
   async processPendingRuns(limit = 10) {
+    // Diagnostic: trace exact hang point
+    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'enter_processPendingRuns' }));
     // Fix A: the worker must honor the platform emergency pause (and the
     // global automations kill-switch) BEFORE doing any recovery or claim
     // work. Previously recoverExhaustedRuns() ran unconditionally every
     // tick, so a paused platform still minted tasks/notifications.
+    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'before_isWorkerPaused' }));
     const paused = await this.isWorkerPaused();
+    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'after_isWorkerPaused', paused }));
     // Worker observability: log pause state and claim results so we can
     // prove whether the worker is polling and why runs aren't claimed.
     if (paused) {
