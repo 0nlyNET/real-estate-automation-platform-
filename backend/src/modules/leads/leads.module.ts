@@ -1,5 +1,5 @@
 import { SequencesModule } from "../sequences/sequences.module";
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 
 import { Lead } from "./lead.entity";
@@ -33,7 +33,7 @@ import { AiModule } from "../ai/ai.module";
     RoutingModule,
     SettingsModule,
     ComplianceModule,
-    AiModule,
+    forwardRef(() => AiModule),
   ],
   controllers: [LeadsController],
   providers: [LeadsService],

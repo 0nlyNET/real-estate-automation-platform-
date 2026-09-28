@@ -289,7 +289,21 @@ export class AiConversationService
         triggerType: 'first_response',
       };
       const preflight = await this.preflight(aiEvent);
-      if (!preflight.allowed) continue;
+      if (!preflight.allowed) {
+        // Diagnostic: log preflight denial so silent skips are observable.
+        // Controlled UAT runs were silently skipping AI with no ai_run created.
+        this.logger.warn(
+          operationalEvent('ai_preflight_denied', {
+            tenantId: event.tenantId,
+            leadId: event.leadId,
+            channel,
+            code: preflight.code,
+            reason: preflight.reason,
+            triggerType: 'first_response',
+          }),
+        );
+        continue;
+      }
       const run = await this.createRun(aiEvent, settings.responseMode, 'queued');
       return run
         ? { status: 'queued' as const, runId: run.id, channel }
