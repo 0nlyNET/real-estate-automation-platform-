@@ -485,6 +485,8 @@ export class AiConversationService
             lockedAt: diagRun.lockedAt?.toISOString() || null,
             lockedBy: diagRun.lockedBy || null,
             createdAt: diagRun.createdAt?.toISOString() || null,
+            errorCode: diagRun.errorCode || null,
+            sanitizedError: diagRun.sanitizedError?.slice(0, 200) || null,
             maxAttempts: MAX_AI_RUN_ATTEMPTS,
             leaseSeconds: AI_RUN_LEASE_SECONDS,
           }),
