@@ -82,6 +82,88 @@ describe('TestingService production-pipeline UAT', () => {
     expect(result.isNew).toBe(true);
   });
 
+  it('abortTestRun expires the run and cancels claimable outbound messages', async () => {
+    const run = {
+      id: 'run-abort',
+      tenantId: 'tenant-1',
+      status: 'running',
+      testLeadId: 'lead-abort',
+      failureReason: null,
+      completedAt: null,
+    };
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(run),
+      save: jest.fn(async (v: any) => v),
+    };
+    const queuedMsg = {
+      id: 'msg-queued',
+      status: 'queued',
+      direction: 'outbound',
+    };
+    const sentMsg = {
+      id: 'msg-sent',
+      status: 'sent',
+      direction: 'outbound',
+    };
+    const savedMessages: any[] = [];
+    const messages = {
+      find: jest.fn().mockResolvedValue([queuedMsg, sentMsg]),
+      findOne: jest.fn().mockResolvedValue(null),
+      save: jest.fn(async (v: any) => {
+        savedMessages.push({ ...v });
+        return v;
+      }),
+    };
+    const service = new TestingService(
+      runs as any,
+      {} as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+      messages as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    const result = await service.abortTestRun('tenant-1', 'run-abort', 'superseded_after_quiet_hours_fix_pr115');
+    expect(result.alreadyTerminal).toBe(false);
+    expect(result.status).toBe('expired');
+    expect(result.canceledMessages).toEqual(['msg-queued']);
+    expect(queuedMsg.status).toBe('canceled');
+    expect(sentMsg.status).toBe('sent');
+    expect(run.failureReason).toBe('superseded_after_quiet_hours_fix_pr115');
+    expect(run.completedAt).toBeInstanceOf(Date);
+  });
+
+  it('abortTestRun is idempotent for already-terminal runs', async () => {
+    const run = {
+      id: 'run-done',
+      tenantId: 'tenant-1',
+      status: 'expired',
+      testLeadId: 'lead-done',
+    };
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(run),
+      save: jest.fn(async (v: any) => v),
+    };
+    const messages = {
+      find: jest.fn(),
+      findOne: jest.fn().mockResolvedValue(null),
+      save: jest.fn(),
+    };
+    const service = new TestingService(
+      runs as any,
+      {} as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+      messages as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    const result = await service.abortTestRun('tenant-1', 'run-done', 'reason');
+    expect(result.alreadyTerminal).toBe(true);
+    expect(messages.find).not.toHaveBeenCalled();
+    expect(runs.save).not.toHaveBeenCalled();
+  });
+
   it('creates isolated evidence contexts when later runs reuse the same recipients', async () => {
     let runSequence = 0;
     let leadSequence = 0;
