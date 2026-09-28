@@ -369,6 +369,56 @@ export class TestingService implements OnModuleInit {
   }
 
   /**
+   * Returns the current active (running) controlled test run for a tenant,
+   * with correlated IDs for operator observability. Used to safely abort
+   * and retrigger controlled UAT without building UI.
+   */
+  async getActiveRun(tenantId: string): Promise<{
+    testRunId: string | null;
+    tenantId: string;
+    status: string | null;
+    createdAt: Date | null;
+    leadId: string | null;
+    aiRunId: string | null;
+  }> {
+    const active = await this.runs.findOne({
+      where: { tenantId, status: 'running' },
+      order: { createdAt: 'DESC' },
+    });
+    if (!active) {
+      return {
+        testRunId: null,
+        tenantId,
+        status: null,
+        createdAt: null,
+        leadId: null,
+        aiRunId: null,
+      };
+    }
+    // aiRunId: look up via lead's AI runs if lead exists
+    let aiRunId: string | null = null;
+    if (active.testLeadId) {
+      try {
+        const aiRun = await this.aiRuns?.findOne({
+          where: { leadId: active.testLeadId },
+          order: { createdAt: 'DESC' },
+        });
+        aiRunId = aiRun?.id ?? null;
+      } catch {
+        // aiRuns repository may not be injected; leave null
+      }
+    }
+    return {
+      testRunId: active.id,
+      tenantId: active.tenantId,
+      status: active.status,
+      createdAt: active.createdAt,
+      leadId: active.testLeadId,
+      aiRunId,
+    };
+  }
+
+  /**
    * Safely aborts a controlled UAT test run.
    *
    * This is the minimal operator control for terminating a rehearsal that
