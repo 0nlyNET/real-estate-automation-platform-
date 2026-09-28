@@ -93,24 +93,72 @@ export class LeadsService {
     lead: Lead,
   ): Promise<{ aiQueued: boolean; denial?: { channel: string; code: string; reason: string } | null }> {
     let ai: { status: string; denial?: { channel: string; code: string; reason: string } | null } | undefined;
-    // Diagnostic: log whether aiConversation is injected (PR #106 regression check)
-    // and whether this is a controlled test lead.
-    const isControlledTest = Boolean((lead as any).testRunId || (lead as any).metadata?.testRunId);
+    // Structured handoff diagnostics for controlled UAT observability.
+    // Records exactly one terminal result: ACCEPTED, IGNORED, THROWN, or NOT_RESOLVED.
+    const testRunId = (lead as any).testRunId ?? (lead as any).metadata?.testRunId ?? null;
+    const aiConversationResolved = Boolean(this.aiConversation);
     this.logger.log(
-      `tryAcceptLead: lead=${lead.id}, tenant=${tenantId}, ` +
-      `aiConversation=${this.aiConversation ? 'injected' : 'UNDEFINED'}, ` +
-      `isControlledTest=${isControlledTest}`,
+      JSON.stringify({
+        event: 'AI_HANDOFF_REACHED',
+        testRunId,
+        leadId: lead.id,
+        tenantId,
+        aiConversationResolved,
+      }),
     );
+    if (!aiConversationResolved) {
+      this.logger.log(
+        JSON.stringify({
+          event: 'AI_HANDOFF_NOT_RESOLVED',
+          testRunId,
+          leadId: lead.id,
+          tenantId,
+          reason: 'aiConversation provider is undefined in LeadsService (PR #106 regression)',
+        }),
+      );
+      return { aiQueued: false, denial: null };
+    }
     try {
-      ai = await this.aiConversation?.acceptLead({
+      ai = await this.aiConversation!.acceptLead({
         tenantId,
         leadId: lead.id,
       });
-      this.logger.log(
-        `tryAcceptLead: acceptLead returned for lead=${lead.id}: ${JSON.stringify(ai)}`,
-      );
+      const denial = ai?.denial ?? null;
+      if (ai?.status === 'ignored' || denial) {
+        this.logger.log(
+          JSON.stringify({
+            event: 'AI_HANDOFF_IGNORED',
+            testRunId,
+            leadId: lead.id,
+            tenantId,
+            status: ai?.status ?? null,
+            denial,
+          }),
+        );
+      } else {
+        this.logger.log(
+          JSON.stringify({
+            event: 'AI_HANDOFF_ACCEPTED',
+            testRunId,
+            leadId: lead.id,
+            tenantId,
+            status: ai?.status ?? null,
+          }),
+        );
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const errorType = error instanceof Error ? error.constructor.name : typeof error;
+      this.logger.log(
+        JSON.stringify({
+          event: 'AI_HANDOFF_THROWN',
+          testRunId,
+          leadId: lead.id,
+          tenantId,
+          errorType,
+          message: message.slice(0, 500),
+        }),
+      );
       this.logger.error(
         `AI acceptLead failed for lead ${lead.id} (tenant ${tenantId}); keeping lead and using template fallback: ${message}`,
         error instanceof Error ? error.stack : undefined,

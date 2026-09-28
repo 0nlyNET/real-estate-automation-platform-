@@ -212,6 +212,12 @@ export class AdminController {
     return this.testing.list(tenantId);
   }
 
+  @Get('tenants/:tenantId/testing/runs/active')
+  testingActiveRun(@Param('tenantId') tenantId: string) {
+    if (!this.testing) throw new BadRequestException('Testing service unavailable');
+    return this.testing.getActiveRun(tenantId);
+  }
+
   @Post('tenants/:tenantId/testing/runs/:runId/abort')
   @UseGuards(PlatformAdminGuard)
   abortControlledTesting(
