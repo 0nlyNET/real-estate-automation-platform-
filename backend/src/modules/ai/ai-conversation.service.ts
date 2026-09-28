@@ -280,6 +280,7 @@ export class AiConversationService
     const candidates: Array<'sms' | 'email'> = [];
     if (allowedChannels.has('email') && lead.emailEligible && lead.email) candidates.push('email');
     if (allowedChannels.has('sms') && lead.smsEligible && lead.phone) candidates.push('sms');
+    let lastDenial: { channel: string; code: string; reason: string } | null = null;
     for (const channel of candidates) {
       const aiEvent: AiConversationEvent = {
         tenantId: event.tenantId,
@@ -292,6 +293,7 @@ export class AiConversationService
       if (!preflight.allowed) {
         // Diagnostic: log preflight denial so silent skips are observable.
         // Controlled UAT runs were silently skipping AI with no ai_run created.
+        lastDenial = { channel, code: preflight.code, reason: preflight.reason };
         this.logger.warn(
           operationalEvent('ai_preflight_denied', {
             tenantId: event.tenantId,
@@ -309,7 +311,13 @@ export class AiConversationService
         ? { status: 'queued' as const, runId: run.id, channel }
         : { status: 'duplicate' as const, channel };
     }
-    return { status: 'ignored' as const, code: 'NO_ELIGIBLE_AI_CHANNEL' };
+    return {
+      status: 'ignored' as const,
+      code: 'NO_ELIGIBLE_AI_CHANNEL',
+      // Include the last preflight denial so callers can record it visibly.
+      // Without this, denials are only in Railway logs, invisible in admin UI.
+      denial: lastDenial,
+    };
   }
 
   async processPendingRuns(limit = 10) {

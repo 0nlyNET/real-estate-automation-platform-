@@ -419,6 +419,11 @@ export class LeadsService {
       leadId: saved.id,
     });
     const aiQueued = ai?.status === 'queued' || ai?.status === 'duplicate';
+    // Diagnostic: record preflight denial visibly so silent AI skips are
+    // observable in admin UI (LeadEvent), not just Railway logs.
+    if ((ai as any)?.denial) {
+      await this.logLeadEvent(saved, 'ai_preflight_denied', (ai as any).denial);
+    }
     if (!aiQueued) await this.messagingService.queueInstantResponses(saved);
     await this.sequencesService.startForLead(saved, {
       minimumDelayMinutes: aiQueued ? 15 : 0,
@@ -573,6 +578,11 @@ export class LeadsService {
         leadId: saved.id,
       });
       const aiQueued = ai?.status === 'queued' || ai?.status === 'duplicate';
+      // Diagnostic: record preflight denial visibly so silent AI skips are
+      // observable in admin UI (LeadEvent), not just Railway logs.
+      if ((ai as any)?.denial) {
+        await this.logLeadEvent(saved, 'ai_preflight_denied', (ai as any).denial);
+      }
       if (!aiQueued) await this.messagingService.queueInstantResponses(saved);
       await this.sequencesService.startForLead(saved, {
         minimumDelayMinutes: aiQueued ? 15 : 0,
