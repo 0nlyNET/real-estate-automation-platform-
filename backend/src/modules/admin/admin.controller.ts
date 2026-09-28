@@ -212,6 +212,18 @@ export class AdminController {
     return this.testing.list(tenantId);
   }
 
+  @Post('tenants/:tenantId/testing/runs/:runId/abort')
+  @UseGuards(PlatformAdminGuard)
+  abortControlledTesting(
+    @Param('tenantId') tenantId: string,
+    @Param('runId') runId: string,
+    @Body() body: { reason?: string },
+  ) {
+    if (!this.testing) throw new BadRequestException('Testing service unavailable');
+    const reason = String(body?.reason || 'aborted_by_operator').slice(0, 500);
+    return this.testing.abortTestRun(tenantId, runId, reason);
+  }
+
   @Post('tenants/:tenantId/pause')
   @UseGuards(PlatformAdminGuard)
   pause(@Param('tenantId') tenantId: string) {

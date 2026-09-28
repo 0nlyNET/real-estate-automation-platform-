@@ -326,4 +326,60 @@ export class TestingService implements OnModuleInit {
       take: 20,
     });
   }
+
+  /**
+   * Safely aborts a controlled UAT test run.
+   *
+   * This is the minimal operator control for terminating a rehearsal that
+   * should not continue (e.g. created under pre-fix behavior). It:
+   * - operates only on rows in the test_runs table (controlled tests by construction)
+   * - scopes strictly by tenantId + testRunId
+   * - is idempotent (already-terminal runs return success without changes)
+   * - marks the run with the closest valid terminal state ('expired') and records the reason
+   * - cancels any still-claimable outbound messages for the test lead so the
+   *   worker can never pick them up later (prevents stale rehearsal sends)
+   * - preserves all records as historical evidence (no deletes)
+   * - never touches production leads/messages (test lead is bound to the run)
+   */
+  async abortTestRun(
+    tenantId: string,
+    testRunId: string,
+    reason: string,
+  ): Promise<{ runId: string; status: string; canceledMessages: string[]; alreadyTerminal: boolean }> {
+    const run = await this.runs.findOne({ where: { id: testRunId, tenantId } });
+    if (!run) {
+      throw new BadRequestException('Test run not found for this tenant');
+    }
+    if (run.status !== 'running') {
+      return { runId: run.id, status: run.status, canceledMessages: [], alreadyTerminal: true };
+    }
+    const canceledMessages: string[] = [];
+    // Cancel any outbound messages for the test lead that the worker could still claim.
+    // Setting status='canceled' removes them from claimMessages' claimable set.
+    if (run.testLeadId) {
+      const pending = await this.messages.find({
+        where: { leadId: run.testLeadId },
+      });
+      for (const msg of pending) {
+        const claimable = ['created', 'queued', 'pending', 'scheduled', 'sending'].includes(msg.status);
+        const isOutbound = (msg as any).direction === 'outbound';
+        if (claimable && isOutbound) {
+          msg.status = 'canceled' as any;
+          (msg as any).canceledAt = new Date();
+          (msg as any).errorCode = 'CONTROLLED_TEST_ABORTED';
+          (msg as any).sanitizedErrorMessage = reason;
+          await this.messages.save(msg);
+          canceledMessages.push(msg.id);
+        }
+      }
+    }
+    run.status = 'expired';
+    run.completedAt = new Date();
+    run.failureReason = reason;
+    await this.runs.save(run);
+    console.log(
+      `[TestingService] abortTestRun(${testRunId}): status=expired, reason=${reason}, canceledMessages=${canceledMessages.length}`,
+    );
+    return { runId: run.id, status: run.status, canceledMessages, alreadyTerminal: false };
+  }
 }
