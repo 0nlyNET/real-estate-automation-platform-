@@ -106,6 +106,29 @@ export class TestingService implements OnModuleInit {
         existing.failureReason = 'Controlled test run expired before completion';
       }
       await this.runs.save(existing);
+      // Cancel any still-claimable outbound messages for the expired run's test lead
+      // so a stale rehearsal message can never send after the run is superseded.
+      if (existing.testLeadId) {
+        try {
+          const pending = await this.messages.find({
+            where: { leadId: existing.testLeadId },
+          });
+          for (const msg of pending) {
+            const claimable = ['created', 'queued', 'pending', 'scheduled', 'sending'].includes(msg.status);
+            const isOutbound = (msg as any).direction === 'outbound';
+            if (claimable && isOutbound) {
+              msg.status = 'canceled' as any;
+              (msg as any).canceledAt = new Date();
+              (msg as any).errorCode = 'CONTROLLED_TEST_SUPERSEDED';
+              (msg as any).sanitizedErrorMessage = existing.failureReason;
+              await this.messages.save(msg);
+              console.log(`[TestingService] canceled stale message ${msg.id} for expired run ${existing.id}`);
+            }
+          }
+        } catch (e) {
+          console.log(`[TestingService] message cleanup failed for run ${existing.id}: ${e?.message || e}`);
+        }
+      }
     }
     const sequence = (await this.sequences.find({
       where: { tenantId, active: true },
@@ -310,7 +333,25 @@ export class TestingService implements OnModuleInit {
     } catch (e) {
       messageDiag = `message lookup failed: ${e?.message || e}`;
     }
-    const stuck = aiRunCount === 0;
+    // A controlled test run whose outbound message is scheduled far in the future
+    // (e.g. by pre-fix quiet-hours logic) can never complete its E2E verification
+    // in a reasonable time. Treat it as stuck so the operator can retry.
+    // Post-fix (PR #115), controlled test messages bypass quiet-hours scheduling,
+    // so this condition should never occur for new runs.
+    let futureScheduled = false;
+    try {
+      const msg = await this.messages.findOne({
+        where: { leadId: run.testLeadId, direction: 'outbound' as any },
+        order: { createdAt: 'DESC' },
+      });
+      if (msg?.scheduledAt && msg.scheduledAt.getTime() > Date.now() + 60 * 60_000) {
+        futureScheduled = true;
+        console.log(`[TestingService] isStuckRun(${run.id}): outbound message ${msg.id} scheduled ${msg.scheduledAt.toISOString()} (>60min future), stuck=true`);
+      }
+    } catch {
+      // Ignore lookup failures here; the diagnostic above already logged them.
+    }
+    const stuck = aiRunCount === 0 || futureScheduled;
     console.log(
       `[TestingService] isStuckRun(${run.id}): age=${Math.round(ageMs / 60000)}min, ` +
         `testLeadId=${run.testLeadId}, aiRunCount=${aiRunCount}, stuck=${stuck}, ` +
