@@ -34,6 +34,7 @@ import { LimitsService } from '../limits/limits.service';
 import { assertLeadAcceptance, LeadAcceptanceContext } from './lead-acceptance';
 import { CrmEventsService } from '../crm-events/crm-events.service';
 import { AiConversationService } from '../ai/ai-conversation.service';
+import { OperationsService } from '../operations/operations.service';
 
 @Injectable()
 export class LeadsService {
@@ -68,7 +69,81 @@ export class LeadsService {
     @Optional() private readonly dataSource?: DataSource,
     @Optional() private readonly crmEvents?: CrmEventsService,
     @Optional() private readonly aiConversation?: AiConversationService,
+    // OperationsModule is @Global(); best-effort operational surfacing of
+    // AI-subsystem failures without adding module wiring.
+    @Optional() private readonly operations?: OperationsService,
   ) {}
+
+  /**
+   * Invokes the AI first-responder for a newly accepted lead without letting
+   * an AI-subsystem failure break lead intake.
+   *
+   * Fail-open for lead capture, fail-closed for automated outbound: if
+   * acceptLead() throws unexpectedly, the already-persisted lead is kept,
+   * the failure is recorded on the lead event log and surfaced as an
+   * operator task, and intake falls back to the approved deterministic
+   * templates. No AI-generated (unverified) message is ever produced from a
+   * failed AI attempt — the failed attempt creates no ai_run.
+   */
+  private async tryAcceptLead(
+    tenantId: string,
+    lead: Lead,
+  ): Promise<{ aiQueued: boolean }> {
+    let ai: { status: string } | undefined;
+    try {
+      ai = await this.aiConversation?.acceptLead({
+        tenantId,
+        leadId: lead.id,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `AI acceptLead failed for lead ${lead.id} (tenant ${tenantId}); keeping lead and using template fallback: ${message}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      // Lead-scoped operational event (tenant-isolated, visible in history).
+      try {
+        await this.logLeadEvent(lead, 'ai_accept_failed', {
+          tenantId,
+          error: message,
+          fallback: 'approved_templates',
+        });
+      } catch (logError) {
+        this.logger.warn(
+          `Failed to record ai_accept_failed event for lead ${lead.id}: ${
+            logError instanceof Error ? logError.message : String(logError)
+          }`,
+        );
+      }
+      // Operator-visible, recoverable task. Deduplicated per tenant with a
+      // 24h throttle so a systemic AI outage does not flood the queue; the
+      // per-lead detail lives on the lead event log above.
+      try {
+        await this.operations?.createTask({
+          tenantId,
+          category: 'ai_accept_failure',
+          title: 'AI first-response failed during lead intake',
+          description:
+            `acceptLead() threw for lead ${lead.id}: ${message}. ` +
+            `The lead was kept and the approved template fallback was used; ` +
+            `no AI-generated message was sent.`,
+          priority: 'high',
+          relatedEntityType: 'tenant',
+          relatedEntityId: tenantId,
+          dedupeOpen: true,
+          throttleHours: 24,
+        });
+      } catch (taskError) {
+        this.logger.warn(
+          `Failed to create ai_accept_failure task for tenant ${tenantId}: ${
+            taskError instanceof Error ? taskError.message : String(taskError)
+          }`,
+        );
+      }
+    }
+    const aiQueued = ai?.status === 'queued' || ai?.status === 'duplicate';
+    return { aiQueued };
+  }
 
   private async withDedupLock<T>(
     tenantId: string,
@@ -413,12 +488,10 @@ export class LeadsService {
     });
 
     // AI is the normal first responder when its approved runtime accepts the
-    // lead. Approved templates remain the deterministic fallback.
-    const ai = await this.aiConversation?.acceptLead({
-      tenantId: tenant.id,
-      leadId: saved.id,
-    });
-    const aiQueued = ai?.status === 'queued' || ai?.status === 'duplicate';
+    // lead. Approved templates remain the deterministic fallback. The AI
+    // boundary is fail-open for lead capture: an acceptLead() throw keeps the
+    // saved lead and falls back to templates instead of failing intake.
+    const { aiQueued } = await this.tryAcceptLead(tenant.id, saved);
     if (!aiQueued) await this.messagingService.queueInstantResponses(saved);
     await this.sequencesService.startForLead(saved, {
       minimumDelayMinutes: aiQueued ? 15 : 0,
@@ -568,11 +641,7 @@ export class LeadsService {
 
     const trigger = (payload as any).triggerAutomation !== false;
     if (trigger) {
-      const ai = await this.aiConversation?.acceptLead({
-        tenantId: tenant.id,
-        leadId: saved.id,
-      });
-      const aiQueued = ai?.status === 'queued' || ai?.status === 'duplicate';
+      const { aiQueued } = await this.tryAcceptLead(tenant.id, saved);
       if (!aiQueued) await this.messagingService.queueInstantResponses(saved);
       await this.sequencesService.startForLead(saved, {
         minimumDelayMinutes: aiQueued ? 15 : 0,
