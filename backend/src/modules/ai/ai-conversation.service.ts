@@ -470,6 +470,42 @@ export class AiConversationService
     const recovered = 0;
     this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'after_recoverExhaustedRuns', recovered }));
     this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'before_claimRuns' }));
+    // DIAGNOSTIC: expose the exact run fields that claimRuns() evaluates
+    try {
+      const diagRun = await this.runs.findOne({
+        where: { id: 'b101b321-dc0d-405c-8be9-551654968fc2' },
+      });
+      if (diagRun) {
+        this.logger.log(
+          JSON.stringify({
+            event: 'AI_RUN_DIAGNOSTIC',
+            id: diagRun.id,
+            status: diagRun.status,
+            attemptCount: diagRun.attemptCount,
+            lockedAt: diagRun.lockedAt?.toISOString() || null,
+            lockedBy: diagRun.lockedBy || null,
+            createdAt: diagRun.createdAt?.toISOString() || null,
+            maxAttempts: MAX_AI_RUN_ATTEMPTS,
+            leaseSeconds: AI_RUN_LEASE_SECONDS,
+          }),
+        );
+      } else {
+        this.logger.log(
+          JSON.stringify({
+            event: 'AI_RUN_DIAGNOSTIC',
+            id: 'b101b321-dc0d-405c-8be9-551654968fc2',
+            found: false,
+          }),
+        );
+      }
+    } catch (diagError) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'AI_RUN_DIAGNOSTIC_FAILED',
+          error: diagError instanceof Error ? diagError.message : String(diagError),
+        }),
+      );
+    }
     const ids = await this.claimRuns(boundedLimit);
     this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'after_claimRuns', count: ids.length }));
     if (ids.length > 0) {
