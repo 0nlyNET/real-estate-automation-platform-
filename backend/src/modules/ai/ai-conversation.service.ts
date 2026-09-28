@@ -1111,7 +1111,11 @@ export class AiConversationService
       }
       const quiet = await this.compliance.getQuietHours(run.tenantId);
       const now = new Date();
-      const scheduledAt = quiet.enabled
+      // Controlled UAT test leads bypass quiet-hours scheduling so the E2E
+      // rehearsal can verify the full send path without waiting for the
+      // quiet-hours window to end. Production leads still respect quiet hours.
+      const isControlledTest = Boolean(context.lead?.testRunId);
+      const scheduledAt = !isControlledTest && quiet.enabled
         ? nextAllowedSendTime({
             now,
             timeZone: quiet.timezone,
