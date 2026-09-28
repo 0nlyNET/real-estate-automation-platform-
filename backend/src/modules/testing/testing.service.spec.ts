@@ -42,7 +42,6 @@ describe('TestingService production-pipeline UAT', () => {
       runs as any,
       sequences as any,
       { count: jest.fn().mockResolvedValue(0) } as any,
-      { count: jest.fn().mockResolvedValue(0) } as any,
       onboarding as any,
       leads as any,
       notifications as any,
@@ -71,7 +70,7 @@ describe('TestingService production-pipeline UAT', () => {
         testRunId: 'run-1',
       },
     );
-    expect(result).toMatchObject({
+    expect(result.run).toMatchObject({
       testLeadId: 'lead-1',
       status: 'running',
       checks: expect.objectContaining({
@@ -79,6 +78,7 @@ describe('TestingService production-pipeline UAT', () => {
         outbound: 'awaiting_provider_callbacks',
       }),
     });
+    expect(result.isNew).toBe(true);
   });
 
   it('creates isolated evidence contexts when later runs reuse the same recipients', async () => {
@@ -101,7 +101,6 @@ describe('TestingService production-pipeline UAT', () => {
       runs as any,
       sequences as any,
       { count: jest.fn().mockResolvedValue(0) } as any,
-      { count: jest.fn().mockResolvedValue(0) } as any,
       {
         getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: true, emailEnabled: false }),
         beginTesting: jest.fn(),
@@ -111,11 +110,13 @@ describe('TestingService production-pipeline UAT', () => {
     );
 
     const first = await service.start('tenant-1', 'operator-1', { smsRecipient: '+15550000001' });
-    first.status = 'passed';
+    first.run.status = 'passed';
     const second = await service.start('tenant-1', 'operator-1', { smsRecipient: '+15550000001' });
 
-    expect(first).toMatchObject({ id: 'run-1', testLeadId: 'lead-1' });
-    expect(second).toMatchObject({ id: 'run-2', testLeadId: 'lead-2' });
+    expect(first.run).toMatchObject({ id: 'run-1', testLeadId: 'lead-1' });
+    expect(first.isNew).toBe(true);
+    expect(second.run).toMatchObject({ id: 'run-2', testLeadId: 'lead-2' });
+    expect(second.isNew).toBe(true);
     expect((leads.intake as jest.Mock).mock.calls[0][2]).toMatchObject({ testRunId: 'run-1' });
     expect((leads.intake as jest.Mock).mock.calls[1][2]).toMatchObject({ testRunId: 'run-2' });
   });
@@ -137,8 +138,7 @@ describe('TestingService production-pipeline UAT', () => {
             steps: [{ active: true, approvalStatus: 'approved', channel: 'email' }],
           },
         ]),
-      } as any,      { count: jest.fn().mockResolvedValue(0) } as any,
-      { count: jest.fn().mockResolvedValue(0) } as any,
+      } as any,            { count: jest.fn().mockResolvedValue(0) } as any,
 
       {
         getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: false, emailEnabled: true }),
@@ -149,7 +149,7 @@ describe('TestingService production-pipeline UAT', () => {
     );
     await expect(
       service.start('tenant-1', 'operator-1', { emailRecipient: 'owner@example.com' }),
-    ).resolves.toMatchObject({ smsRecipient: null, emailRecipient: 'owner@example.com' });
+    ).resolves.toMatchObject({ run: expect.objectContaining({ smsRecipient: null, emailRecipient: 'owner@example.com' }), isNew: true });
     expect(leads.intake).toHaveBeenCalledWith(
       'tenant-1',
       expect.objectContaining({
@@ -190,8 +190,7 @@ describe('TestingService production-pipeline UAT', () => {
             steps: [{ active: true, approvalStatus: 'approved', channel: 'sms' }],
           },
         ]),
-      } as any,      { count: jest.fn().mockResolvedValue(0) } as any,
-      { count: jest.fn().mockResolvedValue(0) } as any,
+      } as any,            { count: jest.fn().mockResolvedValue(0) } as any,
 
       {
         getOrCreate: jest.fn().mockResolvedValue({ 
@@ -238,8 +237,7 @@ describe('TestingService production-pipeline UAT', () => {
             ],
           },
         ]),
-      } as any,      { count: jest.fn().mockResolvedValue(0) } as any,
-      { count: jest.fn().mockResolvedValue(0) } as any,
+      } as any,            { count: jest.fn().mockResolvedValue(0) } as any,
 
       {
         getOrCreate: jest.fn().mockResolvedValue({ 
@@ -323,8 +321,7 @@ describe('TestingService production-pipeline UAT', () => {
             steps: [{ active: true, approvalStatus: 'approved', channel: 'email' }],
           },
         ]),
-      } as any,      { count: jest.fn().mockResolvedValue(0) } as any,
-      { count: jest.fn().mockResolvedValue(0) } as any,
+      } as any,            { count: jest.fn().mockResolvedValue(0) } as any,
 
       {
         getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: false, emailEnabled: true }),
@@ -407,7 +404,6 @@ describe('TestingService production-pipeline UAT', () => {
         return value;
       }),
     };
-    const enrollments = { count: jest.fn().mockResolvedValue(0) };
     const aiRuns = { count: jest.fn().mockResolvedValue(0) };
     const onboarding = {
       getOrCreate: jest.fn().mockResolvedValue({
@@ -431,7 +427,6 @@ describe('TestingService production-pipeline UAT', () => {
     const service = new TestingService(
       runs as any,
       sequences as any,
-      enrollments as any,
       aiRuns as any,
       onboarding as any,
       leads as any,
@@ -442,7 +437,8 @@ describe('TestingService production-pipeline UAT', () => {
     expect(savedRuns[0]).toMatchObject({ id: 'run-stuck', status: 'expired' });
     // ...and a fresh run created with a new lead intake.
     expect(leads.intake).toHaveBeenCalled();
-    expect(result.id).toBe('run-fresh');
+    expect(result.run.id).toBe('run-fresh');
+    expect(result.isNew).toBe(true);
   });
 
   it('returns the existing run when it is not stuck', async () => {
@@ -462,7 +458,6 @@ describe('TestingService production-pipeline UAT', () => {
       create: jest.fn((v: any) => v),
       save: jest.fn(async (v: any) => v),
     };
-    const enrollments = { count: jest.fn().mockResolvedValue(0) };
     const aiRuns = { count: jest.fn().mockResolvedValue(1) };
     const onboarding = {
       getOrCreate: jest.fn().mockResolvedValue({
@@ -474,13 +469,13 @@ describe('TestingService production-pipeline UAT', () => {
     const service = new TestingService(
       runs as any,
       { find: jest.fn() } as any,
-      enrollments as any,
       aiRuns as any,
       onboarding as any,
       { intake: jest.fn() } as any,
       {} as any,
     );
     const result = await service.start('tenant-1', 'operator-1', {});
-    expect(result.id).toBe('run-healthy');
+    expect(result.run.id).toBe('run-healthy');
+    expect(result.isNew).toBe(false);
   });
 });

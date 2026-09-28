@@ -1092,7 +1092,7 @@ export function AdminDashboardClient({
     if (!selectedTenant || !isOwner || !readiness?.testingReady || testingBusy) return
     setTestingBusy(true)
     try {
-      await apiFetch(`/admin/tenants/${selectedTenant.id}/testing/run`, {
+      const result = await apiFetch(`/admin/tenants/${selectedTenant.id}/testing/run`, {
         method: "POST",
         body: {
           smsRecipient: testSmsRecipient.trim() || undefined,
@@ -1110,7 +1110,13 @@ export function AdminDashboardClient({
       setSelectedTenant((current) =>
         current?.id === selectedTenant.id ? { ...current, lifecycleStatus: "TESTING" } : current,
       )
-      setNotice("The controlled lead entered the real queue. Provider callbacks and replies will record evidence automatically.")
+      // Distinguish new test runs from existing ones to prevent false-success UX.
+      // If isNew is false, a test is already in progress and no new lead was created.
+      if (result?.isNew === false) {
+        setNotice("A controlled test is already in progress. No new test lead was created.")
+      } else {
+        setNotice("The controlled lead entered the real queue. Provider callbacks and replies will record evidence automatically.")
+      }
     } catch (cause) {
       setError(messageFor(cause, "Testing mode could not be started"))
     } finally {

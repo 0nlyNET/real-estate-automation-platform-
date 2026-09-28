@@ -8,7 +8,6 @@ import { OnboardingService } from '../onboarding/onboarding.service';
 import { TestRun } from './test-run.entity';
 import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 import { Sequence } from '../sequences/sequence.entity';
-import { SequenceEnrollment } from '../sequences/sequence-enrollment.entity';
 import { AiRun } from '../ai/ai-run.entity';
 import { LeadConsentDto, ConsentEvidenceDto } from '../compliance/consent.dto';
 import { IntakeLeadDto } from '../leads/dto/intake-lead.dto';
@@ -40,8 +39,6 @@ export class TestingService implements OnModuleInit {
     private readonly runs: Repository<TestRun>,
     @InjectRepository(Sequence)
     private readonly sequences: Repository<Sequence>,
-    @InjectRepository(SequenceEnrollment)
-    private readonly enrollments: Repository<SequenceEnrollment>,
     @InjectRepository(AiRun)
     private readonly aiRuns: Repository<AiRun>,
     private readonly onboarding: OnboardingService,
@@ -64,7 +61,7 @@ export class TestingService implements OnModuleInit {
     tenantId: string,
     operatorId: string | null,
     input: { smsRecipient?: string; emailRecipient?: string },
-  ) {
+  ): Promise<{ run: TestRun; isNew: boolean }> {
     const onboarding = await this.onboarding.getOrCreate(tenantId);
     const phone = normalizePhoneE164(String(
       input.smsRecipient ?? onboarding.contacts?.controlledTestPhone ?? '',
@@ -94,7 +91,11 @@ export class TestingService implements OnModuleInit {
       // configuration is approved: intake correctly fail-closes (no AI run),
       // but the run must be retryable once AI is approved.
       if (existing.expiresAt.getTime() > Date.now() && !(await this.isStuckRun(existing))) {
-        return existing;
+        // Return existing run with isNew=false so the caller can distinguish
+        // "test already in progress" from "new test started". This prevents
+        // the false-success UX where the frontend reports a new test started
+        // when nothing actually happened.
+        return { run: existing, isNew: false };
       }
       existing.status = 'expired';
       existing.completedAt = new Date();
@@ -219,7 +220,7 @@ export class TestingService implements OnModuleInit {
         entityType: 'test_run',
         entityId: run.id,
       });
-      return run;
+      return { run, isNew: true };
     } catch (error: any) {
       run.status = 'failed';
       run.failureReason = String(error?.message || error).slice(0, 2_000);
@@ -233,8 +234,11 @@ export class TestingService implements OnModuleInit {
    * True when a 'running' test run can never complete and is safe to replace.
    * The intake-time automation decision is final: if no AI run was queued for
    * the test lead, none ever will be. The run is stuck when, after a grace
-   * period for the sequence fallback to fire, there is still no AI run, no
-   * delivered outbound, and no active sequence enrollment for the test lead.
+   * period for the sequence fallback to fire, there is still no AI run and
+   * no delivered outbound for the test lead. A fallback sequence enrollment
+   * does not fulfill the test's purpose (the AI conversation loop), so it
+   * does not prevent the run from being replaced; the enrollment itself is
+   * lead-bound and is unaffected by expiring the run.
    */
   private async isStuckRun(run: TestRun): Promise<boolean> {
     const STUCK_AFTER_MS = 10 * 60_000;
@@ -242,19 +246,10 @@ export class TestingService implements OnModuleInit {
     const checks = (run.checks || {}) as Record<string, unknown>;
     if (checks.outbound === 'delivered') return false;
     if (!run.testLeadId) return true;
-    const [aiRunCount, activeEnrollments] = await Promise.all([
-      this.aiRuns.count({
-        where: { tenantId: run.tenantId, leadId: run.testLeadId },
-      }),
-      this.enrollments.count({
-        where: {
-          tenantId: run.tenantId,
-          leadId: run.testLeadId,
-          status: 'active',
-        },
-      }),
-    ]);
-    return aiRunCount === 0 && activeEnrollments === 0;
+    const aiRunCount = await this.aiRuns.count({
+      where: { tenantId: run.tenantId, leadId: run.testLeadId },
+    });
+    return aiRunCount === 0;
   }
 
   list(tenantId: string) {
