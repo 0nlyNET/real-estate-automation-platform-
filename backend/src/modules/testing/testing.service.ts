@@ -242,14 +242,30 @@ export class TestingService implements OnModuleInit {
    */
   private async isStuckRun(run: TestRun): Promise<boolean> {
     const STUCK_AFTER_MS = 10 * 60_000;
-    if (Date.now() - run.createdAt.getTime() < STUCK_AFTER_MS) return false;
+    const ageMs = Date.now() - run.createdAt.getTime();
+    if (ageMs < STUCK_AFTER_MS) return false;
     const checks = (run.checks || {}) as Record<string, unknown>;
     if (checks.outbound === 'delivered') return false;
-    if (!run.testLeadId) return true;
+    if (!run.testLeadId) {
+      console.log(`[TestingService] isStuckRun(${run.id}): no testLeadId, stuck=true (age=${Math.round(ageMs / 60000)}min)`);
+      return true;
+    }
+    // If the test lead no longer exists, the run can never complete.
+    try {
+      await this.leads.getLeadById(run.tenantId, run.testLeadId);
+    } catch {
+      console.log(`[TestingService] isStuckRun(${run.id}): testLead ${run.testLeadId} not found, stuck=true`);
+      return true;
+    }
     const aiRunCount = await this.aiRuns.count({
       where: { tenantId: run.tenantId, leadId: run.testLeadId },
     });
-    return aiRunCount === 0;
+    const stuck = aiRunCount === 0;
+    console.log(
+      `[TestingService] isStuckRun(${run.id}): age=${Math.round(ageMs / 60000)}min, ` +
+        `testLeadId=${run.testLeadId}, aiRunCount=${aiRunCount}, stuck=${stuck}`,
+    );
+    return stuck;
   }
 
   list(tenantId: string) {
