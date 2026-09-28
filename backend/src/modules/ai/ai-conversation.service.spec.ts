@@ -394,6 +394,23 @@ describe('AI conversation workflow', () => {
     );
   });
 
+  it('controlled test leads bypass quiet-hours scheduling', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-25T23:00:00.000Z'));
+    const item = fixture('controlled_autopilot');
+    // Simulate a controlled test lead by setting testRunId on the lead
+    item.lead.testRunId = 'test-run-123';
+    item.dependencies.compliance.getQuietHours.mockResolvedValue({
+      enabled: true,
+      timezone: 'UTC',
+      startMinute: 21 * 60,
+      endMinute: 8 * 60,
+    });
+    await (item.service as any).processRun(item.run.id);
+    // Controlled test message should NOT be scheduled for the future
+    // (scheduledAt should be undefined, meaning send immediately)
+    expect(item.savedMessages[0].scheduledAt).toBeUndefined();
+  });
+
   it('provider timeout creates a handoff and human task without improvising a reply', async () => {
     const item = fixture('controlled_autopilot');
     item.dependencies.provider.generate.mockRejectedValue(
