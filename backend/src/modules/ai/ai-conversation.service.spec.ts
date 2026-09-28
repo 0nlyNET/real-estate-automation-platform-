@@ -1,4 +1,7 @@
 import { ServiceUnavailableException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { DataType, newDb } from 'pg-mem';
+import { DataSource } from 'typeorm';
 import { Lead } from '../leads/lead.entity';
 import { Message } from '../messaging/message.entity';
 import { AiConversationService } from './ai-conversation.service';
@@ -93,6 +96,13 @@ function fixture(mode: 'draft' | 'controlled_autopilot' = 'draft') {
       findOneOrFail: jest.fn().mockResolvedValue(run),
       save: jest.fn(async (value) => value),
       create: jest.fn((value) => Object.assign(new AiRun(), value)),
+      update: jest.fn(async (criteria, changes) => {
+        const matches = Object.entries(criteria).every(
+          ([key, value]) => (run as any)[key] === value,
+        );
+        if (matches) Object.assign(run, changes);
+        return { affected: matches ? 1 : 0, raw: [], generatedMaps: [] };
+      }),
     },
     settings: { findOne: jest.fn().mockResolvedValue(settings) },
     knowledge: { findOne: jest.fn().mockResolvedValue(knowledge) },
@@ -207,6 +217,7 @@ function fixture(mode: 'draft' | 'controlled_autopilot' = 'draft') {
     dependencies.notifications as any,
     dependencies.operations as any,
   );
+  run.lockedBy = (service as any).workerId;
   jest.spyOn(service as any, 'preflight').mockResolvedValue({
     allowed: true,
     settings,
@@ -987,62 +998,156 @@ describe('BUG 2 regression: controlled-test context preserved through worker (20
 });
 
 describe('HARDENING: claim→process handoff never silently drops runs (2026-09-28)', () => {
-  it('processRun logs PROCESS_RUN_FAILED when claimed run cannot be re-fetched', async () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function prepareWorker(item: ReturnType<typeof fixture>) {
+    jest.spyOn(item.service as any, 'isWorkerPaused').mockResolvedValue(false);
+    jest.spyOn(item.service as any, 'recoverExhaustedRuns').mockResolvedValue(0);
+    jest.spyOn(item.service as any, 'claimRuns').mockResolvedValue([item.run.id]);
+    const log = jest.spyOn((item.service as any).logger, 'log').mockImplementation(() => {});
+    const error = jest.spyOn((item.service as any).logger, 'error').mockImplementation(() => {});
+    jest.spyOn((item.service as any).logger, 'warn').mockImplementation(() => {});
+    return { log, error };
+  }
+
+  it('logs a missing claim as failed without a completion event from the dispatcher', async () => {
     const item = fixture('controlled_autopilot');
-    // Mock runs repository: findOne returns null (simulating the
-    // 2026-09-28 incident where the claimed run was not found).
-    const runsRepo = {
-      findOne: jest.fn()
-        .mockResolvedValueOnce(null) // First call: the claimed-run lookup
-        .mockResolvedValueOnce(null), // Second call: the orphan check
-    };
-    const service = new (require('./ai-conversation.service').AiConversationService)(
-      {} as any, // dataSource
-      runsRepo as any, // runs
-      {} as any, // settings
-      {} as any, // knowledge
-      {} as any, // states
-      {} as any, // platformControls
-      { findOne: jest.fn() } as any, // leads
-      { findOne: jest.fn() } as any, // messages
-      {} as any, // credentials
-      {} as any, // provider
-      {} as any, // locks
-      {} as any, // control
-      {} as any, // policy
-      {} as any, // tools
-      {} as any, // usage
-      {} as any, // audit
-      {} as any, // compliance
-      {} as any, // entitlements
-      {} as any, // clientOperations
-      {} as any, // notifications
-      {} as any, // operations
-    );
-
-    // Spy on logger
-    const logSpy = jest.spyOn((service as any).logger, 'log').mockImplementation(() => {});
-    const errorSpy = jest.spyOn((service as any).logger, 'error').mockImplementation(() => {});
-
-    const runId = '900c6a4f-fa00-4ee0-8d21-85dcbc9f9b40';
-    await (service as any).processRun(runId);
-
-    // Must log PROCESS_RUN_ENTERED (observability)
-    expect(logSpy).toHaveBeenCalledWith(
+    const { log, error } = prepareWorker(item);
+    item.dependencies.runs.findOne.mockResolvedValue(null);
+    await item.service.processPendingRuns(1);
+    expect(log).toHaveBeenCalledWith(
       expect.stringContaining('PROCESS_RUN_ENTERED'),
     );
-    // Must log PROCESS_RUN_FAILED (not silent)
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('PROCESS_RUN_FAILED'),
-    );
-    // The failure reason must identify the handoff break
-    const failedCall = errorSpy.mock.calls.find((c: any[]) =>
-      String(c[0]).includes('PROCESS_RUN_FAILED'),
-    );
-    expect(failedCall).toBeDefined();
-    expect(String(failedCall![0])).toContain('run_not_found_after_claim');
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('run_not_found_after_claim'));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('PROCESS_RUN_COMPLETED'));
+    expect(item.dependencies.runs.update).not.toHaveBeenCalled();
+    expect(item.dependencies.provider.generate).not.toHaveBeenCalled();
+  });
 
-    logSpy.mockRestore();
-    errorSpy.mockRestore();
+  it('does not report completion for a blocked run', async () => {
+    const item = fixture('controlled_autopilot');
+    const { log } = prepareWorker(item);
+    (item.service as any).preflight.mockResolvedValue({
+      allowed: false, code: 'AI_PAUSED', reason: 'Paused', priority: 'high',
+    });
+    await item.service.processPendingRuns(1);
+    expect(item.run.status).toBe('blocked');
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('PROCESS_RUN_COMPLETED'));
+  });
+
+  it('logs completion only after the run is persisted as completed', async () => {
+    const item = fixture('controlled_autopilot');
+    const { log } = prepareWorker(item);
+    item.state.ownershipStatus = 'human_handling';
+    await item.service.processPendingRuns(1);
+    expect(item.run.status).toBe('completed');
+    expect(log).toHaveBeenCalledWith(JSON.stringify({
+      event: 'PROCESS_RUN_COMPLETED', runId: item.run.id, status: 'completed',
+    }));
+  });
+
+  it.each([
+    ['draft', 'drafted'],
+    ['controlled_autopilot', 'response_queued'],
+  ] as const)('reports the actual %s outcome without claiming completion', async (mode, status) => {
+    const item = fixture(mode);
+    const { log } = prepareWorker(item);
+    await item.service.processPendingRuns(1);
+    expect(item.run.status).toBe(status);
+    expect(log).toHaveBeenCalledWith(JSON.stringify({
+      event: 'PROCESS_RUN_OUTCOME', runId: item.run.id, status,
+    }));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('PROCESS_RUN_COMPLETED'));
+  });
+
+  describe('conditional failure writes through the TypeORM repository', () => {
+    let database: DataSource;
+
+    beforeAll(async () => {
+      const memory = newDb();
+      memory.public.registerFunction({
+        name: 'current_database', returns: DataType.text,
+        implementation: () => 'ai_worker_test',
+      });
+      memory.public.registerFunction({
+        name: 'version', returns: DataType.text,
+        implementation: () => 'PostgreSQL 16.0',
+      });
+      memory.public.registerFunction({
+        name: 'uuid_generate_v4', returns: DataType.uuid,
+        impure: true, implementation: randomUUID,
+      });
+      database = memory.adapters.createTypeormDataSource({
+        type: 'postgres', entities: [AiRun], synchronize: true,
+      });
+      await database.initialize();
+    });
+
+    beforeEach(async () => database.getRepository(AiRun).clear());
+    afterAll(async () => database?.destroy());
+
+    async function persistedWorker() {
+      const item = fixture('controlled_autopilot');
+      const output = prepareWorker(item);
+      const runs = database.getRepository(AiRun);
+      await runs.save(item.run);
+      (item.service as any).runs = runs;
+      return { ...item, ...output, runs };
+    }
+
+    it('fails an owned processing run and records its operational failure', async () => {
+      const item = await persistedWorker();
+      jest.spyOn(item.service as any, 'processRun').mockRejectedValue(new Error('dispatch failed'));
+      await item.service.processPendingRuns(1);
+      expect(await item.runs.findOneByOrFail({ id: item.run.id })).toMatchObject({
+        status: 'failed', lockedBy: null, lockedAt: null,
+        errorCode: 'WORKER_DISPATCH_ERROR',
+      });
+      expect(item.dependencies.operations.createTask).toHaveBeenCalledTimes(1);
+      expect(item.log).not.toHaveBeenCalledWith(expect.stringContaining('PROCESS_RUN_COMPLETED'));
+    });
+
+    it.each([
+      ['processing', 'another-worker'],
+      ['completed', null],
+      ['completed', 'same-worker'],
+      ['response_queued', null],
+      ['drafted', null],
+    ] as const)('preserves a %s run changed after lookup (lock %s)', async (status, owner) => {
+      const item = await persistedWorker();
+      jest.spyOn(item.service as any, 'processRun').mockRejectedValue(new Error('late failure'));
+      const findOne = item.runs.findOne.bind(item.runs);
+      const lockedBy = owner === 'same-worker' ? item.run.lockedBy : owner;
+      const lockedAt = owner ? new Date('2026-09-28T12:00:00Z') : null;
+      jest.spyOn(item.runs, 'findOne').mockImplementationOnce(async (options) => {
+        const stale = await findOne(options);
+        // A different worker changes the stored row after our read and
+        // before our failure write. This uses real ORM-generated SQL.
+        await item.runs.update({ id: item.run.id }, { status, lockedBy, lockedAt });
+        return stale;
+      });
+      await item.service.processPendingRuns(1);
+      expect(await item.runs.findOneByOrFail({ id: item.run.id })).toMatchObject({
+        status, lockedBy, lockedAt, errorCode: null,
+      });
+      expect(item.dependencies.operations.createTask).not.toHaveBeenCalled();
+      expect(item.dependencies.audit.recordSystem).not.toHaveBeenCalled();
+      expect(item.log).not.toHaveBeenCalledWith(expect.stringContaining('PROCESS_RUN_COMPLETED'));
+    });
+
+    it('also preserves ownership when the provider throws after another worker reclaims the run', async () => {
+      const item = await persistedWorker();
+      item.dependencies.provider.generate.mockImplementationOnce(async () => {
+        await item.runs.update({ id: item.run.id }, { lockedBy: 'another-worker' });
+        throw new Error('late provider failure');
+      });
+      await item.service.processPendingRuns(1);
+      expect(await item.runs.findOneByOrFail({ id: item.run.id })).toMatchObject({
+        status: 'processing', lockedBy: 'another-worker', errorCode: null,
+      });
+      expect(item.dependencies.operations.createTask).not.toHaveBeenCalled();
+      expect(item.dependencies.clientOperations.createHandoff).not.toHaveBeenCalled();
+      expect(item.log).not.toHaveBeenCalledWith(expect.stringContaining('PROCESS_RUN_COMPLETED'));
+    });
   });
 });

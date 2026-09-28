@@ -513,13 +513,20 @@ export class AiConversationService
         }),
       );
       try {
-        await this.processRun(id);
-        this.logger.log(
-          JSON.stringify({
-            event: 'PROCESS_RUN_COMPLETED',
-            runId: id,
-          }),
-        );
+        const status = await this.processRun(id);
+        // An early return (including a missing claim) is not completion.
+        // Queued responses and drafts also retain their actual outcome.
+        if (status) {
+          this.logger.log(
+            JSON.stringify({
+              event: status === 'completed'
+                ? 'PROCESS_RUN_COMPLETED'
+                : 'PROCESS_RUN_OUTCOME',
+              runId: id,
+              status,
+            }),
+          );
+        }
       } catch (dispatchError) {
         this.logger.error(
           JSON.stringify({
@@ -531,9 +538,8 @@ export class AiConversationService
                 : String(dispatchError),
           }),
         );
-        // Persist the failure on the run so it does not disappear.
-        // The run was claimed (status=processing, locked by us); mark it
-        // failed with the dispatch error so recovery/ops can see it.
+        // blockRun conditionally writes failure only while this worker
+        // still owns a processing run, even if ownership changes here.
         try {
           const failedRun = await this.runs.findOne({ where: { id } });
           if (failedRun) {
@@ -737,7 +743,9 @@ export class AiConversationService
     });
   }
 
-  private async processRun(runId: string) {
+  private async processRun(
+    runId: string,
+  ): Promise<'completed' | 'drafted' | 'response_queued' | void> {
     // HARDENING: Instrument the claim→process handoff. Every claimed run
     // must produce an observable outcome — it must not silently disappear.
     this.logger.log(
@@ -988,7 +996,7 @@ export class AiConversationService
         run.lockedAt = null;
         run.lockedBy = null;
         await this.runs.save(run);
-        return;
+        return 'completed';
       }
 
       const validation = this.policy.validateResponse({
@@ -1013,7 +1021,7 @@ export class AiConversationService
       }
       if (validation.noReply || !output.reply) {
         await this.completeWithoutReply(run, preflight);
-        return;
+        return 'completed';
       }
 
       const body =
@@ -1056,6 +1064,7 @@ export class AiConversationService
           entityId: message.id,
         });
       }
+      return run.mode === 'draft' ? 'drafted' : 'response_queued';
     } catch (error: any) {
       const sanitized = sanitizeOperationalText(
         error?.response?.message || error?.message || 'AI provider failed',
@@ -1491,12 +1500,37 @@ export class AiConversationService
     context: Partial<PreflightContext>,
     providerFailure = false,
   ) {
-    run.status = providerFailure ? 'failed' : 'blocked';
-    run.errorCode = code.slice(0, 80);
-    run.sanitizedError = sanitizeOperationalText(reason).slice(0, 1_000);
-    run.lockedAt = null;
-    run.lockedBy = null;
-    await this.runs.save(run);
+    const status: AiRun['status'] = providerFailure ? 'failed' : 'blocked';
+    const changes = {
+      status,
+      errorCode: code.slice(0, 80),
+      sanitizedError: sanitizeOperationalText(reason).slice(0, 1_000),
+      lockedAt: null,
+      lockedBy: null,
+    };
+    if (providerFailure) {
+      // Check ownership and state in the write itself. A lookup followed
+      // by save() can overwrite a reclaimed or already completed run.
+      const result = await this.runs.update(
+        { id: run.id, status: 'processing', lockedBy: this.workerId },
+        changes,
+      );
+      if (result.affected !== 1) {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'PROCESS_RUN_FAILURE_SKIPPED',
+            runId: run.id,
+            workerId: this.workerId,
+            reason: 'run_ownership_or_status_changed',
+          }),
+        );
+        return;
+      }
+      Object.assign(run, changes);
+    } else {
+      Object.assign(run, changes);
+      await this.runs.save(run);
+    }
     if (
       context.settings &&
       context.state &&
@@ -1515,7 +1549,7 @@ export class AiConversationService
         tenantId: run.tenantId,
         category: 'ai_provider_failure',
         title: 'AI response needs human follow-up',
-        description: run.sanitizedError,
+        description: changes.sanitizedError,
         priority: priority === 'urgent' ? 'critical' : 'high',
         // Dedupe per lead (not per ai_run) for the same alert-storm reason.
         relatedEntityType: 'lead',

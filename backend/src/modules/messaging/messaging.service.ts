@@ -706,10 +706,10 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
    * {{email}}, {{phone}} from the lead record. Unknown tokens are left
    * intact so the final safety invariant can fail closed on them.
    */
-  private interpolateLeadTokens(text: string, lead: any): string {
-    const firstName = String(lead?.firstName || '').trim();
-    const lastName = String(lead?.lastName || '').trim();
-    const fullName = `${firstName} ${lastName}`.trim();
+  private interpolateLeadTokens(text: string, lead: Lead): string {
+    const fullName = String(lead?.fullName || '').trim();
+    const [firstName = '', ...remainingNames] = fullName.split(/\s+/);
+    const lastName = remainingNames.join(' ');
     const replacements: Record<string, string> = {
       first_name: firstName,
       firstName,
