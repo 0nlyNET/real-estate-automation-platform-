@@ -93,11 +93,22 @@ export class LeadsService {
     lead: Lead,
   ): Promise<{ aiQueued: boolean; denial?: { channel: string; code: string; reason: string } | null }> {
     let ai: { status: string; denial?: { channel: string; code: string; reason: string } | null } | undefined;
+    // Diagnostic: log whether aiConversation is injected (PR #106 regression check)
+    // and whether this is a controlled test lead.
+    const isControlledTest = Boolean((lead as any).testRunId || (lead as any).metadata?.testRunId);
+    this.logger.log(
+      `tryAcceptLead: lead=${lead.id}, tenant=${tenantId}, ` +
+      `aiConversation=${this.aiConversation ? 'injected' : 'UNDEFINED'}, ` +
+      `isControlledTest=${isControlledTest}`,
+    );
     try {
       ai = await this.aiConversation?.acceptLead({
         tenantId,
         leadId: lead.id,
       });
+      this.logger.log(
+        `tryAcceptLead: acceptLead returned for lead=${lead.id}: ${JSON.stringify(ai)}`,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(
