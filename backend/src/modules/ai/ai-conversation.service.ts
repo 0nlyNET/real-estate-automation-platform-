@@ -258,7 +258,8 @@ export class AiConversationService
       this.settings.findOne({ where: { tenantId: event.tenantId } }),
     ]);
     // Controlled-UAT observability: only emit checkpoints for test runs.
-    const testRunId = (lead as any)?.context?.testRunId as string | undefined;
+    // The Lead entity has testRunId persisted from intake().
+    const testRunId = (lead as any)?.testRunId as string | undefined;
     const isControlled = !!testRunId;
     if (isControlled) {
       this.logger.log(
