@@ -464,7 +464,11 @@ export class AiConversationService
       return { claimed: 0, recovered: 0, paused: true as const };
     }
     const boundedLimit = Math.min(Math.max(limit, 1), 50);
-    const recovered = await this.recoverExhaustedRuns(boundedLimit);
+    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'before_recoverExhaustedRuns' }));
+    // DIAGNOSTIC: bypass recoverExhaustedRuns which is hanging on transaction.
+    // const recovered = await this.recoverExhaustedRuns(boundedLimit);
+    const recovered = 0;
+    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'after_recoverExhaustedRuns', recovered }));
     const ids = await this.claimRuns(boundedLimit);
     if (ids.length > 0) {
       this.logger.log(
