@@ -49,6 +49,10 @@ type AiConversationEvent = {
   messageId: string | null;
   channel: 'sms' | 'email';
   triggerType: 'inbound' | 'first_response';
+  // BUG 2 FIX: Controlled-test context must travel with the event, not be
+  // re-inferred from a re-fetched lead. The worker's preflight re-fetch
+  // was losing testRunId, causing SERVICE_NOT_ENTITLED for controlled tests.
+  testRunId?: string | null;
 };
 
 type PreflightContext = {
@@ -326,6 +330,8 @@ export class AiConversationService
         messageId: null,
         channel,
         triggerType: 'first_response',
+        // BUG 2 FIX: Pass controlled-test context explicitly.
+        testRunId: testRunId || null,
       };
       const preflight = await this.preflight(aiEvent);
       if (isControlled) {
@@ -464,50 +470,26 @@ export class AiConversationService
       return { claimed: 0, recovered: 0, paused: true as const };
     }
     const boundedLimit = Math.min(Math.max(limit, 1), 50);
-    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'before_recoverExhaustedRuns' }));
-    // DIAGNOSTIC: bypass recoverExhaustedRuns which is hanging on transaction.
-    // const recovered = await this.recoverExhaustedRuns(boundedLimit);
-    const recovered = 0;
-    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'after_recoverExhaustedRuns', recovered }));
-    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'before_claimRuns' }));
-    // DIAGNOSTIC: expose the exact run fields that claimRuns() evaluates
+    // BUG 1 FIX: recoverExhaustedRuns() must never permanently block the
+    // worker loop. Wrap in timeout + try-catch isolation. If recovery hangs
+    // or fails, log and continue to claimRuns().
+    let recovered = 0;
     try {
-      const diagRun = await this.runs.findOne({
-        where: { id: 'b101b321-dc0d-405c-8be9-551654968fc2' },
-      });
-      if (diagRun) {
-        this.logger.log(
-          JSON.stringify({
-            event: 'AI_RUN_DIAGNOSTIC',
-            id: diagRun.id,
-            status: diagRun.status,
-            attemptCount: diagRun.attemptCount,
-            lockedAt: diagRun.lockedAt?.toISOString() || null,
-            lockedBy: diagRun.lockedBy || null,
-            createdAt: diagRun.createdAt?.toISOString() || null,
-            errorCode: diagRun.errorCode || null,
-            sanitizedError: diagRun.sanitizedError?.slice(0, 200) || null,
-            maxAttempts: MAX_AI_RUN_ATTEMPTS,
-            leaseSeconds: AI_RUN_LEASE_SECONDS,
-          }),
-        );
-      } else {
-        this.logger.log(
-          JSON.stringify({
-            event: 'AI_RUN_DIAGNOSTIC',
-            id: 'b101b321-dc0d-405c-8be9-551654968fc2',
-            found: false,
-          }),
-        );
-      }
-    } catch (diagError) {
-      this.logger.warn(
+      recovered = await this.withTimeout(
+        this.recoverExhaustedRuns(boundedLimit),
+        15000,
+        'recoverExhaustedRuns',
+      );
+    } catch (recoveryError) {
+      this.logger.error(
         JSON.stringify({
-          event: 'AI_RUN_DIAGNOSTIC_FAILED',
-          error: diagError instanceof Error ? diagError.message : String(diagError),
+          event: 'AI_WORKER_RECOVERY_FAILED',
+          error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
         }),
       );
+      // Continue to claimRuns - recovery failure must not block polling.
     }
+    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'before_claimRuns' }));
     const ids = await this.claimRuns(boundedLimit);
     this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'after_claimRuns', count: ids.length }));
     if (ids.length > 0) {
@@ -532,6 +514,28 @@ export class AiConversationService
    * kill-switch is set. Checked at the top of every worker tick, before
    * recoverExhaustedRuns/claimRuns/processRun.
    */
+  /**
+   * BUG 1 FIX: Timeout wrapper for worker operations. If the operation
+   * does not complete within timeoutMs, reject with a timeout error.
+   * Used to ensure recoverExhaustedRuns() can never permanently block
+   * the worker loop.
+   */
+  private withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    operationName: string,
+  ): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`${operationName}-timeout-after-${timeoutMs}ms`)),
+          timeoutMs,
+        ),
+      ),
+    ]);
+  }
+
   private async isWorkerPaused(): Promise<boolean> {
     if (process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true') return true;
     // Timeout the DB query so a hanging connection doesn't stall the worker
@@ -690,6 +694,11 @@ export class AiConversationService
       channel:
         run.promptMetadata?.channel === 'email' ? 'email' : 'sms',
       triggerType: run.triggerType || 'inbound',
+      // BUG 2 FIX: Read controlled-test identity from the ai_run's
+      // promptMetadata (persisted at creation), not from re-inferring
+      // via the lead. This ensures worker preflight matches acceptLead
+      // preflight for the same controlled test.
+      testRunId: (run.promptMetadata as any)?.testRunId || null,
     };
     const trigger = run.triggeringMessageId
       ? await this.messages.findOne({
@@ -1076,7 +1085,12 @@ export class AiConversationService
         ? 'send_automated_sms'
         : 'send_automated_email',
       new Date(),
-      { controlledTest: Boolean(lead.testRunId) },
+      // BUG 2 FIX: Prefer the explicit event.testRunId (carried from
+      // acceptLead via ai_run.promptMetadata) over re-inferring from the
+      // re-fetched lead. This ensures worker preflight matches acceptLead
+      // preflight for controlled tests. Falls back to lead.testRunId for
+      // backward compatibility with runs created before this fix.
+      { controlledTest: Boolean(event.testRunId || lead.testRunId) },
     );
     if (!entitlement.allowed) {
       return deny('SERVICE_NOT_ENTITLED', entitlement.reasons.join('; '));
@@ -1164,6 +1178,9 @@ export class AiConversationService
             channel: event.channel,
             triggerType: event.triggerType,
             contentsStored: false,
+            // BUG 2 FIX: Persist controlled-test identity on the ai_run so
+            // the worker does not need to re-infer it from the lead.
+            ...(event.testRunId ? { testRunId: event.testRunId } : {}),
           },
           requestedTools: [],
           executedTools: [],
