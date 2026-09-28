@@ -469,7 +469,9 @@ export class AiConversationService
     // const recovered = await this.recoverExhaustedRuns(boundedLimit);
     const recovered = 0;
     this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'after_recoverExhaustedRuns', recovered }));
+    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'before_claimRuns' }));
     const ids = await this.claimRuns(boundedLimit);
+    this.logger.log(JSON.stringify({ event: 'AI_WORKER_STEP', step: 'after_claimRuns', count: ids.length }));
     if (ids.length > 0) {
       this.logger.log(
         JSON.stringify({
