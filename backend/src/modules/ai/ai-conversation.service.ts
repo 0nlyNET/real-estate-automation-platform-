@@ -503,7 +503,62 @@ export class AiConversationService
       );
     }
     for (const id of ids) {
-      await this.processRun(id);
+      // HARDENING: Instrument dispatch and isolate per-run failures.
+      // A single run throwing must not kill the tick or orphan other runs.
+      // Every claimed run must reach an explicit terminal/retry state.
+      this.logger.log(
+        JSON.stringify({
+          event: 'PROCESS_DISPATCH_STARTED',
+          runId: id,
+        }),
+      );
+      try {
+        await this.processRun(id);
+        this.logger.log(
+          JSON.stringify({
+            event: 'PROCESS_RUN_COMPLETED',
+            runId: id,
+          }),
+        );
+      } catch (dispatchError) {
+        this.logger.error(
+          JSON.stringify({
+            event: 'PROCESS_DISPATCH_FAILED',
+            runId: id,
+            error:
+              dispatchError instanceof Error
+                ? dispatchError.message
+                : String(dispatchError),
+          }),
+        );
+        // Persist the failure on the run so it does not disappear.
+        // The run was claimed (status=processing, locked by us); mark it
+        // failed with the dispatch error so recovery/ops can see it.
+        try {
+          const failedRun = await this.runs.findOne({ where: { id } });
+          if (failedRun) {
+            await this.blockRun(
+              failedRun,
+              'WORKER_DISPATCH_ERROR',
+              `Worker dispatch failed: ${dispatchError instanceof Error ? dispatchError.message : String(dispatchError)}`.slice(0, 500),
+              'high',
+              {},
+              true, // providerFailure=true → status='failed'
+            );
+          }
+        } catch (persistError) {
+          this.logger.error(
+            JSON.stringify({
+              event: 'PROCESS_DISPATCH_FAILED_PERSIST_FAILED',
+              runId: id,
+              error:
+                persistError instanceof Error
+                  ? persistError.message
+                  : String(persistError),
+            }),
+          );
+        }
+      }
     }
     return { claimed: ids.length, recovered, paused: false as const };
   }
@@ -683,10 +738,41 @@ export class AiConversationService
   }
 
   private async processRun(runId: string) {
+    // HARDENING: Instrument the claim→process handoff. Every claimed run
+    // must produce an observable outcome — it must not silently disappear.
+    this.logger.log(
+      JSON.stringify({
+        event: 'PROCESS_RUN_ENTERED',
+        runId,
+        workerId: this.workerId,
+      }),
+    );
     const run = await this.runs.findOne({
       where: { id: runId, lockedBy: this.workerId },
     });
-    if (!run) return;
+    if (!run) {
+      // HARDENING: The silent `return` here was the exact line where the
+      // 2026-09-28 fresh UAT run (900c6a4f-...) disappeared after a successful
+      // claim. A claimed run that cannot be re-fetched is an observable
+      // failure, not a silent skip. Attempt to locate the run by ID alone to
+      // determine whether the lock was lost, and record the outcome.
+      const orphan = await this.runs.findOne({ where: { id: runId } });
+      this.logger.error(
+        JSON.stringify({
+          event: 'PROCESS_RUN_FAILED',
+          runId,
+          reason: 'run_not_found_after_claim',
+          workerId: this.workerId,
+          orphanFound: !!orphan,
+          orphanStatus: (orphan as any)?.status || null,
+          orphanLockedBy: (orphan as any)?.lockedBy || null,
+        }),
+      );
+      // If the run exists but is not locked by us, do not process it —
+      // another worker owns it. If it does not exist at all, there is
+      // nothing to update. Either way, the failure is now observable.
+      return;
+    }
     const event: AiConversationEvent = {
       tenantId: run.tenantId,
       leadId: run.leadId,

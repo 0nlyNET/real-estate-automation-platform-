@@ -345,8 +345,37 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         where: { id, lockedBy: this.workerId },
         relations: ['lead'],
       });
-      if (!message) continue;
-      await this.trySend(message);
+      if (!message) {
+        // HARDENING: A claimed message that cannot be re-fetched must not
+        // silently disappear. Log it as an observable failure.
+        this.logger.error(
+          JSON.stringify({
+            event: 'MESSAGE_DISPATCH_FAILED',
+            messageId: id,
+            reason: 'message_not_found_after_claim',
+            workerId: this.workerId,
+          }),
+        );
+        continue;
+      }
+      try {
+        await this.trySend(message);
+      } catch (sendError) {
+        // HARDENING: A send exception must not kill the batch or orphan
+        // the message. trySend is expected to persist failure state, but
+        // if it throws, record the failure observably.
+        this.logger.error(
+          JSON.stringify({
+            event: 'MESSAGE_DISPATCH_FAILED',
+            messageId: id,
+            reason: 'trySend_threw',
+            error:
+              sendError instanceof Error
+                ? sendError.message
+                : String(sendError),
+          }),
+        );
+      }
     }
     return { claimed: ids.length, recovered };
   }
@@ -671,6 +700,34 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * HARDENING (PART 3): Interpolate lead personalization tokens in outbound
+   * content. Resolves {{first_name}}, {{last_name}}, {{full_name}},
+   * {{email}}, {{phone}} from the lead record. Unknown tokens are left
+   * intact so the final safety invariant can fail closed on them.
+   */
+  private interpolateLeadTokens(text: string, lead: any): string {
+    const firstName = String(lead?.firstName || '').trim();
+    const lastName = String(lead?.lastName || '').trim();
+    const fullName = `${firstName} ${lastName}`.trim();
+    const replacements: Record<string, string> = {
+      first_name: firstName,
+      firstName,
+      last_name: lastName,
+      lastName,
+      full_name: fullName,
+      fullName,
+      email: String(lead?.email || '').trim(),
+      phone: String(lead?.phone || '').trim(),
+    };
+    return text.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, key: string) => {
+      const value = replacements[key];
+      // Leave unknown tokens intact — the final safety check will fail
+      // closed rather than sending raw {{...}} to the provider.
+      return value !== undefined ? value : match;
+    });
+  }
+
   private async sendEmail(message: Message) {
     const lead = message.lead;
     const config = await this.getProviderConfig(lead.tenantId, {
@@ -700,7 +757,23 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     if (!/\{\{\s*unsubscribeUrl\s*\}\}/i.test(message.body)) {
       throw new Error('Approved email template is missing unsubscribe placeholder');
     }
-    const text = message.body.replace(/\{\{\s*unsubscribeUrl\s*\}\}/gi, unsubscribeUrl);
+    // HARDENING (PART 3): Interpolate lead personalization tokens.
+    // Previously only {{unsubscribeUrl}} was replaced; {{first_name}} and
+    // other lead tokens passed through to SendGrid unresolved, violating
+    // the outbound invariant (proven by the 2026-09-28 05:01 canceled
+    // outbound containing raw {{first_name}} and {{unsubscribeUrl}}).
+    let text = message.body.replace(/\{\{\s*unsubscribeUrl\s*\}\}/gi, unsubscribeUrl);
+    text = this.interpolateLeadTokens(text, lead);
+    // HARDENING (PART 3): Final provider-bound safety invariant.
+    // If ANY unresolved {{...}} template syntax remains in customer-facing
+    // content, DO NOT SEND. Fail closed, record the failure, surface an
+    // operational event. A real lead must never receive raw template tokens.
+    const unresolved = text.match(/\{\{\s*[a-zA-Z0-9_.]+\s*\}\}/);
+    if (unresolved) {
+      throw new Error(
+        `Unresolved template variable ${unresolved[0]} in outbound message ${message.id}; refusing provider send`,
+      );
+    }
     await this.markProviderSubmissionStarted(message);
     const response = await sendSendGridEmail({
       apiKey,

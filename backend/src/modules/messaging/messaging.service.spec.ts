@@ -991,3 +991,90 @@ describe('terminal provider failure integration wiring (P1)', () => {
     expect(message.status).toBe('failed');
   });
 });
+
+describe('template safety invariant (hardening)', () => {
+  function templateSetup() {
+    const messageRepo = {
+      findOne: jest.fn(),
+      save: jest.fn().mockImplementation(async (m: any) => m),
+    };
+    const service = buildService({ messageRepo });
+    return { service, messageRepo };
+  }
+
+  function leadWith(name: { firstName?: string; lastName?: string }) {
+    return {
+      id: 'lead-1',
+      tenantId: 'tenant-1',
+      firstName: name.firstName || '',
+      lastName: name.lastName || '',
+      email: 'lead@example.com',
+      phone: '+15551234567',
+      testRunId: 'test-run-1',
+    } as any;
+  }
+
+  it('interpolateLeadTokens resolves first_name', () => {
+    const { service } = templateSetup();
+    const result = (service as any).interpolateLeadTokens(
+      'Hi {{first_name}}, thanks!',
+      leadWith({ firstName: 'Alex' }),
+    );
+    expect(result).toBe('Hi Alex, thanks!');
+    expect(result).not.toMatch(/\{\{/);
+  });
+
+  it('interpolateLeadTokens resolves last_name and full_name', () => {
+    const { service } = templateSetup();
+    const result = (service as any).interpolateLeadTokens(
+      '{{full_name}} ({{last_name}})',
+      leadWith({ firstName: 'Alex', lastName: 'Rivera' }),
+    );
+    expect(result).toBe('Alex Rivera (Rivera)');
+  });
+
+  it('interpolateLeadTokens leaves unknown tokens intact for fail-closed', () => {
+    const { service } = templateSetup();
+    const result = (service as any).interpolateLeadTokens(
+      'Hi {{first_name}}, your {{unknown_field}} is ready',
+      leadWith({ firstName: 'Alex' }),
+    );
+    // Unknown token survives interpolation so the final safety check
+    // can fail closed rather than sending raw {{...}} to the provider.
+    expect(result).toContain('{{unknown_field}}');
+    expect(result).toContain('Alex');
+  });
+
+  it('sendEmail refuses to send when unresolved template syntax remains', async () => {
+    const { service } = templateSetup();
+    const message = {
+      id: 'msg-1',
+      body: 'Hi {{first_name}}, your {{mystery_token}} is here\n\nUnsubscribe: {{unsubscribeUrl}}',
+      subject: 'Test',
+      lead: leadWith({ firstName: 'Alex' }),
+    } as any;
+    // Mock the dependencies sendEmail needs before the safety check.
+    (service as any).getProviderConfig = jest.fn().mockResolvedValue({
+      sendgrid: {
+        apiKey: 'key',
+        fromEmail: 'from@example.com',
+        inboundAddress: 'reply@example.com',
+        routingKey: 'reply@example.com',
+      },
+    });
+    (service as any).complianceService = {
+      createUnsubscribeToken: jest.fn().mockReturnValue('token123'),
+    };
+    (service as any).tenantRepository = {
+      findOne: jest.fn().mockResolvedValue({ name: 'Test Realty' }),
+    };
+    process.env.FRONTEND_URL = 'https://example.com';
+    (service as any).markProviderSubmissionStarted = jest.fn();
+
+    await expect((service as any).sendEmail(message)).rejects.toThrow(
+      /Unresolved template variable.*mystery_token.*refusing provider send/,
+    );
+    // Provider submission must never start when templates are unresolved.
+    expect((service as any).markProviderSubmissionStarted).not.toHaveBeenCalled();
+  });
+});

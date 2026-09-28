@@ -985,3 +985,64 @@ describe('BUG 2 regression: controlled-test context preserved through worker (20
     expect(item.dependencies.runs.save).toHaveBeenCalled();
   });
 });
+
+describe('HARDENING: claim→process handoff never silently drops runs (2026-09-28)', () => {
+  it('processRun logs PROCESS_RUN_FAILED when claimed run cannot be re-fetched', async () => {
+    const item = fixture('controlled_autopilot');
+    // Mock runs repository: findOne returns null (simulating the
+    // 2026-09-28 incident where the claimed run was not found).
+    const runsRepo = {
+      findOne: jest.fn()
+        .mockResolvedValueOnce(null) // First call: the claimed-run lookup
+        .mockResolvedValueOnce(null), // Second call: the orphan check
+    };
+    const service = new (require('./ai-conversation.service').AiConversationService)(
+      {} as any, // dataSource
+      runsRepo as any, // runs
+      {} as any, // settings
+      {} as any, // knowledge
+      {} as any, // states
+      {} as any, // platformControls
+      { findOne: jest.fn() } as any, // leads
+      { findOne: jest.fn() } as any, // messages
+      {} as any, // credentials
+      {} as any, // provider
+      {} as any, // locks
+      {} as any, // control
+      {} as any, // policy
+      {} as any, // tools
+      {} as any, // usage
+      {} as any, // audit
+      {} as any, // compliance
+      {} as any, // entitlements
+      {} as any, // clientOperations
+      {} as any, // notifications
+      {} as any, // operations
+    );
+
+    // Spy on logger
+    const logSpy = jest.spyOn((service as any).logger, 'log').mockImplementation(() => {});
+    const errorSpy = jest.spyOn((service as any).logger, 'error').mockImplementation(() => {});
+
+    const runId = '900c6a4f-fa00-4ee0-8d21-85dcbc9f9b40';
+    await (service as any).processRun(runId);
+
+    // Must log PROCESS_RUN_ENTERED (observability)
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('PROCESS_RUN_ENTERED'),
+    );
+    // Must log PROCESS_RUN_FAILED (not silent)
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('PROCESS_RUN_FAILED'),
+    );
+    // The failure reason must identify the handoff break
+    const failedCall = errorSpy.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('PROCESS_RUN_FAILED'),
+    );
+    expect(failedCall).toBeDefined();
+    expect(String(failedCall![0])).toContain('run_not_found_after_claim');
+
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+});
