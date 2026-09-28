@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, OnModuleInit, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { normalizePhoneE164 } from '../../common/phone';
@@ -35,6 +35,8 @@ function asControlledTemperature(
 
 @Injectable()
 export class TestingService implements OnModuleInit {
+  private readonly logger = new Logger(TestingService.name);
+
   constructor(
     @InjectRepository(TestRun)
     private readonly runs: Repository<TestRun>,
@@ -98,6 +100,18 @@ export class TestingService implements OnModuleInit {
         // "test already in progress" from "new test started". This prevents
         // the false-success UX where the frontend reports a new test started
         // when nothing actually happened.
+        // Operator observability: log the active run ID so it can be aborted
+        // via the PR #116 endpoint without UI.
+        this.logger.log(
+          JSON.stringify({
+            event: 'ACTIVE_TEST_RUN',
+            testRunId: existing.id,
+            tenantId: existing.tenantId,
+            status: existing.status,
+            createdAt: existing.createdAt,
+            leadId: existing.testLeadId,
+          }),
+        );
         return { run: existing, isNew: false };
       }
       existing.status = 'expired';
