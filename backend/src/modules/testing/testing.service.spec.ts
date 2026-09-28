@@ -42,6 +42,7 @@ describe('TestingService production-pipeline UAT', () => {
       runs as any,
       sequences as any,
       { count: jest.fn().mockResolvedValue(0) } as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
       onboarding as any,
       leads as any,
       notifications as any,
@@ -101,6 +102,7 @@ describe('TestingService production-pipeline UAT', () => {
       runs as any,
       sequences as any,
       { count: jest.fn().mockResolvedValue(0) } as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
       {
         getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: true, emailEnabled: false }),
         beginTesting: jest.fn(),
@@ -139,6 +141,7 @@ describe('TestingService production-pipeline UAT', () => {
           },
         ]),
       } as any,            { count: jest.fn().mockResolvedValue(0) } as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
 
       {
         getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: false, emailEnabled: true }),
@@ -191,6 +194,7 @@ describe('TestingService production-pipeline UAT', () => {
           },
         ]),
       } as any,            { count: jest.fn().mockResolvedValue(0) } as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
 
       {
         getOrCreate: jest.fn().mockResolvedValue({ 
@@ -238,6 +242,7 @@ describe('TestingService production-pipeline UAT', () => {
           },
         ]),
       } as any,            { count: jest.fn().mockResolvedValue(0) } as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
 
       {
         getOrCreate: jest.fn().mockResolvedValue({ 
@@ -322,6 +327,7 @@ describe('TestingService production-pipeline UAT', () => {
           },
         ]),
       } as any,            { count: jest.fn().mockResolvedValue(0) } as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
 
       {
         getOrCreate: jest.fn().mockResolvedValue({ smsEnabled: false, emailEnabled: true }),
@@ -428,6 +434,7 @@ describe('TestingService production-pipeline UAT', () => {
       runs as any,
       sequences as any,
       aiRuns as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
       onboarding as any,
       leads as any,
       notifications as any,
@@ -470,6 +477,7 @@ describe('TestingService production-pipeline UAT', () => {
       runs as any,
       { find: jest.fn() } as any,
       aiRuns as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
       onboarding as any,
       { intake: jest.fn() } as any,
       {} as any,

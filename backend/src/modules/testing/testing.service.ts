@@ -9,6 +9,7 @@ import { TestRun } from './test-run.entity';
 import { DurableJobsService } from '../durable-jobs/durable-jobs.service';
 import { Sequence } from '../sequences/sequence.entity';
 import { AiRun } from '../ai/ai-run.entity';
+import { Message } from '../messaging/message.entity';
 import { LeadConsentDto, ConsentEvidenceDto } from '../compliance/consent.dto';
 import { IntakeLeadDto } from '../leads/dto/intake-lead.dto';
 
@@ -41,6 +42,8 @@ export class TestingService implements OnModuleInit {
     private readonly sequences: Repository<Sequence>,
     @InjectRepository(AiRun)
     private readonly aiRuns: Repository<AiRun>,
+    @InjectRepository(Message)
+    private readonly messages: Repository<Message>,
     private readonly onboarding: OnboardingService,
     private readonly leads: LeadsService,
     private readonly notifications: NotificationsService,
@@ -260,10 +263,58 @@ export class TestingService implements OnModuleInit {
     const aiRunCount = await this.aiRuns.count({
       where: { tenantId: run.tenantId, leadId: run.testLeadId },
     });
+    // Diagnostic: check if the test lead's outbound message is claimable by the worker.
+    // Uses the same predicates as MessagingService.claimMessages (no raw SQL).
+    let messageDiag = 'no outbound message found';
+    try {
+      const msg = await this.messages.findOne({
+        where: { leadId: run.testLeadId, direction: 'outbound' as any },
+        order: { createdAt: 'DESC' },
+      });
+      if (msg) {
+        const now = Date.now();
+        const reasons: string[] = [];
+        // Predicate 1: status must be claimable
+        const claimableStatuses = ['created', 'queued', 'pending', 'scheduled', 'sending'];
+        if (!claimableStatuses.includes(msg.status)) {
+          reasons.push(`status=${msg.status} not in claimable set`);
+        }
+        // Predicate 2: if status is 'sending', provider_submission_started_at must be null
+        // (Message entity field name check - using any for safety)
+        const msgAny = msg as any;
+        if (msg.status === 'sending' && msgAny.providerSubmissionStartedAt) {
+          reasons.push('status=sending with provider_submission_started_at set');
+        }
+        // Predicate 3: scheduled_at must be null or in past
+        if (msg.scheduledAt && msg.scheduledAt.getTime() > now) {
+          reasons.push(`scheduledAt=${msg.scheduledAt.toISOString()} is in future`);
+        }
+        // Predicate 4: next_attempt_at must be null or in past
+        if (msg.nextAttemptAt && msg.nextAttemptAt.getTime() > now) {
+          reasons.push(`nextAttemptAt=${msg.nextAttemptAt.toISOString()} is in future`);
+        }
+        // Predicate 5: locked_at must be null or older than 120s (MESSAGE_LEASE_SECONDS)
+        if (msg.lockedAt && msg.lockedAt.getTime() > now - 120_000) {
+          reasons.push(`lockedAt=${msg.lockedAt.toISOString()} is active (within 120s lease)`);
+        }
+        const claimEligible = reasons.length === 0;
+        messageDiag =
+          `msgId=${msg.id}, status=${msg.status}, providerStatus=${msg.providerStatus}, ` +
+          `scheduledAt=${msg.scheduledAt?.toISOString() || 'null'}, ` +
+          `nextAttemptAt=${msg.nextAttemptAt?.toISOString() || 'null'}, ` +
+          `lockedAt=${msg.lockedAt?.toISOString() || 'null'}, ` +
+          `attemptCount=${msg.attemptCount}, lastError=${msg.lastError || 'null'}, ` +
+          `claimEligibleNow=${claimEligible}` +
+          (reasons.length > 0 ? `, ineligibilityReasons=[${reasons.join('; ')}]` : '');
+      }
+    } catch (e) {
+      messageDiag = `message lookup failed: ${e?.message || e}`;
+    }
     const stuck = aiRunCount === 0;
     console.log(
       `[TestingService] isStuckRun(${run.id}): age=${Math.round(ageMs / 60000)}min, ` +
-        `testLeadId=${run.testLeadId}, aiRunCount=${aiRunCount}, stuck=${stuck}`,
+        `testLeadId=${run.testLeadId}, aiRunCount=${aiRunCount}, stuck=${stuck}, ` +
+        `message: ${messageDiag}`,
     );
     return stuck;
   }
