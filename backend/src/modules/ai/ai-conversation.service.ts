@@ -257,6 +257,19 @@ export class AiConversationService
       this.leads.findOne({ where: { id: event.leadId, tenantId: event.tenantId } }),
       this.settings.findOne({ where: { tenantId: event.tenantId } }),
     ]);
+    // Controlled-UAT observability: only emit checkpoints for test runs.
+    const testRunId = (lead as any)?.context?.testRunId as string | undefined;
+    const isControlled = !!testRunId;
+    if (isControlled) {
+      this.logger.log(
+        JSON.stringify({
+          event: 'ACCEPT_LEAD_ENTERED',
+          testRunId,
+          tenantId: event.tenantId,
+          leadId: event.leadId,
+        }),
+      );
+    }
     if (
       !lead ||
       !settings?.aiEnabled ||
@@ -271,6 +284,18 @@ export class AiConversationService
       event.leadId,
       'ai_handling',
     );
+    if (isControlled) {
+      this.logger.log(
+        JSON.stringify({
+          event: 'STATE_READY',
+          testRunId,
+          tenantId: event.tenantId,
+          leadId: event.leadId,
+          stateId: (state as any)?.id,
+          ownershipStatus: (state as any)?.ownershipStatus,
+        }),
+      );
+    }
     if (state.ownershipStatus !== 'ai_handling') {
       return { status: 'ignored' as const, code: 'HUMAN_CONTROLLED' };
     }
@@ -290,6 +315,22 @@ export class AiConversationService
         triggerType: 'first_response',
       };
       const preflight = await this.preflight(aiEvent);
+      if (isControlled) {
+        this.logger.log(
+          JSON.stringify({
+            event: 'PREFLIGHT_RESULT',
+            testRunId,
+            tenantId: event.tenantId,
+            leadId: event.leadId,
+            channel,
+            passed: preflight.allowed,
+            code: (preflight as any)?.code,
+            reason: (preflight as any)?.reason,
+            automationEnabled: settings?.aiEnabled,
+            humanControl: state.ownershipStatus,
+          }),
+        );
+      }
       if (!preflight.allowed) {
         // Diagnostic: log preflight denial so silent skips are observable.
         // Controlled UAT runs were silently skipping AI with no ai_run created.
@@ -306,10 +347,72 @@ export class AiConversationService
         );
         continue;
       }
-      const run = await this.createRun(aiEvent, settings.responseMode, 'queued');
-      return run
+      if (isControlled) {
+        this.logger.log(
+          JSON.stringify({
+            event: 'AI_RUN_CREATE_STARTED',
+            testRunId,
+            tenantId: event.tenantId,
+            leadId: event.leadId,
+            channel,
+          }),
+        );
+      }
+      let run: any = null;
+      try {
+        run = await this.createRun(aiEvent, settings.responseMode, 'queued');
+      } catch (error: any) {
+        if (isControlled) {
+          this.logger.error(
+            JSON.stringify({
+              event: 'AI_RUN_CREATE_FAILED',
+              testRunId,
+              tenantId: event.tenantId,
+              leadId: event.leadId,
+              channel,
+              errorType: error?.constructor?.name || typeof error,
+              errorMessage: String(error?.message || error).slice(0, 200),
+              operation: 'createRun',
+            }),
+          );
+        }
+        throw error;
+      }
+      if (isControlled && run) {
+        this.logger.log(
+          JSON.stringify({
+            event: 'AI_RUN_PERSISTED',
+            testRunId,
+            tenantId: event.tenantId,
+            leadId: event.leadId,
+            channel,
+            aiRunId: run.id,
+            status: run.status,
+            createdAt: run.createdAt,
+          }),
+        );
+      }
+      // Note: This system does not use a separate job queue. The ai_run is
+      // persisted with status='queued'. A worker picks it up via claimRuns().
+      // There is no AI_JOB_ENQUEUE step; dispatch = DB persistence.
+      const result = run
         ? { status: 'queued' as const, runId: run.id, channel }
         : { status: 'duplicate' as const, channel };
+      if (isControlled) {
+        this.logger.log(
+          JSON.stringify({
+            event: 'ACCEPT_LEAD_RETURNING',
+            testRunId,
+            tenantId: event.tenantId,
+            leadId: event.leadId,
+            returnedStatus: result.status,
+            aiRunId: (result as any)?.runId || null,
+            // No separate job/dispatch ID: persistence IS the dispatch.
+            dispatchMechanism: 'db_persisted_queued_status',
+          }),
+        );
+      }
+      return result;
     }
     return {
       status: 'ignored' as const,
