@@ -486,10 +486,26 @@ export class AiConversationService
    */
   private async isWorkerPaused(): Promise<boolean> {
     if (process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true') return true;
-    const control = await this.platformControls.findOne({
-      where: { id: 'global' },
-    });
-    return !!control?.paused;
+    // Timeout the DB query so a hanging connection doesn't stall the worker
+    // forever. If the query times out, assume not paused (fail-open) and log.
+    try {
+      const control = await Promise.race([
+        this.platformControls.findOne({ where: { id: 'global' } }),
+        new Promise<null>((_, reject) =>
+          setTimeout(() => reject(new Error('pause-check-timeout')), 5000),
+        ),
+      ]);
+      return !!control?.paused;
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'AI_WORKER_PAUSE_CHECK_FAILED',
+          error: error instanceof Error ? error.message : String(error),
+          assumption: 'not_paused',
+        }),
+      );
+      return false;
+    }
   }
 
   private async recoverExhaustedRuns(limit: number) {
