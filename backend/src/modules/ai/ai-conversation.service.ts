@@ -144,6 +144,8 @@ export class AiConversationService
    * therefore duplicate notifications) during the 2026-09-26 rehearsal.
    */
   private async tickWorker() {
+    // Diagnostic: prove tickWorker is being called
+    this.logger.log(JSON.stringify({ event: 'AI_WORKER_TICK' }));
     if (this.workerRunning) return;
     this.workerRunning = true;
     try {
