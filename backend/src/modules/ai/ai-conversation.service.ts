@@ -133,7 +133,8 @@ export class AiConversationService
     this.workerTimer = setInterval(() => {
       void this.tickWorker();
     }, 3_000);
-    this.workerTimer.unref?.();
+    // Note: unref() removed — it was preventing the timer from firing in
+    // the Railway staging environment. The timer must keep the worker alive.
   }
 
   /**
