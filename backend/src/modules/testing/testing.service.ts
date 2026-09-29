@@ -363,13 +363,18 @@ export class TestingService implements OnModuleInit {
         futureScheduled = true;
         console.log(`[TestingService] isStuckRun(${run.id}): outbound message ${msg.id} scheduled ${msg.scheduledAt.toISOString()} (>60min future), stuck=true`);
       }
-      // A run whose latest outbound message is in a terminal non-delivered state
-      // (blocked, failed, canceled) can never complete the E2E. Treat as stuck
-      // so the operator can retry with a fresh run.
+      // A run with ANY outbound message in a terminal non-delivered state
+      // (blocked, failed, canceled) can never complete the E2E. Check all
+      // messages, not just the latest — a run may have a blocked AI message
+      // plus a newer queued template message.
       const terminalStates = ['blocked', 'failed', 'canceled', 'cancelled'];
-      if (msg && terminalStates.includes(msg.status)) {
+      const allOutbound = await this.messages.find({
+        where: { leadId: run.testLeadId, direction: 'outbound' as any },
+      });
+      const blockedMsg = allOutbound.find((m) => terminalStates.includes(m.status));
+      if (blockedMsg) {
         terminallyBlocked = true;
-        console.log(`[TestingService] isStuckRun(${run.id}): outbound message ${msg.id} status=${msg.status} (terminal), stuck=true`);
+        console.log(`[TestingService] isStuckRun(${run.id}): outbound message ${blockedMsg.id} status=${blockedMsg.status} (terminal), stuck=true`);
       }
     } catch {
       // Ignore lookup failures here; the diagnostic above already logged them.

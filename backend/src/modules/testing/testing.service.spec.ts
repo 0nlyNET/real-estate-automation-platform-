@@ -530,6 +530,102 @@ describe('TestingService production-pipeline UAT', () => {
     expect(result.isNew).toBe(true);
   });
 
+  it('expires a stuck run with blocked message plus newer queued message', async () => {
+    // Regression test: a run with a blocked AI message AND a newer queued
+    // template message must be detected as stuck. The old code only checked
+    // the latest message (queued), missing the terminal blocked message.
+    const oldDate = new Date(Date.now() - 20 * 60_000);
+    const stuckRun = {
+      id: 'run-blocked-queued',
+      tenantId: 'tenant-1',
+      status: 'running',
+      createdAt: oldDate,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60_000),
+      testLeadId: 'lead-blocked',
+      checks: { intake: 'passed', outbound: 'awaiting_provider_callbacks' },
+      failureReason: null,
+    };
+    const blockedMsg = {
+      id: 'msg-blocked',
+      status: 'blocked',
+      direction: 'outbound',
+      createdAt: new Date(Date.now() - 15 * 60_000),
+      scheduledAt: null,
+      nextAttemptAt: null,
+      lockedAt: null,
+      attemptCount: 1,
+      lastError: 'SAFETY_GUARDRAIL',
+      providerStatus: null,
+    };
+    const queuedMsg = {
+      id: 'msg-queued',
+      status: 'queued',
+      direction: 'outbound',
+      createdAt: new Date(Date.now() - 5 * 60_000),
+      scheduledAt: null,
+      nextAttemptAt: null,
+      lockedAt: null,
+      attemptCount: 0,
+      lastError: null,
+      providerStatus: null,
+    };
+    const savedRuns: any[] = [];
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(stuckRun),
+      create: jest.fn((value: any) => value),
+      save: jest.fn(async (value: any) => {
+        savedRuns.push({ ...value });
+        if (!value.id) value.id = 'run-fresh-2';
+        return value;
+      }),
+    };
+    // AI did run (count > 0), so the old aiRunCount===0 check wouldn't catch this.
+    const aiRuns = { count: jest.fn().mockResolvedValue(1) };
+    const messages = {
+      // findOne returns the LATEST (queued) — the old buggy code path.
+      findOne: jest.fn().mockResolvedValue(queuedMsg),
+      // find returns ALL — the fixed code checks for any terminal message.
+      find: jest.fn().mockResolvedValue([blockedMsg, queuedMsg]),
+    };
+    const onboarding = {
+      getOrCreate: jest.fn().mockResolvedValue({
+        smsEnabled: false,
+        emailEnabled: true,
+        contacts: { controlledTestEmail: 'owner@example.com' },
+      }),
+      beginTesting: jest.fn().mockResolvedValue({ lifecycleStatus: 'TESTING' }),
+    };
+    const leads = {
+      intake: jest.fn().mockResolvedValue({ id: 'lead-fresh-2' }),
+      getLeadById: jest.fn().mockResolvedValue({ id: 'lead-blocked' }),
+    };
+    const notifications = { createForTenant: jest.fn().mockResolvedValue({}) };
+    const sequences = {
+      find: jest.fn().mockResolvedValue([
+        {
+          leadType: 'buyer',
+          temperature: 'warm',
+          steps: [{ active: true, approvalStatus: 'approved', channel: 'email' }],
+        },
+      ]),
+    };
+    const service = new TestingService(
+      runs as any,
+      sequences as any,
+      aiRuns as any,
+      messages as any,
+      onboarding as any,
+      leads as any,
+      notifications as any,
+    );
+    const result = await service.start('tenant-1', 'operator-1', {});
+    // The stuck run must have been expired despite the newer queued message...
+    expect(savedRuns[0]).toMatchObject({ id: 'run-blocked-queued', status: 'expired' });
+    // ...and a fresh run created.
+    expect(result.run.id).toBe('run-fresh-2');
+    expect(result.isNew).toBe(true);
+  });
+
   it('returns the existing run when it is not stuck', async () => {
     const recentDate = new Date(Date.now() - 2 * 60_000);
     const healthyRun = {
