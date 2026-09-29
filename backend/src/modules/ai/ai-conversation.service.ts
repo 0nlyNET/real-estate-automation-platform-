@@ -268,14 +268,17 @@ export class AiConversationService
   /** Queue the first AI response after lead intake without fabricating an
    * inbound message. The normal worker, controls, consent, provider readiness,
    * usage limits, quiet hours, and takeover locks still apply. */
-  async acceptLead(event: { tenantId: string; leadId: string }) {
+  async acceptLead(event: { tenantId: string; leadId: string; testRunId?: string | null }) {
     const [lead, settings] = await Promise.all([
       this.leads.findOne({ where: { id: event.leadId, tenantId: event.tenantId } }),
       this.settings.findOne({ where: { tenantId: event.tenantId } }),
     ]);
     // Controlled-UAT observability: only emit checkpoints for test runs.
-    // The Lead entity has testRunId persisted from intake().
-    const testRunId = (lead as any)?.testRunId as string | undefined;
+    // Prefer the explicitly passed testRunId (from tryAcceptLead) over
+    // re-inferring from the re-fetched lead. The Lead entity has testRunId
+    // persisted from intake(), but the explicit pass-through is the primary
+    // source to avoid any re-fetch timing or caching loss.
+    const testRunId = event.testRunId || (lead as any)?.testRunId as string | undefined;
     const isControlled = !!testRunId;
     if (isControlled) {
       this.logger.log(
@@ -847,6 +850,10 @@ export class AiConversationService
         knowledgeVersion: preflight.knowledge.updatedAt?.toISOString() || null,
         firstAiResponse,
         triggerType: run.triggerType,
+        // Preserve controlled-test identity across promptMetadata replacement.
+        // Without this, a retry reconstructs the event from promptMetadata
+        // (line ~795) and loses the testRunId, causing SERVICE_NOT_ENTITLED.
+        ...(event.testRunId ? { testRunId: event.testRunId } : {}),
       };
       await this.runs.save(run);
 

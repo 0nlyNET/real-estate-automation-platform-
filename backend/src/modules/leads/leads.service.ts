@@ -122,6 +122,9 @@ export class LeadsService {
       ai = await this.aiConversation!.acceptLead({
         tenantId,
         leadId: lead.id,
+        // Pass controlled-test identity explicitly; do not rely solely on
+        // re-fetching it from the lead inside acceptLead.
+        testRunId,
       });
       const denial = ai?.denial ?? null;
       if (ai?.status === 'ignored' || denial) {

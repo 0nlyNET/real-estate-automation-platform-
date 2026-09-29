@@ -142,6 +142,7 @@ describe('AI first-response boundary', () => {
     expect(h.acceptLead).toHaveBeenCalledWith({
       tenantId: 'tenant-1',
       leadId: saved.id,
+      testRunId: null,
     });
     // AI took the lead: no deterministic-template fallback, delayed sequences.
     expect(h.queueInstantResponses).not.toHaveBeenCalled();
