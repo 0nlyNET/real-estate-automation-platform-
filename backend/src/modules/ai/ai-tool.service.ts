@@ -200,9 +200,19 @@ export class AiToolService {
         context.channel === 'sms'
           ? 'send_automated_sms'
           : 'send_automated_email';
+      // Pass controlled-test identity to the entitlement gate, mirroring the
+      // run-level preflight. Without this, tools executed for a controlled
+      // test in a TESTING workspace are denied even though the run itself
+      // was allowed.
+      const testRunId =
+        (context.run.promptMetadata as any)?.testRunId ||
+        (context.lead as any)?.testRunId ||
+        null;
       const entitlement = await this.entitlements.evaluate(
         context.run.tenantId,
         action,
+        new Date(),
+        { controlledTest: Boolean(testRunId) },
       );
       if (!entitlement.allowed) {
         throw new ForbiddenException({

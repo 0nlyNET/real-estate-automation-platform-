@@ -291,4 +291,53 @@ describe('AI tool allowlist and validation', () => {
       code: 'TENANT_CONTEXT_INVALID',
     });
   });
+
+  it('passes controlledTest to entitlement gate for controlled-test runs', async () => {
+    const item = fixture();
+    const testRunId = '00000000-0000-4000-8000-000000000093';
+    // Simulate a controlled-test run with testRunId in promptMetadata.
+    (item.context.run as any).promptMetadata = { testRunId, channel: 'sms' };
+    item.context.settings.bookingBehavior = 'calendar_booking';
+    item.dependencies.clientOperations.createAppointment.mockResolvedValue({ id: 'appt-1' });
+    const startsAt = new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString();
+    await item.service.execute(
+      item.context,
+      {
+        name: 'create_or_update_appointment',
+        arguments: JSON.stringify({ startsAt }),
+      },
+      3,
+    );
+    // The entitlement gate must receive controlledTest: true.
+    expect(item.dependencies.entitlements.evaluate).toHaveBeenCalledWith(
+      item.context.run.tenantId,
+      'send_automated_sms',
+      expect.any(Date),
+      { controlledTest: true },
+    );
+  });
+
+  it('passes controlledTest: false for ordinary runs without testRunId', async () => {
+    const item = fixture();
+    // No testRunId in promptMetadata or lead.
+    (item.context.run as any).promptMetadata = { channel: 'sms' };
+    item.context.settings.bookingBehavior = 'calendar_booking';
+    item.dependencies.clientOperations.createAppointment.mockResolvedValue({ id: 'appt-2' });
+    const startsAt = new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString();
+    await item.service.execute(
+      item.context,
+      {
+        name: 'create_or_update_appointment',
+        arguments: JSON.stringify({ startsAt }),
+      },
+      3,
+    );
+    // The entitlement gate must receive controlledTest: false.
+    expect(item.dependencies.entitlements.evaluate).toHaveBeenCalledWith(
+      item.context.run.tenantId,
+      'send_automated_sms',
+      expect.any(Date),
+      { controlledTest: false },
+    );
+  });
 });
