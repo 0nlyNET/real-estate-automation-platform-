@@ -333,6 +333,56 @@ describe('AI conversation workflow', () => {
     );
   });
 
+  it('preserves testRunId in promptMetadata when processRun replaces it (retry safety)', async () => {
+    const item = fixture('controlled_autopilot');
+    const testRunId = '00000000-0000-4000-8000-000000000091';
+    // Simulate an ai_run created with testRunId in promptMetadata.
+    item.run.promptMetadata = {
+      channel: 'sms',
+      triggerType: 'first_response',
+      contentsStored: false,
+      testRunId,
+    };
+    // The worker reconstructs the event from promptMetadata.
+    const event = {
+      tenantId: item.tenantId,
+      leadId: item.lead.id,
+      messageId: null,
+      channel: 'sms' as const,
+      triggerType: 'first_response' as const,
+      testRunId: (item.run.promptMetadata as any)?.testRunId || null,
+    };
+    expect(event.testRunId).toBe(testRunId);
+    // After processRun replaces promptMetadata, testRunId must survive.
+    await (item.service as any).processRun(item.run.id);
+    expect((item.run.promptMetadata as any)?.testRunId).toBe(testRunId);
+  });
+
+  it('ordinary lead without testRunId does not gain controlled-test exception', async () => {
+    const item = fixture('controlled_autopilot');
+    // No testRunId on lead, none passed explicitly.
+    item.lead.testRunId = null;
+    (item.service as any).preflight.mockRestore();
+    const result = await (item.service as any).preflight({
+      tenantId: item.tenantId,
+      leadId: item.lead.id,
+      messageId: null,
+      channel: 'sms',
+      triggerType: 'first_response',
+      testRunId: null,
+    });
+    // The entitlement gate must see controlledTest: false for ordinary leads.
+    expect(item.dependencies.entitlements.evaluate).toHaveBeenCalledWith(
+      item.tenantId,
+      'send_automated_sms',
+      expect.any(Date),
+      { controlledTest: false },
+    );
+    // And the preflight must DENY (not allow) for a non-controlled lead
+    // in a TESTING workspace. This proves the exception is not granted.
+    expect(result.allowed).toBe(false);
+  });
+
   it.each([
     ['draft', 'draft'],
     ['controlled_autopilot', 'queued'],
