@@ -72,8 +72,14 @@ export class MessageSafetyService {
     input: MessageSafetyInput,
   ): Promise<MessageSafetyResult> {
     const reasons = new Map<string, string>();
-    const block = (ruleId: string, reason: string) => {
-      if (!reasons.has(ruleId)) reasons.set(ruleId, reason);
+    const block = (ruleId: string, reason: string, details?: Record<string, unknown>) => {
+      if (!reasons.has(ruleId)) {
+        reasons.set(ruleId, reason);
+        // DIAGNOSTIC: Log block details for controlled-test debugging
+        if (details) {
+          console.log(`[SAFETY_BLOCK] ${ruleId}: ${reason}`, JSON.stringify(details));
+        }
+      }
     };
     const now = input.now ?? new Date();
     const lead = await this.leadRepository.findOne({
@@ -149,21 +155,37 @@ export class MessageSafetyService {
           run.status !== "running" ||
           run.expiresAt.getTime() <= now.getTime()
         ) {
-          block("TEST_RUN_INACTIVE", "Controlled test run is not active");
+          block("TEST_RUN_INACTIVE", "Controlled test run is not active", {
+            runFound: Boolean(run),
+            runStatus: run?.status,
+            runExpiresAt: run?.expiresAt?.toISOString(),
+            now: now.toISOString(),
+            leadTestRunId: lead.testRunId,
+          });
         } else {
           const testChannel = job?.channel ?? normalizeChannel(input.communicationType);
           if (
             testChannel === "sms" &&
             normalizePhoneE164(lead.phone) !== normalizePhoneE164(run.smsRecipient)
           ) {
-            block("TEST_RECIPIENT_MISMATCH", "SMS destination is outside the approved test run");
+            block("TEST_RECIPIENT_MISMATCH", "SMS destination is outside the approved test run", {
+              leadPhone: lead.phone,
+              runSmsRecipient: run.smsRecipient,
+              testChannel,
+            });
           }
           if (
             testChannel === "email" &&
             String(lead.email || "").trim().toLowerCase() !==
               String(run.emailRecipient || "").trim().toLowerCase()
           ) {
-            block("TEST_RECIPIENT_MISMATCH", "Email destination is outside the approved test run");
+            block("TEST_RECIPIENT_MISMATCH", "Email destination is outside the approved test run", {
+              leadEmail: lead.email,
+              runEmailRecipient: run.emailRecipient,
+              testChannel,
+              communicationType: input.communicationType,
+              jobChannel: job?.channel,
+            });
           }
         }
       }
