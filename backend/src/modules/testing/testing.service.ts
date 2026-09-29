@@ -353,6 +353,7 @@ export class TestingService implements OnModuleInit {
     // Post-fix (PR #115), controlled test messages bypass quiet-hours scheduling,
     // so this condition should never occur for new runs.
     let futureScheduled = false;
+    let terminallyBlocked = false;
     try {
       const msg = await this.messages.findOne({
         where: { leadId: run.testLeadId, direction: 'outbound' as any },
@@ -362,10 +363,18 @@ export class TestingService implements OnModuleInit {
         futureScheduled = true;
         console.log(`[TestingService] isStuckRun(${run.id}): outbound message ${msg.id} scheduled ${msg.scheduledAt.toISOString()} (>60min future), stuck=true`);
       }
+      // A run whose latest outbound message is in a terminal non-delivered state
+      // (blocked, failed, canceled) can never complete the E2E. Treat as stuck
+      // so the operator can retry with a fresh run.
+      const terminalStates = ['blocked', 'failed', 'canceled', 'cancelled'];
+      if (msg && terminalStates.includes(msg.status)) {
+        terminallyBlocked = true;
+        console.log(`[TestingService] isStuckRun(${run.id}): outbound message ${msg.id} status=${msg.status} (terminal), stuck=true`);
+      }
     } catch {
       // Ignore lookup failures here; the diagnostic above already logged them.
     }
-    const stuck = aiRunCount === 0 || futureScheduled;
+    const stuck = aiRunCount === 0 || futureScheduled || terminallyBlocked;
     console.log(
       `[TestingService] isStuckRun(${run.id}): age=${Math.round(ageMs / 60000)}min, ` +
         `testLeadId=${run.testLeadId}, aiRunCount=${aiRunCount}, stuck=${stuck}, ` +
