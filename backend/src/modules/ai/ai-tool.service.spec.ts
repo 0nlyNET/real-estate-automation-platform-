@@ -157,6 +157,27 @@ describe('AI tool allowlist and validation', () => {
     expect(item.repositories.leads.save).not.toHaveBeenCalled();
   });
 
+  it('accepts tool arguments wrapped in markdown code fences', async () => {
+    const item = fixture();
+    item.context.settings.bookingBehavior = 'calendar_booking';
+    item.dependencies.clientOperations.createAppointment.mockResolvedValue({ id: 'appointment-1' });
+    const startsAt = new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString();
+    const fenced = '```json\n' + JSON.stringify({ startsAt }) + '\n```';
+    await expect(
+      item.service.execute(
+        item.context,
+        {
+          name: 'create_or_update_appointment',
+          arguments: fenced,
+        },
+        3,
+      ),
+    ).resolves.toMatchObject({
+      status: 'executed',
+      output: { appointmentId: 'appointment-1', created: true },
+    });
+  });
+
   it('will not return an unverified booking link', async () => {
     const item = fixture();
     await expect(

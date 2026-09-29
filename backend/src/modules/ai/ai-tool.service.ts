@@ -54,8 +54,13 @@ const QUALIFICATION_FIELDS = new Set([
 
 function parseArguments(request: AiToolRequest): Record<string, unknown> {
   let parsed: unknown;
+  // LLMs commonly wrap JSON tool arguments in markdown code fences.
+  // Strip them (and surrounding whitespace) before parsing so a formatting
+  // quirk does not kill the run. Truly malformed JSON still throws below
+  // and the run stays fail-closed.
+  const raw = (request.arguments || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   try {
-    parsed = JSON.parse(request.arguments || '{}');
+    parsed = JSON.parse(raw || '{}');
   } catch {
     throw new BadRequestException('Tool arguments must be valid JSON');
   }
