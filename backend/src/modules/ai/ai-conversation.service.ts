@@ -966,6 +966,19 @@ export class AiConversationService
         ) as unknown as Array<Record<string, unknown>>;
         await this.runs.save(run);
         if (toolResult.status === 'blocked') {
+          // OBSERVABILITY: A blocked tool kills the run via blockRun, which
+          // emits no log line for non-provider failures. Log it here so a
+          // blocked run is always visible in application logs.
+          this.logger.warn(
+            JSON.stringify({
+              event: 'PROCESS_TOOL_BLOCKED',
+              runId: run.id,
+              leadId: run.leadId,
+              toolName: toolResult.name,
+              code: toolResult.code || 'AI_TOOL_BLOCKED',
+              reason: (toolResult.reason || 'An AI tool did not pass validation.').slice(0, 300),
+            }),
+          );
           await this.blockRun(
             run,
             toolResult.code || 'AI_TOOL_BLOCKED',
