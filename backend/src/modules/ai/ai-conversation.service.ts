@@ -503,7 +503,68 @@ export class AiConversationService
       );
     }
     for (const id of ids) {
-      await this.processRun(id);
+      // HARDENING: Instrument dispatch and isolate per-run failures.
+      // A single run throwing must not kill the tick or orphan other runs.
+      // Every claimed run must reach an explicit terminal/retry state.
+      this.logger.log(
+        JSON.stringify({
+          event: 'PROCESS_DISPATCH_STARTED',
+          runId: id,
+        }),
+      );
+      try {
+        const status = await this.processRun(id);
+        // An early return (including a missing claim) is not completion.
+        // Queued responses and drafts also retain their actual outcome.
+        if (status) {
+          this.logger.log(
+            JSON.stringify({
+              event: status === 'completed'
+                ? 'PROCESS_RUN_COMPLETED'
+                : 'PROCESS_RUN_OUTCOME',
+              runId: id,
+              status,
+            }),
+          );
+        }
+      } catch (dispatchError) {
+        this.logger.error(
+          JSON.stringify({
+            event: 'PROCESS_DISPATCH_FAILED',
+            runId: id,
+            error:
+              dispatchError instanceof Error
+                ? dispatchError.message
+                : String(dispatchError),
+          }),
+        );
+        // blockRun conditionally writes failure only while this worker
+        // still owns a processing run, even if ownership changes here.
+        try {
+          const failedRun = await this.runs.findOne({ where: { id } });
+          if (failedRun) {
+            await this.blockRun(
+              failedRun,
+              'WORKER_DISPATCH_ERROR',
+              `Worker dispatch failed: ${dispatchError instanceof Error ? dispatchError.message : String(dispatchError)}`.slice(0, 500),
+              'high',
+              {},
+              true, // providerFailure=true → status='failed'
+            );
+          }
+        } catch (persistError) {
+          this.logger.error(
+            JSON.stringify({
+              event: 'PROCESS_DISPATCH_FAILED_PERSIST_FAILED',
+              runId: id,
+              error:
+                persistError instanceof Error
+                  ? persistError.message
+                  : String(persistError),
+            }),
+          );
+        }
+      }
     }
     return { claimed: ids.length, recovered, paused: false as const };
   }
@@ -682,11 +743,44 @@ export class AiConversationService
     });
   }
 
-  private async processRun(runId: string) {
+  private async processRun(
+    runId: string,
+  ): Promise<'completed' | 'drafted' | 'response_queued' | void> {
+    // HARDENING: Instrument the claim→process handoff. Every claimed run
+    // must produce an observable outcome — it must not silently disappear.
+    this.logger.log(
+      JSON.stringify({
+        event: 'PROCESS_RUN_ENTERED',
+        runId,
+        workerId: this.workerId,
+      }),
+    );
     const run = await this.runs.findOne({
       where: { id: runId, lockedBy: this.workerId },
     });
-    if (!run) return;
+    if (!run) {
+      // HARDENING: The silent `return` here was the exact line where the
+      // 2026-09-28 fresh UAT run (900c6a4f-...) disappeared after a successful
+      // claim. A claimed run that cannot be re-fetched is an observable
+      // failure, not a silent skip. Attempt to locate the run by ID alone to
+      // determine whether the lock was lost, and record the outcome.
+      const orphan = await this.runs.findOne({ where: { id: runId } });
+      this.logger.error(
+        JSON.stringify({
+          event: 'PROCESS_RUN_FAILED',
+          runId,
+          reason: 'run_not_found_after_claim',
+          workerId: this.workerId,
+          orphanFound: !!orphan,
+          orphanStatus: (orphan as any)?.status || null,
+          orphanLockedBy: (orphan as any)?.lockedBy || null,
+        }),
+      );
+      // If the run exists but is not locked by us, do not process it —
+      // another worker owns it. If it does not exist at all, there is
+      // nothing to update. Either way, the failure is now observable.
+      return;
+    }
     const event: AiConversationEvent = {
       tenantId: run.tenantId,
       leadId: run.leadId,
@@ -902,7 +996,7 @@ export class AiConversationService
         run.lockedAt = null;
         run.lockedBy = null;
         await this.runs.save(run);
-        return;
+        return 'completed';
       }
 
       const validation = this.policy.validateResponse({
@@ -927,7 +1021,7 @@ export class AiConversationService
       }
       if (validation.noReply || !output.reply) {
         await this.completeWithoutReply(run, preflight);
-        return;
+        return 'completed';
       }
 
       const body =
@@ -970,6 +1064,7 @@ export class AiConversationService
           entityId: message.id,
         });
       }
+      return run.mode === 'draft' ? 'drafted' : 'response_queued';
     } catch (error: any) {
       const sanitized = sanitizeOperationalText(
         error?.response?.message || error?.message || 'AI provider failed',
@@ -1405,12 +1500,37 @@ export class AiConversationService
     context: Partial<PreflightContext>,
     providerFailure = false,
   ) {
-    run.status = providerFailure ? 'failed' : 'blocked';
-    run.errorCode = code.slice(0, 80);
-    run.sanitizedError = sanitizeOperationalText(reason).slice(0, 1_000);
-    run.lockedAt = null;
-    run.lockedBy = null;
-    await this.runs.save(run);
+    const status: AiRun['status'] = providerFailure ? 'failed' : 'blocked';
+    const changes = {
+      status,
+      errorCode: code.slice(0, 80),
+      sanitizedError: sanitizeOperationalText(reason).slice(0, 1_000),
+      lockedAt: null,
+      lockedBy: null,
+    };
+    if (providerFailure) {
+      // Check ownership and state in the write itself. A lookup followed
+      // by save() can overwrite a reclaimed or already completed run.
+      const result = await this.runs.update(
+        { id: run.id, status: 'processing', lockedBy: this.workerId },
+        changes,
+      );
+      if (result.affected !== 1) {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'PROCESS_RUN_FAILURE_SKIPPED',
+            runId: run.id,
+            workerId: this.workerId,
+            reason: 'run_ownership_or_status_changed',
+          }),
+        );
+        return;
+      }
+      Object.assign(run, changes);
+    } else {
+      Object.assign(run, changes);
+      await this.runs.save(run);
+    }
     if (
       context.settings &&
       context.state &&
@@ -1429,7 +1549,7 @@ export class AiConversationService
         tenantId: run.tenantId,
         category: 'ai_provider_failure',
         title: 'AI response needs human follow-up',
-        description: run.sanitizedError,
+        description: changes.sanitizedError,
         priority: priority === 'urgent' ? 'critical' : 'high',
         // Dedupe per lead (not per ai_run) for the same alert-storm reason.
         relatedEntityType: 'lead',

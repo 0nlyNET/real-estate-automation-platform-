@@ -1,4 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
+import * as providers from '../../common/providers';
 import { Lead } from '../leads/lead.entity';
 import { Message } from './message.entity';
 import { MessagingService } from './messaging.service';
@@ -989,5 +990,144 @@ describe('terminal provider failure integration wiring (P1)', () => {
       (service as any).failPermanently(message, 'PROVIDER_SEND_FAILED', 'SendGrid rejected the request'),
     ).resolves.toBeUndefined();
     expect(message.status).toBe('failed');
+  });
+});
+
+describe('template safety invariant (hardening)', () => {
+  const originalFrontendUrl = process.env.FRONTEND_URL;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    if (originalFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = originalFrontendUrl;
+  });
+
+  function templateSetup() {
+    const messageRepo = {
+      findOne: jest.fn(),
+      save: jest.fn().mockImplementation(async (m: any) => m),
+    };
+    const service = buildService({ messageRepo });
+    return { service, messageRepo };
+  }
+
+  function leadWith(fullName: string): Lead {
+    return Object.assign(new Lead(), {
+      id: 'lead-1',
+      tenantId: 'tenant-1',
+      fullName,
+      email: 'lead@example.com',
+      phone: '+15551234567',
+      testRunId: 'test-run-1',
+    });
+  }
+
+  it('interpolateLeadTokens resolves first_name', () => {
+    const { service } = templateSetup();
+    const result = (service as any).interpolateLeadTokens(
+      'Hi {{first_name}}, thanks!',
+      leadWith('Alex Rivera'),
+    );
+    expect(result).toBe('Hi Alex, thanks!');
+    expect(result).not.toMatch(/\{\{/);
+  });
+
+  it('interpolateLeadTokens resolves last_name and full_name', () => {
+    const { service } = templateSetup();
+    const result = (service as any).interpolateLeadTokens(
+      '{{full_name}} ({{last_name}})',
+      leadWith('Alex Rivera'),
+    );
+    expect(result).toBe('Alex Rivera (Rivera)');
+  });
+
+  it.each([
+    ['  Alex   de la Cruz  ', 'Alex|de la Cruz|Alex   de la Cruz'],
+    ['Prince', 'Prince||Prince'],
+    ['', '||'],
+  ])('derives name tokens from persisted fullName %j', (fullName, expected) => {
+    const { service } = templateSetup();
+    const lead = leadWith(fullName);
+    expect(lead).not.toHaveProperty('firstName');
+    expect(lead).not.toHaveProperty('lastName');
+    expect((service as any).interpolateLeadTokens(
+      '{{first_name}}|{{last_name}}|{{full_name}}', lead,
+    )).toBe(expected);
+    expect((service as any).interpolateLeadTokens(
+      '{{firstName}}|{{lastName}}|{{fullName}}', lead,
+    )).toBe(expected);
+  });
+
+  it('passes the persisted lead name and no raw tokens to the email provider', async () => {
+    const { service } = templateSetup();
+    const send = jest.spyOn(providers, 'sendSendGridEmail').mockResolvedValue({
+      messageId: 'provider-1', status: 'accepted',
+    });
+    (service as any).getProviderConfig = jest.fn().mockResolvedValue({
+      sendgrid: {
+        apiKey: 'test-key', fromEmail: 'from@example.com', fromName: 'Test Realty',
+        inboundAddress: 'reply@example.com', routingKey: 'reply@example.com',
+      },
+    });
+    (service as any).complianceService = {
+      createUnsubscribeToken: jest.fn().mockReturnValue('test-token'),
+    };
+    (service as any).markProviderSubmissionStarted = jest.fn();
+    process.env.FRONTEND_URL = 'https://example.com';
+
+    await (service as any).sendEmail(Object.assign(new Message(), {
+      id: 'message-name', lead: leadWith('Alex Rivera'),
+      body: 'Hi {{first_name}}, {{full_name}} ({{last_name}})\nUnsubscribe: {{unsubscribeUrl}}',
+    }));
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Hi Alex, Alex Rivera (Rivera)\nUnsubscribe: https://example.com/unsubscribe?token=test-token',
+    }));
+  });
+
+  it('interpolateLeadTokens leaves unknown tokens intact for fail-closed', () => {
+    const { service } = templateSetup();
+    const result = (service as any).interpolateLeadTokens(
+      'Hi {{first_name}}, your {{unknown_field}} is ready',
+      leadWith('Alex Rivera'),
+    );
+    // Unknown token survives interpolation so the final safety check
+    // can fail closed rather than sending raw {{...}} to the provider.
+    expect(result).toContain('{{unknown_field}}');
+    expect(result).toContain('Alex');
+  });
+
+  it('sendEmail refuses to send when unresolved template syntax remains', async () => {
+    const { service } = templateSetup();
+    const message = {
+      id: 'msg-1',
+      body: 'Hi {{first_name}}, your {{mystery_token}} is here\n\nUnsubscribe: {{unsubscribeUrl}}',
+      subject: 'Test',
+      lead: leadWith('Alex Rivera'),
+    } as any;
+    // Mock the dependencies sendEmail needs before the safety check.
+    (service as any).getProviderConfig = jest.fn().mockResolvedValue({
+      sendgrid: {
+        apiKey: 'key',
+        fromEmail: 'from@example.com',
+        inboundAddress: 'reply@example.com',
+        routingKey: 'reply@example.com',
+      },
+    });
+    (service as any).complianceService = {
+      createUnsubscribeToken: jest.fn().mockReturnValue('token123'),
+    };
+    (service as any).tenantRepository = {
+      findOne: jest.fn().mockResolvedValue({ name: 'Test Realty' }),
+    };
+    process.env.FRONTEND_URL = 'https://example.com';
+    (service as any).markProviderSubmissionStarted = jest.fn();
+
+    await expect((service as any).sendEmail(message)).rejects.toThrow(
+      /Unresolved template variable.*mystery_token.*refusing provider send/,
+    );
+    // Provider submission must never start when templates are unresolved.
+    expect((service as any).markProviderSubmissionStarted).not.toHaveBeenCalled();
   });
 });
