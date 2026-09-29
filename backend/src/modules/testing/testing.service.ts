@@ -433,6 +433,101 @@ export class TestingService implements OnModuleInit {
   }
 
   /**
+   * Returns diagnostic details for the active controlled test run, including
+   * AI run status and outbound message safety details. Scoped strictly by
+   * tenantId. Only returns sanitized failure details — never credentials or
+   * raw provider payloads.
+   */
+  async getTestDiagnostics(tenantId: string): Promise<{
+    testRunId: string | null;
+    status: string | null;
+    leadId: string | null;
+    aiRun: {
+      id: string | null;
+      status: string | null;
+      errorCode: string | null;
+      errorMessage: string | null;
+    } | null;
+    messages: Array<{
+      id: string;
+      channel: string;
+      direction: string;
+      status: string;
+      errorCode: string | null;
+      blockedReason: string | null;
+      safetyRuleIds: string[];
+      sanitizedErrorMessage: string | null;
+    }>;
+  }> {
+    const active = await this.getActiveRun(tenantId);
+    if (!active.testRunId) {
+      return {
+        testRunId: null,
+        status: null,
+        leadId: null,
+        aiRun: null,
+        messages: [],
+      };
+    }
+
+    // AI run details
+    let aiRun: { id: string | null; status: string | null; errorCode: string | null; errorMessage: string | null } | null = null;
+    if (active.aiRunId) {
+      const run = await this.aiRuns.findOne({ where: { id: active.aiRunId, tenantId } });
+      if (run) {
+        aiRun = {
+          id: run.id,
+          status: (run as any).status || null,
+          errorCode: (run as any).errorCode || null,
+          errorMessage: (run as any).errorMessage || null,
+        };
+      }
+    }
+
+    // Outbound messages with safety details
+    const messages: Array<{
+      id: string;
+      channel: string;
+      direction: string;
+      status: string;
+      errorCode: string | null;
+      blockedReason: string | null;
+      safetyRuleIds: string[];
+      sanitizedErrorMessage: string | null;
+    }> = [];
+    if (active.leadId) {
+      const msgs = await this.messages.find({
+        where: { leadId: active.leadId, tenantId } as any,
+        order: { createdAt: 'DESC' },
+        take: 20,
+      });
+      for (const m of msgs) {
+        const msg = m as any;
+        // Only include outbound messages (inbound are not relevant to delivery diagnostics)
+        if (msg.direction !== 'outbound') continue;
+        messages.push({
+          id: msg.id,
+          channel: msg.channel || 'unknown',
+          direction: msg.direction,
+          status: msg.status,
+          errorCode: msg.errorCode || null,
+          blockedReason: msg.blockedReason || null,
+          safetyRuleIds: Array.isArray(msg.safetyRuleIds) ? msg.safetyRuleIds : [],
+          sanitizedErrorMessage: msg.sanitizedErrorMessage || msg.errorMessage || null,
+        });
+      }
+    }
+
+    return {
+      testRunId: active.testRunId,
+      status: active.status,
+      leadId: active.leadId,
+      aiRun,
+      messages,
+    };
+  }
+
+  /**
    * Safely aborts a controlled UAT test run.
    *
    * This is the minimal operator control for terminating a rehearsal that

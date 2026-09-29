@@ -634,6 +634,23 @@ export function AdminDashboardClient({
   const [testSmsRecipient, setTestSmsRecipient] = useState("")
   const [testEmailRecipient, setTestEmailRecipient] = useState("")
   const [testingBusy, setTestingBusy] = useState(false)
+  const [testDiagnostics, setTestDiagnostics] = useState<{
+    testRunId: string | null
+    status: string | null
+    leadId: string | null
+    aiRun: { id: string | null; status: string | null; errorCode: string | null; errorMessage: string | null } | null
+    messages: Array<{
+      id: string
+      channel: string
+      direction: string
+      status: string
+      errorCode: string | null
+      blockedReason: string | null
+      safetyRuleIds: string[]
+      sanitizedErrorMessage: string | null
+    }>
+  } | null>(null)
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState(false)
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
 
   const [showCreateClient, setShowCreateClient] = useState(false)
@@ -1119,6 +1136,43 @@ export function AdminDashboardClient({
       }
     } catch (cause) {
       setError(messageFor(cause, "Testing mode could not be started"))
+    } finally {
+      setTestingBusy(false)
+    }
+  }
+
+  async function refreshTestDiagnostics() {
+    if (!selectedTenant || diagnosticsBusy) return
+    setDiagnosticsBusy(true)
+    try {
+      const result = await apiFetch(`/admin/tenants/${selectedTenant.id}/testing/diagnostics`)
+      setTestDiagnostics(result)
+      setError(null)
+    } catch (cause) {
+      setError(messageFor(cause, "Could not load test diagnostics"))
+      setTestDiagnostics(null)
+    } finally {
+      setDiagnosticsBusy(false)
+    }
+  }
+
+  async function abortCurrentTest() {
+    if (!selectedTenant || !testDiagnostics?.testRunId || testingBusy) return
+    setTestingBusy(true)
+    try {
+      const result = await apiFetch(`/admin/tenants/${selectedTenant.id}/testing/runs/${testDiagnostics.testRunId}/abort`, {
+        method: "POST",
+        body: { reason: "aborted_via_dashboard" },
+      })
+      if (result?.status === "expired") {
+        setNotice(`Test run aborted. Canceled ${result?.canceledMessages?.length || 0} queued message(s).`)
+      } else {
+        setNotice(`Abort completed with status: ${result?.status}`)
+      }
+      await refreshTestDiagnostics()
+      await refreshReadiness()
+    } catch (cause) {
+      setError(messageFor(cause, "Could not abort the test run"))
     } finally {
       setTestingBusy(false)
     }
@@ -2241,6 +2295,89 @@ export function AdminDashboardClient({
                         Testing is blocked by: {readiness.testingBlockers.map((item) => item.label).join("; ")}.
                       </p>
                     ) : null}
+                    <div className="mt-4 rounded border p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <h4 className="text-sm font-semibold">Controlled test diagnostics</h4>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={diagnosticsBusy}
+                            onClick={() => void refreshTestDiagnostics()}
+                          >
+                            {diagnosticsBusy ? "Loading..." : "Refresh status"}
+                          </Button>
+                          {testDiagnostics?.testRunId ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={testingBusy}
+                              onClick={() => void abortCurrentTest()}
+                            >
+                              Abort test
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                      {!testDiagnostics ? (
+                        <p className="text-xs text-muted-foreground">
+                          Click Refresh status to load the active test run, AI run status, and outbound message details.
+                        </p>
+                      ) : !testDiagnostics.testRunId ? (
+                        <p className="text-xs text-muted-foreground">No active controlled test run.</p>
+                      ) : (
+                        <div className="space-y-3 text-xs">
+                          <div>
+                            <span className="font-medium">Test run:</span> {testDiagnostics.testRunId.slice(0, 8)}...
+                            <span className="ml-2 rounded bg-muted px-1.5 py-0.5">{testDiagnostics.status}</span>
+                          </div>
+                          {testDiagnostics.aiRun ? (
+                            <div>
+                              <span className="font-medium">AI run:</span> {testDiagnostics.aiRun.id?.slice(0, 8)}...
+                              <span className="ml-2 rounded bg-muted px-1.5 py-0.5">{testDiagnostics.aiRun.status}</span>
+                              {testDiagnostics.aiRun.errorCode ? (
+                                <div className="mt-1 text-red-600">
+                                  {testDiagnostics.aiRun.errorCode}: {testDiagnostics.aiRun.errorMessage}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div className="text-muted-foreground">No AI run yet.</div>
+                          )}
+                          <div>
+                            <span className="font-medium">Outbound messages ({testDiagnostics.messages.length}):</span>
+                            {testDiagnostics.messages.length === 0 ? (
+                              <span className="ml-2 text-muted-foreground">None yet.</span>
+                            ) : (
+                              <ul className="mt-1 space-y-2">
+                                {testDiagnostics.messages.map((msg) => (
+                                  <li key={msg.id} className="rounded bg-muted/50 p-2">
+                                    <div>
+                                      {msg.channel} <span className="rounded bg-background px-1.5 py-0.5">{msg.status}</span>
+                                      <span className="ml-2 text-muted-foreground">{msg.id.slice(0, 8)}...</span>
+                                    </div>
+                                    {msg.errorCode ? (
+                                      <div className="mt-1 font-medium text-red-600">{msg.errorCode}</div>
+                                    ) : null}
+                                    {msg.blockedReason ? (
+                                      <div className="mt-1">Reason: {msg.blockedReason}</div>
+                                    ) : null}
+                                    {msg.safetyRuleIds.length > 0 ? (
+                                      <div className="mt-1 text-muted-foreground">
+                                        Rules: {msg.safetyRuleIds.join(", ")}
+                                      </div>
+                                    ) : null}
+                                    {msg.sanitizedErrorMessage && msg.sanitizedErrorMessage !== msg.blockedReason ? (
+                                      <div className="mt-1 text-muted-foreground">{msg.sanitizedErrorMessage}</div>
+                                    ) : null}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </Section>
                 ) : null}
                 <Section
