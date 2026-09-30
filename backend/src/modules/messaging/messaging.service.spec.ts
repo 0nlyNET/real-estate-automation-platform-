@@ -666,6 +666,94 @@ describe('outbound message worker safety', () => {
     });
   });
 
+  it('preserves rendered provider-bound content separately from the template', async () => {
+    // Regression: The UI displayed message.body (template with {{first_name}})
+    // for submitted messages, misleading operators. The actual provider-bound
+    // content (with tokens interpolated) must be preserved in renderedBody.
+    process.env.FRONTEND_URL = 'https://app.example.com';
+    const lead = Object.assign(new Lead(), {
+      id: 'lead-rendered',
+      tenantId: 'tenant-1',
+      email: 'lead@example.com',
+      fullName: 'Alex Rivera',
+    });
+    const message = Object.assign(new Message(), {
+      id: '00000000-0000-4000-8000-000000000097',
+      leadId: lead.id,
+      lead,
+      channel: 'email',
+      direction: 'outbound',
+      body: 'Hi {{first_name}}, thanks!\n\nUnsubscribe: {{unsubscribeUrl}}',
+      subject: 'Hello',
+      status: 'queued',
+      authorship: 'ai',
+      attemptCount: 0,
+    });
+    const messageRepo = {
+      findOne: jest.fn().mockResolvedValue(message),
+      save: jest.fn(async (value) => value),
+    };
+    const manager = {
+      query: jest.fn(async (sql: string) =>
+        sql.includes("AND status = 'sending'") ? [] : [{ id: message.id }],
+      ),
+    };
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: new Headers({ 'x-message-id': 'request-xyz' }),
+    } as Response);
+    const service = buildService({
+      dataSource: {
+        transaction: jest.fn(async (callback) => callback(manager)),
+      },
+      messageRepo,
+      leadRepo: { save: jest.fn(async (value) => value) },
+      eventRepo: {
+        create: jest.fn((value) => value),
+        save: jest.fn(async (value) => value),
+      },
+      credentialRepo: {
+        find: jest.fn().mockResolvedValue([
+          {
+            provider: 'sendgrid',
+            tenant: { id: lead.tenantId },
+            routingKey: 'replies@reply.example',
+            encryptedValue: JSON.stringify({
+              connected: true,
+              apiKey: 'not-a-real-key',
+              fromEmail: 'agent@example.com',
+              fromName: 'Test Realty',
+              inboundAddress: 'replies@reply.example',
+            }),
+          },
+        ]),
+      },
+      compliance: {
+        createUnsubscribeToken: jest.fn().mockReturnValue('token-123'),
+      },
+    });
+
+    await service.processPendingOutbound({ limit: 1 });
+
+    // The template in body must be preserved (not overwritten).
+    expect(message.body).toBe(
+      'Hi {{first_name}}, thanks!\n\nUnsubscribe: {{unsubscribeUrl}}',
+    );
+    // The rendered provider-bound content must be saved separately.
+    expect(message.renderedBody).toBeDefined();
+    expect(message.renderedBody).toContain('Hi Alex, thanks!');
+    expect(message.renderedBody).toContain(
+      'https://app.example.com/unsubscribe?token=token-123',
+    );
+    // No unresolved tokens in the rendered content.
+    expect(message.renderedBody).not.toMatch(/\{\{\s*[a-zA-Z0-9_.]+\s*\}\}/);
+    // The provider payload must match the rendered content.
+    const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    const sentText = payload.content?.[0]?.value || '';
+    expect(sentText).toBe(message.renderedBody);
+  });
+
   it('sends automated email through managed SendGrid without tenant credentials', async () => {
     process.env.FRONTEND_URL = 'https://app.example.com';
     const lead = Object.assign(new Lead(), {

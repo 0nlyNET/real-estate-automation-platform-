@@ -775,6 +775,11 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       );
     }
     await this.markProviderSubmissionStarted(message);
+    // Preserve the actual provider-bound rendered content separately from the
+    // template in message.body. The UI must display renderedBody for submitted
+    // messages, not the template with unresolved tokens.
+    message.renderedBody = text;
+    await this.messageRepository.save(message);
     const response = await sendSendGridEmail({
       apiKey,
       to: lead.email,
@@ -822,6 +827,10 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     const statusCallback = String(process.env.TWILIO_STATUS_CALLBACK_URL || '').trim();
     if (!statusCallback) throw new Error('Missing TWILIO_STATUS_CALLBACK_URL');
     await this.markProviderSubmissionStarted(message);
+    // For SMS, body is sent as-is (no token interpolation). Preserve it as
+    // renderedBody for consistent display of submitted content.
+    message.renderedBody = message.body;
+    await this.messageRepository.save(message);
     const response = await sendTwilioSms({
       accountSid,
       authToken,

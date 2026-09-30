@@ -40,6 +40,9 @@ export class Message extends BaseEntity {
   @Column({ name: 'body', type: 'text' })
   body!: string;
 
+  @Column({ name: 'rendered_body', type: 'text', nullable: true })
+  renderedBody?: string | null;
+
   @Column({ name: 'subject', type: 'varchar', length: 500, nullable: true })
   subject?: string | null;
 
