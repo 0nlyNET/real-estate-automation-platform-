@@ -1030,6 +1030,10 @@ function toThreadMessage(message: Message) {
     channel: message.channel,
     direction: message.direction,
     body: displayMessageBody(message.body),
+    // The exact provider-bound content for submitted messages. The UI shows
+    // this (falling back to body) so operators see what was actually sent,
+    // while body keeps the original template with {{...}} tokens.
+    renderedBody: message.renderedBody || null,
     subject: message.subject || null,
     status: message.status,
     providerStatus: message.providerStatus || null,

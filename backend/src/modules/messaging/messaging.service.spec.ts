@@ -274,6 +274,60 @@ describe('outbound message worker safety', () => {
     expect(JSON.stringify(result)).not.toContain('socket secret detail');
   });
 
+  it('returns renderedBody on thread messages so the UI can show sent content', async () => {
+    // The API must expose the exact provider-bound content (renderedBody)
+    // separately from the template in body. The UI displays renderedBody
+    // (falling back to body) for sent messages.
+    const tenantId = 'tenant-1';
+    const lead = Object.assign(new Lead(), { id: 'lead-1', tenantId });
+    const sentMessage = Object.assign(new Message(), {
+      id: 'message-sent',
+      leadId: lead.id,
+      channel: 'email',
+      direction: 'outbound',
+      body: 'Hi {{first_name}}, thanks for reaching out.',
+      renderedBody: 'Hi Alex, thanks for reaching out.',
+      status: 'delivered',
+      authorship: 'ai',
+      createdAt: new Date('2026-09-29T12:00:00.000Z'),
+      updatedAt: new Date('2026-09-29T12:01:00.000Z'),
+    });
+    const pendingMessage = Object.assign(new Message(), {
+      id: 'message-pending',
+      leadId: lead.id,
+      channel: 'email',
+      direction: 'outbound',
+      body: 'Hi {{first_name}}, just checking in.',
+      renderedBody: null,
+      status: 'queued',
+      authorship: 'ai',
+      createdAt: new Date('2026-09-29T12:02:00.000Z'),
+      updatedAt: new Date('2026-09-29T12:02:00.000Z'),
+    });
+    const service = buildService({
+      leadRepo: { findOne: jest.fn().mockResolvedValue(lead) },
+      messageRepo: { find: jest.fn().mockResolvedValue([sentMessage, pendingMessage]) },
+    });
+
+    const result = await service.getThreadMessages(tenantId, lead.id, {
+      userId: 'user-1',
+      role: 'owner',
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'message-sent',
+        body: 'Hi {{first_name}}, thanks for reaching out.',
+        renderedBody: 'Hi Alex, thanks for reaching out.',
+      }),
+      expect.objectContaining({
+        id: 'message-pending',
+        body: 'Hi {{first_name}}, just checking in.',
+        renderedBody: null,
+      }),
+    ]);
+  });
+
   it('paginates conversations by the newest message instead of lead id', async () => {
     const tenantId = '00000000-0000-4000-8000-000000000001';
     const query = {

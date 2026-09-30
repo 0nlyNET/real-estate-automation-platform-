@@ -2,6 +2,7 @@ import { ConversationReadState1789862400002 } from './migrations/202609200002-co
 import { NotificationEmailDelivery1790361600001 } from './migrations/202609260001-notification-email-delivery';
 import { NotificationSystemV11790365760000 } from './migrations/202609260002-notification-system-v1';
 import { WorkerHeartbeat1790448000001 } from './migrations/202609270001-worker-heartbeat';
+import { MessageRenderedBody1790448000002 } from './migrations/202609290001-message-rendered-body';
 import { AutomationScheduledDueTime1789862400001 } from './migrations/202609200001-automation-scheduled-due-time';
 import { FirstClientPayment1788652800001 } from './migrations/202609060001-first-client-payment';
 import { readFileSync } from "fs";
@@ -233,6 +234,7 @@ describe("deployed legacy schema reproduction", () => {
     await new NotificationEmailDelivery1790361600001().up(queryRunner);
     await new NotificationSystemV11790365760000().up(queryRunner);
     await new WorkerHeartbeat1790448000001().up(queryRunner);
+    await new MessageRenderedBody1790448000002().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
@@ -367,6 +369,7 @@ describe("deployed legacy schema reproduction", () => {
     await new NotificationEmailDelivery1790361600001().up(queryRunner);
     await new NotificationSystemV11790365760000().up(queryRunner);
     await new WorkerHeartbeat1790448000001().up(queryRunner);
+    await new MessageRenderedBody1790448000002().up(queryRunner);
     await queryRunner.release();
 
     await expect(inspectDatabaseSchema(dataSource)).resolves.toMatchObject({
