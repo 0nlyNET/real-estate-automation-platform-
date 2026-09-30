@@ -1272,4 +1272,39 @@ describe('template safety invariant (hardening)', () => {
     // Provider submission must never start when templates are unresolved.
     expect((service as any).markProviderSubmissionStarted).not.toHaveBeenCalled();
   });
+
+  it('sendEmail does not call provider when persistence fails (fail-closed ordering)', async () => {
+    // renderedBody is assigned BEFORE markProviderSubmissionStarted, and both
+    // persist in that method's single save. If the save throws, the provider
+    // send below it must not run.
+    const messageRepo = {
+      findOne: jest.fn(),
+      save: jest.fn().mockRejectedValue(new Error('DB unavailable')),
+    };
+    const service = buildService({ messageRepo });
+    const send = jest.spyOn(providers, 'sendSendGridEmail').mockResolvedValue({
+      messageId: 'provider-1', status: 'accepted',
+    });
+    (service as any).getProviderConfig = jest.fn().mockResolvedValue({
+      sendgrid: {
+        apiKey: 'key', fromEmail: 'from@example.com', fromName: 'Test Realty',
+        inboundAddress: 'reply@example.com', routingKey: 'reply@example.com',
+      },
+    });
+    (service as any).complianceService = {
+      createUnsubscribeToken: jest.fn().mockReturnValue('token123'),
+    };
+    (service as any).tenantRepository = {
+      findOne: jest.fn().mockResolvedValue({ name: 'Test Realty' }),
+    };
+    process.env.FRONTEND_URL = 'https://example.com';
+    // NOTE: markProviderSubmissionStarted is NOT mocked here — the real method
+    // runs and its save() throws, proving the fail-closed ordering.
+
+    await expect((service as any).sendEmail(Object.assign(new Message(), {
+      id: 'message-persist-fail', lead: leadWith('Alex Rivera'),
+      body: 'Hi {{first_name}}\nUnsubscribe: {{unsubscribeUrl}}',
+    }))).rejects.toThrow(/DB unavailable/);
+    expect(send).not.toHaveBeenCalled();
+  });
 });

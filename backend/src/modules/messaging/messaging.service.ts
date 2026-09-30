@@ -774,12 +774,13 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         `Unresolved template variable ${unresolved[0]} in outbound message ${message.id}; refusing provider send`,
       );
     }
-    await this.markProviderSubmissionStarted(message);
     // Preserve the actual provider-bound rendered content separately from the
-    // template in message.body. The UI must display renderedBody for submitted
-    // messages, not the template with unresolved tokens.
+    // template in message.body. Assign BEFORE markProviderSubmissionStarted so
+    // both renderedBody and providerSubmissionStartedAt persist in that
+    // method's existing save; a save failure then prevents the provider call
+    // (fail-closed ordering).
     message.renderedBody = text;
-    await this.messageRepository.save(message);
+    await this.markProviderSubmissionStarted(message);
     const response = await sendSendGridEmail({
       apiKey,
       to: lead.email,
@@ -826,11 +827,12 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     if (!from && !messagingServiceSid) throw new Error('Missing Twilio sender configuration');
     const statusCallback = String(process.env.TWILIO_STATUS_CALLBACK_URL || '').trim();
     if (!statusCallback) throw new Error('Missing TWILIO_STATUS_CALLBACK_URL');
-    await this.markProviderSubmissionStarted(message);
     // For SMS, body is sent as-is (no token interpolation). Preserve it as
-    // renderedBody for consistent display of submitted content.
+    // renderedBody for consistent display of submitted content. Assign BEFORE
+    // markProviderSubmissionStarted so both fields persist in that method's
+    // existing save (fail-closed ordering).
     message.renderedBody = message.body;
-    await this.messageRepository.save(message);
+    await this.markProviderSubmissionStarted(message);
     const response = await sendTwilioSms({
       accountSid,
       authToken,
@@ -844,6 +846,10 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async markProviderSubmissionStarted(message: Message) {
+    // Persists providerSubmissionStartedAt AND any already-assigned fields
+    // (notably renderedBody, assigned by the caller before this call) in a
+    // single save. Callers rely on this ordering: if this save throws, the
+    // provider send below it must not run (fail-closed).
     message.providerSubmissionStartedAt = new Date();
     await this.messageRepository.save(message);
   }
