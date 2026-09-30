@@ -274,6 +274,60 @@ describe('outbound message worker safety', () => {
     expect(JSON.stringify(result)).not.toContain('socket secret detail');
   });
 
+  it('returns renderedBody on thread messages so the UI can show sent content', async () => {
+    // The API must expose the exact provider-bound content (renderedBody)
+    // separately from the template in body. The UI displays renderedBody
+    // (falling back to body) for sent messages.
+    const tenantId = 'tenant-1';
+    const lead = Object.assign(new Lead(), { id: 'lead-1', tenantId });
+    const sentMessage = Object.assign(new Message(), {
+      id: 'message-sent',
+      leadId: lead.id,
+      channel: 'email',
+      direction: 'outbound',
+      body: 'Hi {{first_name}}, thanks for reaching out.',
+      renderedBody: 'Hi Alex, thanks for reaching out.',
+      status: 'delivered',
+      authorship: 'ai',
+      createdAt: new Date('2026-09-29T12:00:00.000Z'),
+      updatedAt: new Date('2026-09-29T12:01:00.000Z'),
+    });
+    const pendingMessage = Object.assign(new Message(), {
+      id: 'message-pending',
+      leadId: lead.id,
+      channel: 'email',
+      direction: 'outbound',
+      body: 'Hi {{first_name}}, just checking in.',
+      renderedBody: null,
+      status: 'queued',
+      authorship: 'ai',
+      createdAt: new Date('2026-09-29T12:02:00.000Z'),
+      updatedAt: new Date('2026-09-29T12:02:00.000Z'),
+    });
+    const service = buildService({
+      leadRepo: { findOne: jest.fn().mockResolvedValue(lead) },
+      messageRepo: { find: jest.fn().mockResolvedValue([sentMessage, pendingMessage]) },
+    });
+
+    const result = await service.getThreadMessages(tenantId, lead.id, {
+      userId: 'user-1',
+      role: 'owner',
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'message-sent',
+        body: 'Hi {{first_name}}, thanks for reaching out.',
+        renderedBody: 'Hi Alex, thanks for reaching out.',
+      }),
+      expect.objectContaining({
+        id: 'message-pending',
+        body: 'Hi {{first_name}}, just checking in.',
+        renderedBody: null,
+      }),
+    ]);
+  });
+
   it('paginates conversations by the newest message instead of lead id', async () => {
     const tenantId = '00000000-0000-4000-8000-000000000001';
     const query = {
@@ -664,6 +718,94 @@ describe('outbound message worker safety', () => {
         },
       ],
     });
+  });
+
+  it('preserves rendered provider-bound content separately from the template', async () => {
+    // Regression: The UI displayed message.body (template with {{first_name}})
+    // for submitted messages, misleading operators. The actual provider-bound
+    // content (with tokens interpolated) must be preserved in renderedBody.
+    process.env.FRONTEND_URL = 'https://app.example.com';
+    const lead = Object.assign(new Lead(), {
+      id: 'lead-rendered',
+      tenantId: 'tenant-1',
+      email: 'lead@example.com',
+      fullName: 'Alex Rivera',
+    });
+    const message = Object.assign(new Message(), {
+      id: '00000000-0000-4000-8000-000000000097',
+      leadId: lead.id,
+      lead,
+      channel: 'email',
+      direction: 'outbound',
+      body: 'Hi {{first_name}}, thanks!\n\nUnsubscribe: {{unsubscribeUrl}}',
+      subject: 'Hello',
+      status: 'queued',
+      authorship: 'ai',
+      attemptCount: 0,
+    });
+    const messageRepo = {
+      findOne: jest.fn().mockResolvedValue(message),
+      save: jest.fn(async (value) => value),
+    };
+    const manager = {
+      query: jest.fn(async (sql: string) =>
+        sql.includes("AND status = 'sending'") ? [] : [{ id: message.id }],
+      ),
+    };
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: new Headers({ 'x-message-id': 'request-xyz' }),
+    } as Response);
+    const service = buildService({
+      dataSource: {
+        transaction: jest.fn(async (callback) => callback(manager)),
+      },
+      messageRepo,
+      leadRepo: { save: jest.fn(async (value) => value) },
+      eventRepo: {
+        create: jest.fn((value) => value),
+        save: jest.fn(async (value) => value),
+      },
+      credentialRepo: {
+        find: jest.fn().mockResolvedValue([
+          {
+            provider: 'sendgrid',
+            tenant: { id: lead.tenantId },
+            routingKey: 'replies@reply.example',
+            encryptedValue: JSON.stringify({
+              connected: true,
+              apiKey: 'not-a-real-key',
+              fromEmail: 'agent@example.com',
+              fromName: 'Test Realty',
+              inboundAddress: 'replies@reply.example',
+            }),
+          },
+        ]),
+      },
+      compliance: {
+        createUnsubscribeToken: jest.fn().mockReturnValue('token-123'),
+      },
+    });
+
+    await service.processPendingOutbound({ limit: 1 });
+
+    // The template in body must be preserved (not overwritten).
+    expect(message.body).toBe(
+      'Hi {{first_name}}, thanks!\n\nUnsubscribe: {{unsubscribeUrl}}',
+    );
+    // The rendered provider-bound content must be saved separately.
+    expect(message.renderedBody).toBeDefined();
+    expect(message.renderedBody).toContain('Hi Alex, thanks!');
+    expect(message.renderedBody).toContain(
+      'https://app.example.com/unsubscribe?token=token-123',
+    );
+    // No unresolved tokens in the rendered content.
+    expect(message.renderedBody).not.toMatch(/\{\{\s*[a-zA-Z0-9_.]+\s*\}\}/);
+    // The provider payload must match the rendered content.
+    const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    const sentText = payload.content?.[0]?.value || '';
+    expect(sentText).toBe(message.renderedBody);
   });
 
   it('sends automated email through managed SendGrid without tenant credentials', async () => {
@@ -1129,5 +1271,40 @@ describe('template safety invariant (hardening)', () => {
     );
     // Provider submission must never start when templates are unresolved.
     expect((service as any).markProviderSubmissionStarted).not.toHaveBeenCalled();
+  });
+
+  it('sendEmail does not call provider when persistence fails (fail-closed ordering)', async () => {
+    // renderedBody is assigned BEFORE markProviderSubmissionStarted, and both
+    // persist in that method's single save. If the save throws, the provider
+    // send below it must not run.
+    const messageRepo = {
+      findOne: jest.fn(),
+      save: jest.fn().mockRejectedValue(new Error('DB unavailable')),
+    };
+    const service = buildService({ messageRepo });
+    const send = jest.spyOn(providers, 'sendSendGridEmail').mockResolvedValue({
+      messageId: 'provider-1', status: 'accepted',
+    });
+    (service as any).getProviderConfig = jest.fn().mockResolvedValue({
+      sendgrid: {
+        apiKey: 'key', fromEmail: 'from@example.com', fromName: 'Test Realty',
+        inboundAddress: 'reply@example.com', routingKey: 'reply@example.com',
+      },
+    });
+    (service as any).complianceService = {
+      createUnsubscribeToken: jest.fn().mockReturnValue('token123'),
+    };
+    (service as any).tenantRepository = {
+      findOne: jest.fn().mockResolvedValue({ name: 'Test Realty' }),
+    };
+    process.env.FRONTEND_URL = 'https://example.com';
+    // NOTE: markProviderSubmissionStarted is NOT mocked here — the real method
+    // runs and its save() throws, proving the fail-closed ordering.
+
+    await expect((service as any).sendEmail(Object.assign(new Message(), {
+      id: 'message-persist-fail', lead: leadWith('Alex Rivera'),
+      body: 'Hi {{first_name}}\nUnsubscribe: {{unsubscribeUrl}}',
+    }))).rejects.toThrow(/DB unavailable/);
+    expect(send).not.toHaveBeenCalled();
   });
 });

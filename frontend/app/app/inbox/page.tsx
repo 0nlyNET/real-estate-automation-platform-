@@ -45,6 +45,9 @@ type Msg = {
   direction: "inbound" | "outbound"
   channel: "sms" | "email"
   body: string
+  // Exact provider-bound content for submitted messages (tokens interpolated).
+  // The UI shows this instead of body when present; body keeps the template.
+  renderedBody?: string | null
   createdAt: string
   updatedAt?: string
   status: "created" | "queued" | "sending" | "provider_accepted" | "sent" | "delivered" | "failed" | "received" | "draft" | "skipped" | "blocked" | "canceled" | "pending" | "scheduled"
@@ -565,7 +568,13 @@ export default function InboxPage() {
                     data-message-id={message.id}
                     className={`max-w-[88%] rounded-lg px-3 py-2 text-sm ${message.direction === "outbound" ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}
                   >
-                    <div className="whitespace-pre-wrap">{message.body}</div>
+                    <div className="whitespace-pre-wrap">{message.direction === "outbound" && message.renderedBody ? message.renderedBody : message.body}</div>
+                    {message.direction === "outbound" && message.renderedBody && message.renderedBody !== message.body ? (
+                      <details className="mt-1 text-[11px] opacity-80">
+                        <summary className="cursor-pointer underline underline-offset-2">View template</summary>
+                        <div className="whitespace-pre-wrap pt-1">{message.body}</div>
+                      </details>
+                    ) : null}
                     <div className={`mt-1 text-[11px] ${message.direction === "outbound" ? "text-primary-foreground/75" : "text-muted-foreground"}`}>
                       {message.direction === "outbound" ? `${message.authorship === "ai" ? "AI-generated" : message.authorship === "template" ? "Approved automation" : "Human-written"} · ` : ""}
                       {statusLabel(message.status)}

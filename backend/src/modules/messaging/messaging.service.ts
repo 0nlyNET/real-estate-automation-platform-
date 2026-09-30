@@ -774,6 +774,12 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         `Unresolved template variable ${unresolved[0]} in outbound message ${message.id}; refusing provider send`,
       );
     }
+    // Preserve the actual provider-bound rendered content separately from the
+    // template in message.body. Assign BEFORE markProviderSubmissionStarted so
+    // both renderedBody and providerSubmissionStartedAt persist in that
+    // method's existing save; a save failure then prevents the provider call
+    // (fail-closed ordering).
+    message.renderedBody = text;
     await this.markProviderSubmissionStarted(message);
     const response = await sendSendGridEmail({
       apiKey,
@@ -821,6 +827,11 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     if (!from && !messagingServiceSid) throw new Error('Missing Twilio sender configuration');
     const statusCallback = String(process.env.TWILIO_STATUS_CALLBACK_URL || '').trim();
     if (!statusCallback) throw new Error('Missing TWILIO_STATUS_CALLBACK_URL');
+    // For SMS, body is sent as-is (no token interpolation). Preserve it as
+    // renderedBody for consistent display of submitted content. Assign BEFORE
+    // markProviderSubmissionStarted so both fields persist in that method's
+    // existing save (fail-closed ordering).
+    message.renderedBody = message.body;
     await this.markProviderSubmissionStarted(message);
     const response = await sendTwilioSms({
       accountSid,
@@ -835,6 +846,10 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async markProviderSubmissionStarted(message: Message) {
+    // Persists providerSubmissionStartedAt AND any already-assigned fields
+    // (notably renderedBody, assigned by the caller before this call) in a
+    // single save. Callers rely on this ordering: if this save throws, the
+    // provider send below it must not run (fail-closed).
     message.providerSubmissionStartedAt = new Date();
     await this.messageRepository.save(message);
   }
@@ -1021,6 +1036,10 @@ function toThreadMessage(message: Message) {
     channel: message.channel,
     direction: message.direction,
     body: displayMessageBody(message.body),
+    // The exact provider-bound content for submitted messages. The UI shows
+    // this (falling back to body) so operators see what was actually sent,
+    // while body keeps the original template with {{...}} tokens.
+    renderedBody: message.renderedBody || null,
     subject: message.subject || null,
     status: message.status,
     providerStatus: message.providerStatus || null,

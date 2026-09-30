@@ -35,6 +35,7 @@ import { ApplicationNotificationProviderState1790294400002 } from './migrations/
 import { NotificationEmailDelivery1790361600001 } from './migrations/202609260001-notification-email-delivery';
 import { NotificationSystemV11790365760000 } from './migrations/202609260002-notification-system-v1';
 import { WorkerHeartbeat1790448000001 } from './migrations/202609270001-worker-heartbeat';
+import { MessageRenderedBody1790448000002 } from './migrations/202609290001-message-rendered-body';
 
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
@@ -70,6 +71,7 @@ const databaseMigrations = [
   NotificationEmailDelivery1790361600001,
   NotificationSystemV11790365760000,
   WorkerHeartbeat1790448000001,
+  MessageRenderedBody1790448000002,
 ];
 
 function migrationOptions() {
