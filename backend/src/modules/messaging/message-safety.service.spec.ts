@@ -3,6 +3,7 @@ import { LeadEvent } from "../leads/lead-event.entity";
 import { Lead } from "../leads/lead.entity";
 import { TenantSettings } from "../settings/tenant-settings.entity";
 import { Tenant } from "../tenants/tenant.entity";
+import { TestRun } from "../testing/test-run.entity";
 import { Message } from "./message.entity";
 import {
   MessageSafetyInput,
@@ -19,6 +20,7 @@ function harness(
     entitlementReasons?: string[];
     quietHours?: { enabled: boolean; startMinute: number; endMinute: number };
     consent?: { allowed: boolean; code?: string; reason?: string };
+    testRun?: Partial<TestRun> | null;
   } = {},
 ) {
   const tenantId = "11111111-1111-4111-8111-111111111111";
@@ -109,6 +111,25 @@ function harness(
       reasons: options.entitlementReasons ?? [],
     }),
   };
+  const testRun =
+    options.testRun === null
+      ? null
+      : options.testRun
+        ? Object.assign(new TestRun(), {
+            id: "44444444-4444-4444-8444-444444444444",
+            tenantId,
+            status: "running",
+            smsRecipient: null,
+            emailRecipient: "jordan@example.com",
+            testLeadId: lead.id,
+            expiresAt: new Date("2026-08-07T00:00:00.000Z"),
+            ...options.testRun,
+          })
+        : undefined;
+  const testRunsRepository =
+    testRun === undefined
+      ? undefined
+      : ({ findOne: jest.fn().mockResolvedValue(testRun) } as never);
   const service = new MessageSafetyService(
     { findOne: jest.fn().mockResolvedValue(lead) } as never,
     messageRepository as never,
@@ -128,6 +149,7 @@ function harness(
     leadEventRepository as never,
     compliance as never,
     entitlements as never,
+    testRunsRepository,
   );
   const input: MessageSafetyInput = {
     leadId: lead.id,
@@ -256,6 +278,69 @@ describe("MessageSafetyService", () => {
       }),
     ).resolves.toMatchObject({
       ruleIds: expect.arrayContaining(["QUIET_HOURS"]),
+    });
+  });
+
+  it("permits an approved controlled test to send during quiet hours", async () => {
+    const controlled = harness({
+      settings: { timeZone: "UTC" },
+      quietHours: { enabled: true, startMinute: 540, endMinute: 1_020 },
+      lead: { testRunId: "44444444-4444-4444-8444-444444444444" },
+      testRun: {},
+      job: { channel: "email" },
+    });
+    await expect(
+      controlled.service.evaluateMessageSafety({
+        ...controlled.input,
+        now: new Date("2026-08-06T12:00:00.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      allowed: true,
+      ruleIds: expect.not.arrayContaining(["QUIET_HOURS"]),
+    });
+  });
+
+  it("still blocks quiet hours for a controlled test with a mismatched recipient", async () => {
+    const mismatched = harness({
+      settings: { timeZone: "UTC" },
+      quietHours: { enabled: true, startMinute: 540, endMinute: 1_020 },
+      lead: {
+        testRunId: "44444444-4444-4444-8444-444444444444",
+        email: "intruder@example.com",
+      },
+      testRun: {},
+      job: { channel: "email" },
+    });
+    await expect(
+      mismatched.service.evaluateMessageSafety({
+        ...mismatched.input,
+        now: new Date("2026-08-06T12:00:00.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      allowed: false,
+      ruleIds: expect.arrayContaining([
+        "TEST_RECIPIENT_MISMATCH",
+        "QUIET_HOURS",
+      ]),
+    });
+  });
+
+  it("still blocks quiet hours for a controlled test with an expired run", async () => {
+    const expired = harness({
+      settings: { timeZone: "UTC" },
+      quietHours: { enabled: true, startMinute: 540, endMinute: 1_020 },
+      lead: { testRunId: "44444444-4444-4444-8444-444444444444" },
+      testRun: { expiresAt: new Date("2026-08-06T11:00:00.000Z") },
+      job: { channel: "email" },
+    });
+    await expect(
+      expired.service.evaluateMessageSafety({
+        ...expired.input,
+        now: new Date("2026-08-06T12:00:00.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      allowed: false,
+      ruleIds: expect.arrayContaining(["TEST_RUN_INACTIVE", "QUIET_HOURS"]),
     });
   });
 

@@ -82,6 +82,11 @@ export class MessageSafetyService {
       }
     };
     const now = input.now ?? new Date();
+    // Narrow exemption: a valid, active controlled test whose recipient matches
+    // the run's approved recipient may send during quiet hours, consistent with
+    // the entitlement layer's controlled-test exemption. Ordinary clients keep
+    // full quiet-hours protection.
+    let isApprovedControlledTest = false;
     const lead = await this.leadRepository.findOne({
       where: { id: input.leadId, tenantId: input.clientId },
     });
@@ -187,6 +192,15 @@ export class MessageSafetyService {
               jobChannel: job?.channel,
             });
           }
+          // The run is active and the recipient matches the approved test
+          // recipient: this is a valid controlled rehearsal, exempt from
+          // quiet-hours blocking (entitlement layer already exempts it).
+          if (
+            !reasons.has("TEST_RUN_INACTIVE") &&
+            !reasons.has("TEST_RECIPIENT_MISMATCH")
+          ) {
+            isApprovedControlledTest = true;
+          }
         }
       }
 
@@ -275,6 +289,7 @@ export class MessageSafetyService {
         const quietHours = await this.compliance.getQuietHours(input.clientId);
         if (
           quietHours.enabled &&
+          !isApprovedControlledTest &&
           isWithinQuietHours({
             now,
             timeZone,
