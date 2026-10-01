@@ -243,6 +243,8 @@ type Communication = {
   body: string
   status: string
   providerStatus?: string | null
+  blockedReason?: string | null
+  safetyRuleIds?: string[]
   createdAt: string
 }
 
@@ -2091,6 +2093,15 @@ export function AdminDashboardClient({
                         <div className="mt-2 text-xs text-muted-foreground">
                           {label(item.direction)} · {new Date(item.createdAt).toLocaleString()}
                         </div>
+                        {item.status === "blocked" && item.blockedReason ? (
+                          <details className="mt-2 text-xs">
+                            <summary className="cursor-pointer font-medium underline underline-offset-2">Why was this blocked?</summary>
+                            <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{item.blockedReason}</div>
+                            {item.safetyRuleIds && item.safetyRuleIds.length ? (
+                              <div className="mt-1 text-[11px] text-muted-foreground">Rules: {item.safetyRuleIds.join(", ")}</div>
+                            ) : null}
+                          </details>
+                        ) : null}
                       </div>
                     ))
                   ) : (

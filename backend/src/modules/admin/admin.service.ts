@@ -530,6 +530,8 @@ export class AdminService {
         'message.body',
         'message.status',
         'message.providerStatus',
+        'message.blockedReason',
+        'message.safetyRuleIds',
         'message.createdAt',
         'lead.id',
         'lead.fullName',
@@ -552,6 +554,10 @@ export class AdminService {
       body: message.body.slice(0, 1000),
       status: message.status,
       providerStatus: message.providerStatus || null,
+      blockedReason: (message as any).blockedReason || null,
+      safetyRuleIds: Array.isArray((message as any).safetyRuleIds)
+        ? (message as any).safetyRuleIds
+        : [],
       createdAt: message.createdAt,
     }));
   }
