@@ -430,6 +430,7 @@ export class WebhooksService {
         leadId: persisted.leadId,
         messageId: persisted.messageId,
         channel: 'sms',
+        testRunId: readinessLead?.testRunId || null,
       });
     }
 
@@ -509,7 +510,15 @@ export class WebhooksService {
       const existingLead = await this.dataSource.getRepository(Lead).findOne({
         where: { tenantId, email: from },
       });
-      if (!existingLead) {
+      // P1 FIX: Before reserving a new lead unit, check if this is a validated
+      // controlled test reply. A reply from the base address (e.g. Gmail) for
+      // a plus-addressed test lead would otherwise consume a phantom lead
+      // reservation, or be blocked at the lead cap without ever reaching the
+      // correlation in persistEmailInbound.
+      const correlatedTestLead = existingLead
+        ? null
+        : await this.correlateControlledTestReply(this.dataSource, tenantId, from);
+      if (!existingLead && !correlatedTestLead) {
         const usage = await this.limits.reserveUsage({
           tenantId,
           metric: 'lead',
@@ -583,6 +592,7 @@ export class WebhooksService {
         leadId: persisted.leadId,
         messageId: persisted.messageId,
         channel: 'email',
+        testRunId: readinessLead?.testRunId || null,
       });
     }
     this.logger.log(
@@ -630,11 +640,22 @@ export class WebhooksService {
           },
         );
       } else if (result.message?.lead?.testRunId) {
+        // P1 FIX: Distinguish AI reply delivery from initial test outbound.
+        // An AI-generated message (has aiRunId) delivered for a test lead
+        // indicates the inbound-triggered AI reply was delivered.
+        const isAiReply = Boolean((result.message as any)?.aiRunId);
+        const channel = (result.message as any)?.channel || 'email';
         await this.recordReadinessEvidenceSafely(
           result.message.lead.tenantId,
           {
             outboundDelivered: true,
             testRunId: result.message.lead.testRunId,
+            ...(isAiReply && channel === 'email'
+              ? { inboundEmailAiReplyDelivered: true }
+              : {}),
+            ...(isAiReply && channel === 'sms'
+              ? { inboundSmsAiReplyDelivered: true }
+              : {}),
           },
         );
       }
@@ -1466,7 +1487,7 @@ export class WebhooksService {
    * senders, no cross-tenant leakage.
    */
   private async correlateControlledTestReply(
-    manager: EntityManager,
+    manager: EntityManager | DataSource,
     tenantId: string,
     senderEmail: string,
   ): Promise<Lead | null> {
@@ -1504,6 +1525,7 @@ export class WebhooksService {
     leadId: string;
     messageId: string;
     channel: 'sms' | 'email';
+    testRunId?: string | null;
   }) {
     try {
       await this.aiConversations.acceptInbound(event);
@@ -1541,6 +1563,8 @@ export class WebhooksService {
       stop?: boolean;
       providerRejection?: boolean;
       outboundDelivered?: boolean;
+      inboundSmsAiReplyDelivered?: boolean;
+      inboundEmailAiReplyDelivered?: boolean;
       testRunId?: string | null;
     },
   ) {

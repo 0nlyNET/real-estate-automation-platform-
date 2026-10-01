@@ -286,6 +286,8 @@ export class AiConversationControlService {
       const entitlement = await this.entitlements.evaluate(
         tenantId,
         channel === 'sms' ? 'send_automated_sms' : 'send_automated_email',
+        new Date(),
+        { controlledTest: Boolean((lead as any)?.testRunId) },
       );
       if (!entitlement.allowed) {
         throw new ConflictException(entitlement.reasons.join('; '));

@@ -556,6 +556,8 @@ export class OnboardingService {
       stop?: boolean;
       providerRejection?: boolean;
       outboundDelivered?: boolean;
+      inboundSmsAiReplyDelivered?: boolean;
+      inboundEmailAiReplyDelivered?: boolean;
       testRunId?: string | null;
     },
   ) {
@@ -629,6 +631,14 @@ export class OnboardingService {
         ...(evidence.stop ? { stop: 'passed' } : {}),
       };
     }
+    if (evidence.inboundSmsAiReplyDelivered || evidence.inboundEmailAiReplyDelivered) {
+      run.checks = {
+        ...run.checks,
+        ...(evidence.inboundSmsAiReplyDelivered ? { inboundSmsAiReplyDelivered: 'passed' } : {}),
+        ...(evidence.inboundEmailAiReplyDelivered ? { inboundEmailAiReplyDelivered: 'passed' } : {}),
+      };
+      changed = true;
+    }
     if (evidence.providerRejection) {
       run.checks = { ...run.checks, providerRejection: 'passed' };
       record.providerTests = {
@@ -639,11 +649,18 @@ export class OnboardingService {
       changed = true;
     }
     const checks = run.checks as Record<string, unknown>;
+    // P1 FIX: A run must not be marked passed until the inbound-triggered AI
+    // reply is delivered (not just the inbound receipt). This prevents premature
+    // completion where the run closes before the AI even processes the reply.
     const passed =
       checks.outbound === 'delivered' &&
       (!record.smsEnabled ||
-        (checks.inboundSms === 'passed' && checks.stop === 'passed')) &&
-      (!record.emailEnabled || checks.inboundEmail === 'passed') &&
+        (checks.inboundSms === 'passed' &&
+          checks.stop === 'passed' &&
+          checks.inboundSmsAiReplyDelivered === 'passed')) &&
+      (!record.emailEnabled ||
+        (checks.inboundEmail === 'passed' &&
+          checks.inboundEmailAiReplyDelivered === 'passed')) &&
       (!record.bookingEnabled ||
         (checks.calendarAvailability === 'passed' &&
           checks.externalCalendarEvent === 'passed' &&

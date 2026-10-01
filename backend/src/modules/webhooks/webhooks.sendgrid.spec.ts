@@ -73,6 +73,11 @@ describe('SendGrid inbound email webhook', () => {
       transaction: jest.fn(async (callback) => callback(manager)),
       getRepository: jest.fn((entity) => {
         if (entity === Lead) return leadRepo;
+        // P1 FIX: correlateControlledTestReply checks for active test runs
+        // before reserving lead usage. Mock returns null (no active run).
+        if (entity?.name === 'TestRun') {
+          return { findOne: jest.fn().mockResolvedValue(null) };
+        }
         throw new Error('Unexpected repository');
       }),
     };
