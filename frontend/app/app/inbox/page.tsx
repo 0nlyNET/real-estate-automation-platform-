@@ -54,6 +54,8 @@ type Msg = {
   providerStatus?: string | null
   errorCode?: string | null
   errorMessage?: string | null
+  blockedReason?: string | null
+  safetyRuleIds?: string[]
   authorship?: "ai" | "human" | "template" | "system"
 }
 
@@ -602,7 +604,20 @@ export default function InboxPage() {
                         ) : null}
                       </div>
                     ) : null}
-                    {message.status === "blocked" || message.status === "skipped" ? <div className="mt-1 text-xs font-medium">Human review is required before this conversation can continue.</div> : null}
+                    {message.status === "blocked" || message.status === "skipped" ? (
+                      <div className="mt-1 text-xs font-medium">
+                        <div>Human review is required before this conversation can continue.</div>
+                        {message.status === "blocked" && message.blockedReason ? (
+                          <details className="mt-1 font-normal opacity-90">
+                            <summary className="cursor-pointer underline underline-offset-2">Why was this blocked?</summary>
+                            <div className="whitespace-pre-wrap pt-1">{message.blockedReason}</div>
+                            {message.safetyRuleIds && message.safetyRuleIds.length ? (
+                              <div className="pt-1 text-[11px]">Rules: {message.safetyRuleIds.join(", ")}</div>
+                            ) : null}
+                          </details>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 ))}
                 {!visibleMessages.length ? <div className="flex min-h-72 items-center justify-center p-6 text-center text-sm text-muted-foreground">{activeLeadId && loadedLeadId === activeLeadId ? "No messages yet. Write the first reply below." : activeLeadId ? "Loading conversation…" : "Choose a conversation to see its messages."}</div> : null}

@@ -1045,6 +1045,12 @@ function toThreadMessage(message: Message) {
     providerStatus: message.providerStatus || null,
     errorCode: message.errorCode || null,
     errorMessage: userFacingDeliveryError(message),
+    // Safety block details for operator visibility. The UI shows blockedReason
+    // so operators can see WHY a message was blocked without DevTools.
+    blockedReason: (message as any).blockedReason || null,
+    safetyRuleIds: Array.isArray((message as any).safetyRuleIds)
+      ? (message as any).safetyRuleIds
+      : [],
     authorship: message.authorship || 'system',
     aiRunId: message.aiRunId || null,
     approvedAt: message.approvedAt || null,
