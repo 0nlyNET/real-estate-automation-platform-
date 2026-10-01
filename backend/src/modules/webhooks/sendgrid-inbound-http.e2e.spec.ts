@@ -150,6 +150,7 @@ describe('SendGrid authenticated inbound HTTP workflow', () => {
       leadId: '00000000-0000-4000-8000-000000000020',
       messageId: '00000000-0000-4000-8000-000000000030',
       channel: 'email',
+      testRunId: null,
     });
   });
 });
