@@ -39,6 +39,7 @@ import { decryptString } from '../../common/crypto-secrets';
 import { LimitsService } from '../limits/limits.service';
 import { Tenant } from '../tenants/tenant.entity';
 import { assertLeadAcceptance } from '../leads/lead-acceptance';
+import { TestRun } from '../testing/test-run.entity';
 
 export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
@@ -1346,6 +1347,22 @@ export class WebhooksService {
       where: { tenantId: input.tenantId, email: input.from },
     });
     if (!lead) {
+      // Controlled-reply correlation: a real mailbox reply can arrive from the
+      // account's base address while the outbound was delivered to a
+      // plus-addressed variant (e.g. Gmail sends replies from
+      // user@gmail.com even when the message went to user+tag@gmail.com).
+      // Before failing closed, check whether the sender is the validated
+      // identity of an ACTIVE controlled test run for this tenant and
+      // correlate the reply to that run's lead. The alias rule is scoped to
+      // the run's own recipient — it is never applied globally and never
+      // admits arbitrary senders.
+      lead = await this.correlateControlledTestReply(
+        manager,
+        input.tenantId,
+        input.from,
+      );
+    }
+    if (!lead) {
       const tenant = await manager.getRepository(Tenant).findOne({
         where: { id: input.tenantId },
         lock: { mode: 'pessimistic_read' },
@@ -1433,6 +1450,55 @@ export class WebhooksService {
     };
   }
 
+  /**
+   * Correlate an inbound sender to an ACTIVE controlled test run's lead.
+   *
+   * Returns the run's lead when — and only when — all of these hold:
+   * - the tenant has a test run with status `running` that has not expired;
+   * - the run has an email recipient and a test lead;
+   * - the sender is the same mailbox identity as the run's recipient
+   *   (exact match, or a plus-address alias of it);
+   * - the run's lead belongs to the routed tenant.
+   *
+   * Everything else returns null and the caller keeps the fail-closed path
+   * (unmatched senders on a TESTING workspace still get 403
+   * LEAD_INTAKE_NOT_ACTIVE). No global plus-suffix stripping, no arbitrary
+   * senders, no cross-tenant leakage.
+   */
+  private async correlateControlledTestReply(
+    manager: EntityManager,
+    tenantId: string,
+    senderEmail: string,
+  ): Promise<Lead | null> {
+    const sender = String(senderEmail || '').trim().toLowerCase();
+    if (!sender) return null;
+    const run = await manager.getRepository(TestRun).findOne({
+      where: { tenantId, status: 'running' },
+      order: { createdAt: 'DESC' },
+    });
+    if (!run || !run.emailRecipient || !run.testLeadId) return null;
+    if (
+      run.expiresAt &&
+      new Date(run.expiresAt).getTime() <= Date.now()
+    ) {
+      return null;
+    }
+    const recipient = String(run.emailRecipient).trim().toLowerCase();
+    if (!isSameMailboxIdentity(sender, recipient)) return null;
+    const lead = await manager.getRepository(Lead).findOne({
+      where: { id: run.testLeadId },
+    });
+    if (!lead || lead.tenantId !== tenantId) return null;
+    this.logger.log(
+      operationalEvent('sendgrid_inbound_test_reply_correlated', {
+        tenantId,
+        leadId: lead.id,
+        testRunId: run.id,
+      }),
+    );
+    return lead;
+  }
+
   private async queueAiSafely(event: {
     tenantId: string;
     leadId: string;
@@ -1508,6 +1574,38 @@ function extractEmailAddress(value: unknown) {
   const bracketed = text.match(/<([^<>@\s]+@[^<>@\s]+)>/);
   const candidate = (bracketed?.[1] || text).replace(/^mailto:/, '').trim();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate) ? candidate : '';
+}
+
+/**
+ * Same-mailbox check for controlled test-reply correlation.
+ *
+ * True for an exact address match, or when one side is a plus-address alias
+ * of the other (user+tag@domain vs user@domain). The domain must match
+ * exactly and the base local part must be non-empty. This helper is only
+ * ever consulted inside active controlled test-run correlation — it is not
+ * a general inbound normalization and must not be reused to admit
+ * arbitrary senders.
+ */
+function isSameMailboxIdentity(a: string, b: string): boolean {
+  const left = String(a || '').trim().toLowerCase();
+  const right = String(b || '').trim().toLowerCase();
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const split = (value: string): [string, string] => {
+    const at = value.lastIndexOf('@');
+    if (at <= 0) return ['', ''];
+    return [value.slice(0, at), value.slice(at + 1)];
+  };
+  const [aLocal, aDomain] = split(left);
+  const [bLocal, bDomain] = split(right);
+  if (!aLocal || !bLocal || aDomain !== bDomain) return false;
+  const base = (local: string): string => {
+    const plus = local.indexOf('+');
+    return plus >= 0 ? local.slice(0, plus) : local;
+  };
+  const aBase = base(aLocal);
+  const bBase = base(bLocal);
+  return aBase.length > 0 && aBase === bBase;
 }
 
 function extractSendGridRecipient(body: Record<string, unknown>) {
