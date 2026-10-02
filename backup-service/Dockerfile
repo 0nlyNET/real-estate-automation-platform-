@@ -1,12 +1,10 @@
-FROM postgres:17-alpine
+FROM postgres:15-alpine
 
-# Install: gnupg (encryption), aws-cli (R2 S3-compatible upload), curl (heartbeat)
+# Restore-drill image: same base as backup-service, runs the drill once.
 RUN apk add --no-cache gnupg aws-cli curl bash
 
 WORKDIR /app
-COPY backup.sh /app/backup.sh
-COPY restore.sh /app/restore.sh
-RUN chmod +x /app/backup.sh /app/restore.sh
+COPY restore-drill.sh /app/restore-drill.sh
+RUN chmod +x /app/restore-drill.sh
 
-# Railway cron runs this on schedule; no long-running process needed
-CMD ["/app/backup.sh"]
+CMD ["/app/restore-drill.sh"]
