@@ -510,8 +510,10 @@ export class TestingService implements OnModuleInit {
       sanitizedErrorMessage: string | null;
     }> = [];
     if (active.leadId) {
+      // The lead is already tenant-scoped through the active run lookup
+      // above; Message carries no tenantId column (tenant comes via lead).
       const msgs = await this.messages.find({
-        where: { leadId: active.leadId, tenantId } as any,
+        where: { leadId: active.leadId },
         order: { createdAt: 'DESC' },
         take: 20,
       });
