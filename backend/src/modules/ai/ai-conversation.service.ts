@@ -758,9 +758,35 @@ export class AiConversationService
         workerId: this.workerId,
       }),
     );
-    const run = await this.runs.findOne({
-      where: { id: runId, lockedBy: this.workerId },
-    });
+    // DIAGNOSTIC: Time each awaited operation to identify hangs. Each step
+    // logs start/end with duration. If a step never logs END, that's the stall.
+    const timed = async <T>(step: string, fn: () => Promise<T> | T): Promise<T> => {
+      const start = Date.now();
+      this.logger.log(JSON.stringify({ event: 'PROCESS_STEP_START', runId, step }));
+      try {
+        const result = await fn();
+        this.logger.log(
+          JSON.stringify({ event: 'PROCESS_STEP_END', runId, step, durationMs: Date.now() - start }),
+        );
+        return result;
+      } catch (error) {
+        this.logger.error(
+          JSON.stringify({
+            event: 'PROCESS_STEP_ERROR',
+            runId,
+            step,
+            durationMs: Date.now() - start,
+            error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+          }),
+        );
+        throw error;
+      }
+    };
+    const run = await timed('run_lookup', () =>
+      this.runs.findOne({
+        where: { id: runId, lockedBy: this.workerId },
+      }),
+    );
     if (!run) {
       // HARDENING: The silent `return` here was the exact line where the
       // 2026-09-28 fresh UAT run (900c6a4f-...) disappeared after a successful
@@ -797,14 +823,17 @@ export class AiConversationService
       // preflight for the same controlled test.
       testRunId: (run.promptMetadata as any)?.testRunId || null,
     };
-    const trigger = run.triggeringMessageId
-      ? await this.messages.findOne({
-          where: { id: run.triggeringMessageId, leadId: run.leadId },
-        })
+    const triggeringMessageId = run.triggeringMessageId;
+    const trigger = triggeringMessageId
+      ? await timed('trigger_message_lookup', () =>
+          this.messages.findOne({
+            where: { id: triggeringMessageId, leadId: run.leadId },
+          }),
+        )
       : null;
     if (trigger) event.channel = trigger.channel;
 
-    const preflight = await this.preflight(event);
+    const preflight = await timed('preflight', () => this.preflight(event));
     if (!preflight.allowed) {
       await this.blockRun(
         run,
@@ -831,15 +860,17 @@ export class AiConversationService
     }
 
     try {
-      const recentMessages = await this.contextMessages(run.leadId);
+      const recentMessages = await timed('context_messages', () => this.contextMessages(run.leadId));
       const firstAiResponse =
-        (await this.messages.count({
-          where: {
-            leadId: run.leadId,
-            direction: 'outbound',
-            authorship: 'ai',
-          },
-        })) === 0;
+        (await timed('outbound_count', () =>
+          this.messages.count({
+            where: {
+              leadId: run.leadId,
+              direction: 'outbound',
+              authorship: 'ai',
+            },
+          }),
+        )) === 0;
       run.promptMetadata = {
         channel: event.channel,
         messageCount: recentMessages.length,
@@ -857,11 +888,13 @@ export class AiConversationService
       };
       await this.runs.save(run);
 
-      const usageReservation = await this.limits?.reserveUsage({
-        tenantId: run.tenantId,
-        metric: 'ai',
-        idempotencyKey: `ai-run:${run.id}`,
-      });
+      const usageReservation = await timed('quota_reservation', () =>
+        this.limits?.reserveUsage({
+          tenantId: run.tenantId,
+          metric: 'ai',
+          idempotencyKey: `ai-run:${run.id}`,
+        }),
+      );
       if (usageReservation && !usageReservation.ok) {
         await this.blockRun(
           run,
@@ -873,7 +906,7 @@ export class AiConversationService
         return;
       }
 
-      const result = await this.provider.generate({
+      const result = await timed('provider_generate', () => this.provider.generate({
         mode: run.mode,
         channel: event.channel,
         identityLabel: preflight.settings.identityLabel as string,
@@ -895,7 +928,7 @@ export class AiConversationService
         recentMessages,
         knowledge: preflight.knowledge,
         settings: preflight.settings,
-      });
+      }));
       run.provider = result.provider;
       run.model = result.model;
       run.confidence = result.confidence;
