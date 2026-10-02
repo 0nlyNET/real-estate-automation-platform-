@@ -16,6 +16,7 @@ describe('Stripe billing safety controls', () => {
       STRIPE_SECRET_KEY: 'sk_test_configured',
       STRIPE_WEBHOOK_SECRET: 'whsec_test',
       STRIPE_PRICE_SERVICE_MONTH: 'price_service_month',
+      APP_ENV: 'staging',
     });
   });
 
@@ -257,8 +258,8 @@ describe('Stripe billing safety controls', () => {
 
   it('creates one live invoice summary and one notification when Stripe retries a paid invoice', async () => {
     // This test uses a live-mode event; the livemode gate (PR #80) requires
-    // NODE_ENV=production to allow it through.
-    process.env.NODE_ENV = 'production';
+    // APP_ENV=production to allow it through.
+    process.env.APP_ENV = 'production';
     let ledger: any = null;
     const events = {
       create: jest.fn((value) => ({ ...value })),
@@ -326,8 +327,8 @@ describe('Stripe billing safety controls', () => {
 
   it('automatically suspends service after a confirmed failed payment when no grace period exists', async () => {
     // This test uses a live-mode event; the livemode gate (PR #80) requires
-    // NODE_ENV=production to allow it through.
-    process.env.NODE_ENV = 'production';
+    // APP_ENV=production to allow it through.
+    process.env.APP_ENV = 'production';
     process.env.BILLING_GRACE_DAYS = '0';
     const serviceControl = { suspend: jest.fn().mockResolvedValue({ changed: true }) };
     const { service } = setup({ serviceControl });
