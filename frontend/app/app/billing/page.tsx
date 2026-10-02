@@ -26,9 +26,14 @@ export default function BillingPage() {
   async function refreshBilling() {
     try {
       await apiFetch("/billing/reconcile", { method: "POST" })
-    } catch {
-      // Webhooks remain the primary sync path. Keep the last known state available
-      // if Stripe is temporarily unavailable during this best-effort repair.
+    } catch (cause) {
+      // Webhooks remain the primary sync path. Surface that the live sync
+      // failed so the user knows this is the last known state, not a fresh
+      // confirmation from Stripe.
+      setNotice(
+        "Live billing sync with Stripe is unavailable right now; showing the last known status. " +
+          (cause instanceof Error ? cause.message : "Please try again shortly."),
+      )
     }
     const [current, me] = await Promise.all([
       fetchMePlan(),

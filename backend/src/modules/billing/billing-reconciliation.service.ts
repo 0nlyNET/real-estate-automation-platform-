@@ -39,14 +39,50 @@ export class BillingReconciliationService {
     if (!tenant) throw new BadRequestException('Tenant not found');
 
     if (!tenant.stripeCustomerId) {
+      // Metadata fallback: the customer mapping may be missing (e.g. the
+      // subscription was created before the mapping was stored, or the
+      // webhook created it via metadata). Search Stripe for a subscription
+      // carrying this tenant's ID in metadata before giving up.
+      const byMetadata = await this.findSubscriptionByTenantMetadata(tenantId);
+      if (!byMetadata) {
+        return {
+          reconciled: false,
+          status: tenant.status,
+          stripeSubscriptionStatus: tenant.stripeSubscriptionStatus,
+        };
+      }
+      await this.billing.reconcileSubscription(byMetadata, tenant.id);
+      const updated = await this.tenants.findById(tenant.id);
+      if (!updated) throw new BadRequestException('Tenant not found');
       return {
-        reconciled: false,
-        status: tenant.status,
-        stripeSubscriptionStatus: tenant.stripeSubscriptionStatus,
+        reconciled: true,
+        status: updated.status,
+        stripeSubscriptionStatus: updated.stripeSubscriptionStatus,
       };
     }
 
     return this.billing.withCustomerLock(tenant.stripeCustomerId, async () => this.reconcileCustomer(tenantId));
+  }
+
+  private async findSubscriptionByTenantMetadata(tenantId: string): Promise<Stripe.Subscription | null> {
+    // Stripe has no metadata search on subscriptions.list; page recent
+    // subscriptions and match metadata.tenantId. Bounded to avoid runaway
+    // scans on large accounts.
+    let startingAfter: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const subscriptions = await this.getStripe().subscriptions.list({
+        status: 'all',
+        limit: 100,
+        ...(startingAfter ? { starting_after: startingAfter } : {}),
+      });
+      const match = subscriptions.data.find(
+        (subscription) => String(subscription.metadata?.tenantId || '').trim() === tenantId,
+      );
+      if (match) return match;
+      if (!subscriptions.has_more) break;
+      startingAfter = subscriptions.data[subscriptions.data.length - 1]?.id;
+    }
+    return null;
   }
 
   private async reconcileCustomer(tenantId: string) {
