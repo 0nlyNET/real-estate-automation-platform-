@@ -7,7 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Sequence } from './sequence.entity';
 import { SequenceEnrollment } from './sequence-enrollment.entity';
@@ -30,6 +30,24 @@ import { operationalEvent, sanitizeOperationalText } from '../../common/operatio
 
 const CLAIM_LIMIT = 25;
 const LEASE_SECONDS = 120;
+
+/**
+ * Sequence-owned outbound messages carry the owning enrollment in their
+ * idempotency key:
+ *   `sequence:<enrollmentId>:<stepIndex>:<channel>:v<templateVersion>`
+ * Returns the enrollment id when the key matches, otherwise null. Used by the
+ * dispatch path to revalidate enrollment provenance immediately before
+ * provider submission.
+ */
+export function sequenceEnrollmentIdFromIdempotencyKey(
+  idempotencyKey?: string | null,
+): string | null {
+  if (!idempotencyKey) return null;
+  const match = /^sequence:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):/.exec(
+    idempotencyKey,
+  );
+  return match ? match[1] : null;
+}
 
 @Injectable()
 export class SequencesService implements OnModuleInit, OnModuleDestroy {
@@ -456,12 +474,22 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
     await this.requireLeadAccess(tenantId, leadId, ctx);
     const enrollment = await this.enrollmentRepository.findOne({ where: { id: enrollmentId, tenantId, leadId } });
     if (!enrollment) return { ok: false, message: 'Enrollment not found' };
-    enrollment.status = 'stopped';
-    enrollment.stoppedReason = reason as SequenceEnrollment['stoppedReason'];
-    enrollment.nextRunAt = undefined;
-    enrollment.lockedAt = null;
-    enrollment.lockedBy = null;
-    await this.enrollmentRepository.save(enrollment);
+    await this.dataSource.transaction(async (manager) => {
+      enrollment.status = 'stopped';
+      enrollment.stoppedReason = reason as SequenceEnrollment['stoppedReason'];
+      enrollment.nextRunAt = undefined;
+      enrollment.lockedAt = null;
+      enrollment.lockedBy = null;
+      await manager.getRepository(SequenceEnrollment).save(enrollment);
+      // A stopped enrollment must never deliver follow-ups: cancel its
+      // queued-but-unsubmitted sequence-owned messages atomically with the stop.
+      await this.cancelQueuedSequenceMessages(
+        manager,
+        tenantId,
+        leadId,
+        `enrollment_stop:${reason}`,
+      );
+    });
     return { ok: true };
   }
 
@@ -470,16 +498,125 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
     leadId: string,
     reason: 'reply' | 'manual' | 'other' | 'opt_out' = 'other',
   ) {
-    await this.enrollmentRepository.update(
-      { tenantId, leadId, status: In(['active', 'paused']) },
-      {
-        status: 'stopped',
-        stoppedReason: reason,
-        nextRunAt: null as any,
-        lockedAt: null,
-        lockedBy: null,
-      },
+    await this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(SequenceEnrollment).update(
+        { tenantId, leadId, status: In(['active', 'paused']) },
+        {
+          status: 'stopped',
+          stoppedReason: reason,
+          nextRunAt: null as any,
+          lockedAt: null,
+          lockedBy: null,
+        },
+      );
+      // A stopped enrollment must never deliver follow-ups: cancel the
+      // queued-but-unsubmitted sequence-owned messages for the lead in the
+      // same transaction as the enrollment stop.
+      await this.cancelQueuedSequenceMessages(
+        manager,
+        tenantId,
+        leadId,
+        `enrollment_stop:${reason}`,
+      );
+    });
+  }
+
+  /**
+   * Enrollment provenance lookup for the message dispatch path. Returns the
+   * current enrollment status, or null when the enrollment does not exist or
+   * does not belong to this tenant + lead.
+   */
+  async getSequenceEnrollmentStatus(
+    tenantId: string,
+    leadId: string,
+    enrollmentId: string,
+  ): Promise<SequenceEnrollment['status'] | null> {
+    const enrollment = await this.enrollmentRepository.findOne({
+      where: { id: enrollmentId, tenantId, leadId },
+    });
+    return enrollment?.status ?? null;
+  }
+
+  /**
+   * Cancels queued-but-unsubmitted sequence-owned follow-ups for a lead whose
+   * enrollment was stopped.
+   *
+   * Only outbound messages with communication_type = 'sequence' are touched:
+   * AI/manual replies and approved one-off reminders survive. Messages that
+   * have already been submitted to the provider
+   * (provider_submission_started_at IS NOT NULL) are left for the
+   * reconciliation path — delivery tracking continues, no double-send, no
+   * retroactive failure. Terminal states are never regressed.
+   *
+   * A sequence message is canceled only when its owning enrollment is no
+   * longer active, so a concurrently-enrolled active sequence keeps its
+   * queued messages.
+   */
+  private async cancelQueuedSequenceMessages(
+    manager: EntityManager,
+    tenantId: string,
+    leadId: string,
+    cancellationReason: string,
+  ): Promise<string[]> {
+    const canceledAt = new Date();
+    // UPDATE raw queries return [rows, rowCount] on the pg driver;
+    // normalize before reading .length (see common/db/raw-query-rows).
+    const canceled = updateReturningRows<{ id: string }>(
+      await manager.query(
+        `UPDATE messages AS message
+         SET status = 'canceled',
+             canceled_at = $3,
+             cancellation_reason = $4,
+             error_code = 'CANCELLED_BY_ENROLLMENT_STOP',
+             sanitized_error_message = 'Cancelled because the sequence enrollment was stopped',
+             last_error = 'Cancelled because the sequence enrollment was stopped',
+             locked_at = NULL,
+             locked_by = NULL,
+             next_attempt_at = NULL
+         WHERE message."leadId" = $1
+           AND message.direction = 'outbound'
+           AND message.communication_type = 'sequence'
+           AND message.status IN ('created', 'queued', 'pending', 'scheduled', 'sending')
+           AND (message.status <> 'sending' OR message.provider_submission_started_at IS NULL)
+           AND EXISTS (
+             SELECT 1 FROM leads
+             WHERE leads.id = message."leadId"
+               AND leads.tenant_id = $2
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM sequence_enrollments AS enrollment
+             WHERE enrollment.tenant_id = $2
+               AND enrollment."leadId" = $1
+               AND enrollment.status = 'active'
+               AND message.idempotency_key LIKE 'sequence:' || enrollment.id || ':%'
+           )
+         RETURNING message.id`,
+        [leadId, tenantId, canceledAt, cancellationReason],
+      ),
     );
+    const canceledIds = canceled
+      .map((row) => row?.id)
+      .filter(isValidRowId);
+    if (canceledIds.length > 0) {
+      this.logger.log(
+        operationalEvent('sequence_queued_messages_canceled', {
+          tenantId,
+          leadId,
+          canceledCount: canceledIds.length,
+          cancellationReason,
+        }),
+      );
+      await this.logLeadEvent(
+        { id: leadId, tenantId } as Lead,
+        'sequence_queued_messages_canceled',
+        {
+          canceledCount: canceledIds.length,
+          cancellationReason,
+          messageIds: canceledIds,
+        },
+      );
+    }
+    return canceledIds;
   }
 
   async processDueEnrollments(limit = CLAIM_LIMIT) {
@@ -789,12 +926,20 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async stopEnrollmentInternal(enrollment: SequenceEnrollment, reason: SequenceEnrollment['stoppedReason']) {
-    enrollment.status = 'stopped';
-    enrollment.stoppedReason = reason;
-    enrollment.nextRunAt = undefined;
-    enrollment.lockedAt = null;
-    enrollment.lockedBy = null;
-    await this.enrollmentRepository.save(enrollment);
+    await this.dataSource.transaction(async (manager) => {
+      enrollment.status = 'stopped';
+      enrollment.stoppedReason = reason;
+      enrollment.nextRunAt = undefined;
+      enrollment.lockedAt = null;
+      enrollment.lockedBy = null;
+      await manager.getRepository(SequenceEnrollment).save(enrollment);
+      await this.cancelQueuedSequenceMessages(
+        manager,
+        enrollment.tenantId,
+        enrollment.leadId,
+        `enrollment_stop:${reason}`,
+      );
+    });
   }
 
   private sortedSteps(sequence: Sequence, activeOnly = true) {
