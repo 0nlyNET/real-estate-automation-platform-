@@ -978,17 +978,40 @@ export class AiConversationService
         actions: result.actions,
       };
       if (output.classification === 'handoff' || output.escalationReason) {
-        await timed('blockrun_handoff', () =>
-          this.blockRun(
-            run,
-            'MODEL_REQUESTED_HANDOFF',
-            output.escalationReason ||
-              'The AI determined that a human should handle this conversation.',
-            'high',
-            preflight,
-          ),
+        // ROUTINE BUYER OVERRIDE: If this is a routine buyer inquiry with
+        // extractable facts, do NOT handoff. The model is incorrectly
+        // escalating instead of handling the inquiry. Override the handoff
+        // and continue through the buyer-intake path. Preserve the original
+        // model decision in the audit trail.
+        const buyerFactsForOverride = this.extractBuyerFacts(
+          preflight.triggeringMessage?.body || null,
         );
-        return;
+        if (buyerFactsForOverride) {
+          this.logger.log(
+            JSON.stringify({
+              event: 'HANDOFF_OVERRIDDEN_ROUTINE_BUYER',
+              runId: run.id,
+              originalClassification: output.classification,
+              originalEscalationReason:
+                output.escalationReason?.slice(0, 200) || null,
+            }),
+          );
+          // Clear the handoff so processing continues
+          output.classification = 'allowed';
+          output.escalationReason = null;
+        } else {
+          await timed('blockrun_handoff', () =>
+            this.blockRun(
+              run,
+              'MODEL_REQUESTED_HANDOFF',
+              output.escalationReason ||
+                'The AI determined that a human should handle this conversation.',
+              'high',
+              preflight,
+            ),
+          );
+          return;
+        }
       }
       if (output.confidence < preflight.settings.minimumConfidenceThreshold) {
         await timed('blockrun_low_confidence', () =>
