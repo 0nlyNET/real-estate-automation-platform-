@@ -341,3 +341,129 @@ describe('AI tool allowlist and validation', () => {
     );
   });
 });
+
+describe('update_lead_qualification contract', () => {
+  function qualificationArgs(payload: unknown) {
+    return {
+      name: 'update_lead_qualification' as const,
+      arguments: JSON.stringify(payload),
+    };
+  }
+
+  it('executes a valid nested qualification payload', async () => {
+    const item = fixture();
+    const result = await item.service.execute(
+      item.context,
+      qualificationArgs({
+        qualification: {
+          intent: 'buyer',
+          location: 'Elmwood Village',
+          budget: '$450,000',
+        },
+      }),
+      0,
+    );
+    expect(result).toMatchObject({
+      status: 'executed',
+      name: 'update_lead_qualification',
+    });
+    expect(result.output).toMatchObject({
+      updatedFields: ['intent', 'location', 'budget'],
+    });
+    expect(item.repositories.leads.save).toHaveBeenCalled();
+    expect(item.context.lead.qualificationData).toMatchObject({
+      intent: 'buyer',
+      location: 'Elmwood Village',
+      budget: '$450,000',
+    });
+  });
+
+  it('rejects flat arguments that skip the required qualification wrapper', async () => {
+    const item = fixture();
+    const result = await item.service.execute(
+      item.context,
+      qualificationArgs({
+        intent: 'buyer',
+        location: 'Elmwood Village',
+        budget: '$450,000',
+      }),
+      0,
+    );
+    expect(result).toMatchObject({
+      status: 'blocked',
+      code: 'TOOL_VALIDATION_FAILED',
+    });
+    expect(String(result.reason)).toContain('qualification must be an object');
+    expect(item.repositories.leads.save).not.toHaveBeenCalled();
+  });
+
+  it('repairs a double-encoded qualification string, then validates it', async () => {
+    const item = fixture();
+    const result = await item.service.execute(
+      item.context,
+      qualificationArgs({
+        qualification: JSON.stringify({
+          intent: 'buyer',
+          location: 'Elmwood Village',
+        }),
+      }),
+      0,
+    );
+    expect(result).toMatchObject({ status: 'executed' });
+    expect(result.output).toMatchObject({ argsRepaired: true });
+    expect(item.context.lead.qualificationData).toMatchObject({
+      intent: 'buyer',
+      location: 'Elmwood Village',
+    });
+  });
+
+  it('still fails visibly when the repaired payload is invalid', async () => {
+    const item = fixture();
+    const result = await item.service.execute(
+      item.context,
+      qualificationArgs({
+        qualification: JSON.stringify({ bedrooms: '3' }),
+      }),
+      0,
+    );
+    expect(result).toMatchObject({ status: 'blocked' });
+    expect(String(result.reason)).toContain('Unsupported qualification field');
+    expect(item.repositories.leads.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported qualification fields such as bedrooms', async () => {
+    const item = fixture();
+    const result = await item.service.execute(
+      item.context,
+      qualificationArgs({
+        qualification: { intent: 'buyer', bedrooms: '3' },
+      }),
+      0,
+    );
+    expect(result).toMatchObject({ status: 'blocked' });
+    expect(String(result.reason)).toContain('Unsupported qualification field');
+    expect(item.repositories.leads.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-text qualification values', async () => {
+    const item = fixture();
+    const result = await item.service.execute(
+      item.context,
+      qualificationArgs({ qualification: { budget: 450000 } }),
+      0,
+    );
+    expect(result).toMatchObject({ status: 'blocked' });
+    expect(String(result.reason)).toContain('must be text or null');
+    expect(item.repositories.leads.save).not.toHaveBeenCalled();
+  });
+
+  it('accepts null qualification values', async () => {
+    const item = fixture();
+    const result = await item.service.execute(
+      item.context,
+      qualificationArgs({ qualification: { timeline: null } }),
+      0,
+    );
+    expect(result).toMatchObject({ status: 'executed' });
+  });
+});

@@ -18,6 +18,7 @@ import { SendGridWebhookEvent } from './sendgrid-webhook-event.entity';
 import { OnboardingModule } from '../onboarding/onboarding.module';
 import { TenantMessagingResource } from '../integrations/tenant-messaging-resource.entity';
 import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entity';
+import { AiRun } from '../ai/ai-run.entity';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entit
       SendGridWebhookEvent,
       TenantMessagingResource,
       TenantEmailIdentity,
+      AiRun,
     ]),
     ComplianceModule,
     SequencesModule,

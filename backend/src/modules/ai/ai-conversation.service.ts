@@ -880,6 +880,18 @@ export class AiConversationService
         firstAiResponse,
         lead: this.providerLeadContext(preflight.lead),
         conversationSummary: preflight.lead.conversationSummary || null,
+        triggeringMessage: preflight.triggeringMessage
+          ? {
+              direction: preflight.triggeringMessage.direction as
+                | 'inbound'
+                | 'outbound',
+              channel: preflight.triggeringMessage.channel as 'sms' | 'email',
+              body: preflight.triggeringMessage.body.slice(0, 2_000),
+              authorship:
+                preflight.triggeringMessage.authorship || 'system',
+              createdAt: preflight.triggeringMessage.createdAt.toISOString(),
+            }
+          : null,
         recentMessages,
         knowledge: preflight.knowledge,
         settings: preflight.settings,
@@ -975,7 +987,12 @@ export class AiConversationService
         if (toolResult.status === 'blocked') {
           // OBSERVABILITY: A blocked tool kills the run via blockRun, which
           // emits no log line for non-provider failures. Log it here so a
-          // blocked run is always visible in application logs.
+          // blocked run is always visible in application logs. The arg shape
+          // (keys and value types, never values) is included so a contract
+          // mismatch can be diagnosed without leaking lead PII into logs.
+          const blockedRequest = requested[index] as
+            | { arguments?: unknown }
+            | undefined;
           this.logger.warn(
             JSON.stringify({
               event: 'PROCESS_TOOL_BLOCKED',
@@ -984,6 +1001,7 @@ export class AiConversationService
               toolName: toolResult.name,
               code: toolResult.code || 'AI_TOOL_BLOCKED',
               reason: (toolResult.reason || 'An AI tool did not pass validation.').slice(0, 300),
+              argShape: describeToolArgShape(blockedRequest?.arguments),
             }),
           );
           await this.blockRun(
@@ -1634,6 +1652,33 @@ export class AiConversationService
 function safeResumeMaxAgeMinutes(): number {
   const configured = Number(process.env.AUTOMATION_RESUME_MAX_AGE_MINUTES || 15);
   return Number.isFinite(configured) && configured > 0 ? configured : 15;
+}
+
+/**
+ * Describe the SHAPE of a tool's raw arguments (top-level keys and value
+ * types) for log diagnostics. Values are never included, so lead PII cannot
+ * leak into application logs.
+ */
+function describeToolArgShape(raw: unknown): string {
+  const text = typeof raw === 'string' ? raw : '';
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    return 'unparseable';
+  }
+  const shape = (value: unknown): string => {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return 'array';
+    if (typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>)
+        .slice(0, 12)
+        .map(([key, nested]) => `${key}:${shape(nested)}`);
+      return `object{${entries.join(',')}}`;
+    }
+    return typeof value;
+  };
+  return shape(parsed);
 }
 
 function replySubject(subject?: string | null) {

@@ -40,6 +40,7 @@ import { LimitsService } from '../limits/limits.service';
 import { Tenant } from '../tenants/tenant.entity';
 import { assertLeadAcceptance } from '../leads/lead-acceptance';
 import { TestRun } from '../testing/test-run.entity';
+import { AiRun } from '../ai/ai-run.entity';
 
 export type TwilioInboundBody = Record<string, unknown> & {
   From?: string;
@@ -117,6 +118,9 @@ export class WebhooksService {
     private readonly emailIdentities?: Repository<TenantEmailIdentity>,
     @Optional()
     private readonly limits?: LimitsService,
+    @Optional()
+    @InjectRepository(AiRun)
+    private readonly aiRuns?: Repository<AiRun>,
   ) {}
 
   async handleTwilioStatus(
@@ -180,9 +184,21 @@ export class WebhooksService {
       if (next.status === 'canceled') message.canceledAt = message.canceledAt || now;
       await this.messagesRepo.save(message);
       if (next.status === 'failed' || next.status === 'delivered') {
+        // P1 FIX: Record inbound-triggered SMS reply delivery from the
+        // Twilio status path when SMS applies — SendGrid cannot supply this
+        // channel's evidence. The status callback is signature-verified
+        // above, so `delivered` is authenticated delivery evidence. An AI
+        // reply additionally requires the linked run to be an
+        // inbound-triggered reply with full ownership (see
+        // isInboundTriggeredAiReply).
+        const isInboundReply =
+          next.status === 'delivered'
+            ? await this.isInboundTriggeredAiReply(message)
+            : false;
         await this.recordReadinessEvidenceSafely(message.lead.tenantId, {
           ...(next.status === 'failed' ? { providerRejection: true } : {}),
           ...(next.status === 'delivered' ? { outboundDelivered: true } : {}),
+          ...(isInboundReply ? { inboundSmsAiReplyDelivered: true } : {}),
           ...(message.lead.testRunId
             ? { testRunId: message.lead.testRunId }
             : {}),
@@ -640,24 +656,29 @@ export class WebhooksService {
           },
         );
       } else if (result.message?.lead?.testRunId) {
-        // P1 FIX: Distinguish AI reply delivery from initial test outbound.
-        // An AI-generated message (has aiRunId) delivered for a test lead
-        // indicates the inbound-triggered AI reply was delivered.
-        const isAiReply = Boolean((result.message as any)?.aiRunId);
-        const channel = (result.message as any)?.channel || 'email';
-        await this.recordReadinessEvidenceSafely(
-          result.message.lead.tenantId,
-          {
-            outboundDelivered: true,
-            testRunId: result.message.lead.testRunId,
-            ...(isAiReply && channel === 'email'
-              ? { inboundEmailAiReplyDelivered: true }
-              : {}),
-            ...(isAiReply && channel === 'sms'
-              ? { inboundSmsAiReplyDelivered: true }
-              : {}),
-          },
-        );
+        // P1 FIX: Only an authenticated `delivered` event for the correct
+        // outbound reply records delivery evidence. processed/deferred and
+        // other non-delivery events never count. An AI reply additionally
+        // requires the linked run to be an inbound-triggered reply with full
+        // tenant/lead/channel/run ownership — aiRunId alone is not enough to
+        // distinguish first outreach from an inbound-triggered reply.
+        // Channel-specific note: SendGrid events only ever prove email
+        // delivery; SMS reply evidence comes from the Twilio status path.
+        if (result.deliveryEvent) {
+          const isInboundReply =
+            await this.isInboundTriggeredAiReply(result.message);
+          const channel = (result.message as any)?.channel || 'email';
+          await this.recordReadinessEvidenceSafely(
+            result.message.lead.tenantId,
+            {
+              outboundDelivered: true,
+              testRunId: result.message.lead.testRunId,
+              ...(isInboundReply && channel === 'email'
+                ? { inboundEmailAiReplyDelivered: true }
+                : {}),
+            },
+          );
+        }
       }
 
       if (result.deliveryFailed && result.message?.lead && this.operations) {
@@ -770,7 +791,7 @@ export class WebhooksService {
         return {
           status: 'duplicate' as const,
           eventId: existing.id,
-          deliveryEvent: isSendGridDeliveryEvent(eventType),
+          deliveryEvent: isSendGridDeliveredEvent(eventType),
         };
       }
       const messages = manager.getRepository(Message);
@@ -835,7 +856,7 @@ export class WebhooksService {
         return {
           status: 'ignored' as const,
           eventId: savedEvent.id,
-          deliveryEvent: isSendGridDeliveryEvent(eventType),
+          deliveryEvent: isSendGridDeliveredEvent(eventType),
         };
       }
 
@@ -885,7 +906,7 @@ export class WebhooksService {
         deliveryFailed,
         optOut,
         permanentSuppression,
-        deliveryEvent: isSendGridDeliveryEvent(eventType),
+        deliveryEvent: isSendGridDeliveredEvent(eventType),
       };
     });
   }
@@ -1555,6 +1576,41 @@ export class WebhooksService {
     }
   }
 
+  /**
+   * P1 FIX: Verify that a message carrying an aiRunId is genuinely the
+   * reply of an inbound-triggered AI run — not first outreach and not a
+   * run belonging to another tenant, lead, or channel. Checks the linked
+   * run's triggerType and triggeringMessageId plus tenant/lead/channel
+   * ownership, and confirms the triggering message is a real inbound
+   * message for this lead.
+   */
+  private async isInboundTriggeredAiReply(
+    message: Message & { lead?: Lead | null },
+  ): Promise<boolean> {
+    const aiRunId = (message as any)?.aiRunId;
+    if (!aiRunId || !this.aiRuns || !this.messagesRepo) return false;
+    const run = await this.aiRuns.findOne({ where: { id: String(aiRunId) } });
+    if (!run) return false;
+    if (run.triggerType !== 'inbound') return false;
+    if (!run.triggeringMessageId) return false;
+    if (run.tenantId !== message.lead?.tenantId) return false;
+    if (run.leadId !== message.leadId) return false;
+    const runChannel = String(
+      (run.promptMetadata as any)?.channel || '',
+    ).toLowerCase();
+    if (runChannel && runChannel !== String(message.channel).toLowerCase()) {
+      return false;
+    }
+    const trigger = await this.messagesRepo.findOne({
+      where: {
+        id: run.triggeringMessageId,
+        leadId: message.leadId,
+        direction: 'inbound',
+      },
+    });
+    return !!trigger;
+  }
+
   private async recordReadinessEvidenceSafely(
     tenantId: string,
     evidence: {
@@ -1718,15 +1774,13 @@ export function classifySendGridDisposition(
   return 'none';
 }
 
-function isSendGridDeliveryEvent(eventType: string) {
-  return [
-    'processed',
-    'deferred',
-    'delivered',
-    'bounce',
-    'dropped',
-    'blocked',
-  ].includes(eventType);
+/**
+ * P1 FIX: Only the authenticated `delivered` event counts as delivery
+ * evidence. `processed`/`deferred` are transport acknowledgements and other
+ * non-delivery events must never record delivered evidence.
+ */
+function isSendGridDeliveredEvent(eventType: string) {
+  return eventType === 'delivered';
 }
 
 function validUuid(value: unknown) {

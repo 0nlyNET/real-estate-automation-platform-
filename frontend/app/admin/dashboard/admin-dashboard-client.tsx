@@ -1126,6 +1126,38 @@ export function AdminDashboardClient({
     }
   }
 
+  async function abortTesting() {
+    if (!selectedTenant || !isOwner || testingBusy) return
+    setTestingBusy(true)
+    try {
+      const diagnostics = await apiFetch<{ testRunId?: string | null }>(
+        `/admin/tenants/${selectedTenant.id}/testing/diagnostics`,
+      )
+      const runId = diagnostics?.testRunId
+      if (!runId) {
+        setNotice("No active controlled test run found for this workspace.")
+        return
+      }
+      const result = await apiFetch<{ status?: string; alreadyTerminal?: boolean }>(
+        `/admin/tenants/${selectedTenant.id}/testing/runs/${runId}/abort`,
+        {
+          method: "POST",
+          body: { reason: "aborted_by_operator_from_admin_dashboard" },
+        },
+      )
+      await refreshReadiness()
+      setNotice(
+        result?.alreadyTerminal
+          ? "The controlled test run was already finished."
+          : "The active controlled test run was aborted. You can start a fresh controlled test.",
+      )
+    } catch (cause) {
+      setError(messageFor(cause, "The controlled test could not be aborted"))
+    } finally {
+      setTestingBusy(false)
+    }
+  }
+
   async function saveUsagePolicy() {
     if (!selectedTenant || !usagePolicy) return
     try {
@@ -2246,6 +2278,15 @@ export function AdminDashboardClient({
                       >
                         {selectedTenant.lifecycleStatus === "TESTING" ? "Testing mode active" : "Start controlled testing"}
                       </Button>
+                      {selectedTenant.lifecycleStatus === "TESTING" ? (
+                        <Button
+                          variant="destructive"
+                          disabled={testingBusy}
+                          onClick={() => void abortTesting()}
+                        >
+                          Abort active test
+                        </Button>
+                      ) : null}
                     </div>
                     {!readiness?.testingReady && readiness?.testingBlockers?.length ? (
                       <p className="text-xs text-muted-foreground">

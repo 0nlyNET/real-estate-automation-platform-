@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,6 +18,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { AiRun } from './ai-run.entity';
 import { AI_TOOL_NAMES, AiToolName, AiToolRequest } from './ai.types';
+import { QUALIFICATION_FIELDS } from './ai-tool.contracts';
 import { BrokerageKnowledge } from './brokerage-knowledge.entity';
 import { ConversationAiState } from './conversation-ai-state.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
@@ -42,15 +44,17 @@ export type AiToolResult = {
   reason?: string;
 };
 
-const QUALIFICATION_FIELDS = new Set([
-  'intent',
-  'location',
-  'timeline',
-  'budget',
-  'preapproval',
-  'preferredContact',
-  'preferredTimes',
-]);
+function describeArgShape(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  if (typeof value === 'object') {
+    return `object{${Object.keys(value as Record<string, unknown>)
+      .slice(0, 12)
+      .map((key) => `${key}:${describeArgShape((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`;
+  }
+  return typeof value;
+}
 
 function parseArguments(request: AiToolRequest): Record<string, unknown> {
   let parsed: unknown;
@@ -82,6 +86,8 @@ function objectValue(value: unknown) {
 
 @Injectable()
 export class AiToolService {
+  private readonly logger = new Logger(AiToolService.name);
+
   constructor(
     @InjectRepository(Lead)
     private readonly leads: Repository<Lead>,
@@ -127,14 +133,29 @@ export class AiToolService {
       'notify_assigned_agent',
     ].includes(request.name);
     try {
-      const args = parseArguments(request);
+      const rawArgs = parseArguments(request);
+      const { args, repaired } = this.normalizeArguments(request.name, rawArgs);
+      if (repaired) {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'AI_TOOL_ARGS_REPAIRED',
+            runId: context.run.id,
+            leadId: context.run.leadId,
+            toolName: request.name,
+            repairedField: 'qualification',
+            receivedShape: describeArgShape(
+              (rawArgs as Record<string, unknown>).qualification,
+            ),
+          }),
+        );
+      }
       await this.validateContext(context, safetyTool);
-      const output = await this.runTool(context, request.name, args, idempotencyKey);
+      const toolOutput = await this.runTool(context, request.name, args, idempotencyKey);
       return {
         name: request.name,
         status: 'executed',
         idempotencyKey,
-        output,
+        output: repaired ? { ...toolOutput, argsRepaired: true } : toolOutput,
       };
     } catch (error: any) {
       return {
@@ -149,6 +170,36 @@ export class AiToolService {
         ).slice(0, 500),
       };
     }
+  }
+
+  /**
+   * Bounded format repair at the provider boundary. The model is told that
+   * tool arguments are "a JSON object encoded as text", so it sometimes
+   * double-encodes a nested object field as a JSON string. When that happens
+   * for update_lead_qualification's `qualification` field, parse it exactly
+   * once. The repaired payload still goes through full validation, so invalid
+   * or unsafe output still fails visibly. Nothing else is repaired: flat or
+   * otherwise malformed arguments stay rejected, and the idempotency key is
+   * unchanged so no action can be replayed by the repair.
+   */
+  private normalizeArguments(
+    name: AiToolName,
+    args: Record<string, unknown>,
+  ): { args: Record<string, unknown>; repaired: boolean } {
+    if (name === 'update_lead_qualification') {
+      const raw = args.qualification;
+      if (typeof raw === 'string') {
+        try {
+          const parsed: unknown = JSON.parse(raw);
+          if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
+            return { args: { ...args, qualification: parsed }, repaired: true };
+          }
+        } catch {
+          // Fall through: the strict validator rejects it below.
+        }
+      }
+    }
+    return { args, repaired: false };
   }
 
   private async validateContext(context: AiToolContext, safetyTool: boolean) {

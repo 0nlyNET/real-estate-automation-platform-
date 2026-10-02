@@ -16,6 +16,7 @@ import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entit
 import { TestRun } from '../testing/test-run.entity';
 import { CalendarConnection } from '../calendar/calendar-connection.entity';
 import { TenantWebhookSubscription } from '../crm-events/tenant-webhook-subscription.entity';
+import { WorkspaceAiSettings } from '../ai/workspace-ai-settings.entity';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { TenantWebhookSubscription } from '../crm-events/tenant-webhook-subscrip
       TestRun,
       CalendarConnection,
       TenantWebhookSubscription,
+      WorkspaceAiSettings,
     ]),
     OperationsModule,
     CommonModule,

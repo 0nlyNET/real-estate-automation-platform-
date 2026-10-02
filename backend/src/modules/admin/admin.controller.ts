@@ -227,14 +227,33 @@ export class AdminController {
 
   @Post('tenants/:tenantId/testing/runs/:runId/abort')
   @UseGuards(PlatformAdminGuard)
-  abortControlledTesting(
+  async abortControlledTesting(
     @Param('tenantId') tenantId: string,
     @Param('runId') runId: string,
     @Body() body: { reason?: string },
+    @Req() req: any,
   ) {
     if (!this.testing) throw new BadRequestException('Testing service unavailable');
     const reason = String(body?.reason || 'aborted_by_operator').slice(0, 500);
-    return this.testing.abortTestRun(tenantId, runId, reason);
+    const result = await this.testing.abortTestRun(tenantId, runId, reason);
+    await this.audit.record({
+      tenantId,
+      actorId: String(req.user?.sub || ''),
+      actorEmail: String(req.user?.email || ''),
+      action: 'testing.run_aborted',
+      resourceType: 'test_run',
+      resourceId: runId,
+      method: 'POST',
+      path: `/admin/tenants/${tenantId}/testing/runs/${runId}/abort`,
+      statusCode: 200,
+      metadata: {
+        reason,
+        status: result.status,
+        canceledMessages: result.canceledMessages.length,
+        alreadyTerminal: result.alreadyTerminal,
+      },
+    });
+    return result;
   }
 
   @Post('tenants/:tenantId/pause')
