@@ -978,23 +978,27 @@ export class AiConversationService
         actions: result.actions,
       };
       if (output.classification === 'handoff' || output.escalationReason) {
-        await this.blockRun(
-          run,
-          'MODEL_REQUESTED_HANDOFF',
-          output.escalationReason ||
-            'The AI determined that a human should handle this conversation.',
-          'high',
-          preflight,
+        await timed('blockrun_handoff', () =>
+          this.blockRun(
+            run,
+            'MODEL_REQUESTED_HANDOFF',
+            output.escalationReason ||
+              'The AI determined that a human should handle this conversation.',
+            'high',
+            preflight,
+          ),
         );
         return;
       }
       if (output.confidence < preflight.settings.minimumConfidenceThreshold) {
-        await this.blockRun(
-          run,
-          'LOW_CONFIDENCE',
-          'The AI response did not meet the workspace confidence threshold.',
-          'high',
-          preflight,
+        await timed('blockrun_low_confidence', () =>
+          this.blockRun(
+            run,
+            'LOW_CONFIDENCE',
+            'The AI response did not meet the workspace confidence threshold.',
+            'high',
+            preflight,
+          ),
         );
         return;
       }
@@ -1155,13 +1159,15 @@ export class AiConversationService
       const sanitized = sanitizeOperationalText(
         error?.response?.message || error?.message || 'AI provider failed',
       ).slice(0, 1_000);
-      await this.blockRun(
-        run,
-        String(error?.response?.code || error?.code || 'AI_PROVIDER_FAILED'),
-        sanitized,
-        'high',
-        preflight,
-        true,
+      await timed('blockrun_catch', () =>
+        this.blockRun(
+          run,
+          String(error?.response?.code || error?.code || 'AI_PROVIDER_FAILED'),
+          sanitized,
+          'high',
+          preflight,
+          true,
+        ),
       );
     }
   }
