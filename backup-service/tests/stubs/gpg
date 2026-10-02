@@ -1,0 +1,16 @@
+#!/bin/sh
+# Test stub for `gpg` (decrypt -d -o OUT IN): copies IN to OUT.
+set -eu
+[ -n "${STUB_LOG:-}" ] || { echo "stub gpg: STUB_LOG not set" >&2; exit 99; }
+echo "GPG ARGS: $*" >> "$STUB_LOG"
+out=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  prev="$a"
+done
+in=""
+for a in "$@"; do in="$a"; done
+[ -n "$out" ] && [ -n "$in" ] && [ "$out" != "$in" ] || { echo "stub gpg: bad args" >&2; exit 3; }
+cp "$in" "$out"
+exit 0
