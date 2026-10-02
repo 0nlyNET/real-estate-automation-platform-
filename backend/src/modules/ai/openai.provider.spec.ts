@@ -1,6 +1,6 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { BrokerageKnowledge } from './brokerage-knowledge.entity';
-import { OpenAiProvider } from './openai.provider';
+import { OpenAiProvider, validateOutput } from './openai.provider';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
 
 function input() {
@@ -147,5 +147,105 @@ describe('OpenAI provider boundary', () => {
     expect(
       JSON.stringify((caught as ServiceUnavailableException).getResponse()),
     ).not.toContain('sk-should-not-leak');
+  });
+});
+
+describe('validateOutput (OUTPUT_SCHEMA agreement)', () => {
+  function valid() {
+    return {
+      reply: 'Hello!',
+      confidence: 0.9,
+      classification: 'allowed',
+      escalationReason: null,
+      summary: 'Buyer inquiry.',
+      recommendedNextAction: 'Follow up.',
+      leadTemperature: 'warm',
+      actions: [],
+    };
+  }
+
+  it('accepts a valid output', () => {
+    expect(validateOutput(valid()).classification).toBe('allowed');
+  });
+
+  it('rejects NaN and non-finite confidence', () => {
+    expect(() => validateOutput({ ...valid(), confidence: NaN })).toThrow(
+      /confidence/,
+    );
+    expect(() => validateOutput({ ...valid(), confidence: Infinity })).toThrow(
+      /confidence/,
+    );
+  });
+
+  it('rejects out-of-range confidence', () => {
+    expect(() => validateOutput({ ...valid(), confidence: 1.5 })).toThrow(
+      /confidence/,
+    );
+  });
+
+  it('rejects a non-string, non-null escalationReason', () => {
+    expect(() =>
+      validateOutput({ ...valid(), escalationReason: 42 }),
+    ).toThrow(/escalationReason/);
+  });
+
+  it('rejects missing required fields', () => {
+    const { reply, ...rest } = valid();
+    expect(() => validateOutput(rest)).toThrow(/missing required field/);
+  });
+
+  it('rejects unexpected extra properties', () => {
+    expect(() =>
+      validateOutput({ ...valid(), injected: 'x' }),
+    ).toThrow(/unexpected field/);
+  });
+
+  it('rejects more than 10 actions', () => {
+    const actions = Array.from({ length: 11 }, () => ({
+      name: 'update_conversation_summary',
+      arguments: JSON.stringify({ summary: 's' }),
+    }));
+    expect(() => validateOutput({ ...valid(), actions })).toThrow(/10-action/);
+  });
+
+  it('rejects over-length summary and action arguments', () => {
+    expect(() =>
+      validateOutput({ ...valid(), summary: 'x'.repeat(2001) }),
+    ).toThrow(/summary/);
+    expect(() =>
+      validateOutput({
+        ...valid(),
+        actions: [
+          {
+            name: 'update_conversation_summary',
+            arguments: 'x'.repeat(4001),
+          },
+        ],
+      }),
+    ).toThrow(/arguments/);
+  });
+
+  it('rejects actions with unexpected fields', () => {
+    expect(() =>
+      validateOutput({
+        ...valid(),
+        actions: [
+          {
+            name: 'update_conversation_summary',
+            arguments: '{}',
+            extra: 1,
+          },
+        ],
+      }),
+    ).toThrow(/unexpected fields/);
+  });
+
+  it('rejects invalid classification and temperature enums', () => {
+    expect(() =>
+      validateOutput({ ...valid(), classification: 'escalate' }),
+    ).toThrow(/classification/);
+    expect(() =>
+      validateOutput({ ...valid(), leadTemperature: 'boiling' }),
+    ).toThrow(/leadTemperature/);
   });
 });

@@ -12,13 +12,13 @@ const OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    reply: { type: ['string', 'null'] },
+    reply: { type: ['string', 'null'], maxLength: 10_000 },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
     classification: {
       type: 'string',
       enum: ['allowed', 'handoff', 'no_reply'],
     },
-    escalationReason: { type: ['string', 'null'] },
+    escalationReason: { type: ['string', 'null'], maxLength: 1_000 },
     summary: { type: 'string', maxLength: 2_000 },
     recommendedNextAction: { type: 'string', maxLength: 500 },
     leadTemperature: {
@@ -132,30 +132,91 @@ function extractOutputText(payload: any): string | null {
   return null;
 }
 
-function validateOutput(value: unknown): AiProviderOutput {
+export function validateOutput(value: unknown): AiProviderOutput {
   const row = value as Partial<AiProviderOutput>;
+  const invalid = (detail: string): Error =>
+    new Error(`AI provider returned an invalid structured response: ${detail}`);
+  if (!row || typeof row !== 'object' || Array.isArray(row)) {
+    throw invalid('not an object');
+  }
+  // additionalProperties: false — reject unknown top-level fields.
+  const allowedKeys = new Set([
+    'reply',
+    'confidence',
+    'classification',
+    'escalationReason',
+    'summary',
+    'recommendedNextAction',
+    'leadTemperature',
+    'actions',
+  ]);
+  for (const key of Object.keys(row)) {
+    if (!allowedKeys.has(key)) throw invalid(`unexpected field "${key}"`);
+  }
+  // required fields must be present (reply/escalationReason may be null).
+  for (const key of allowedKeys) {
+    if (!(key in row)) throw invalid(`missing required field "${key}"`);
+  }
+  if (!['allowed', 'handoff', 'no_reply'].includes(String(row.classification))) {
+    throw invalid('classification must be allowed|handoff|no_reply');
+  }
   if (
-    !row ||
-    !['allowed', 'handoff', 'no_reply'].includes(String(row.classification)) ||
     typeof row.confidence !== 'number' ||
+    !Number.isFinite(row.confidence) ||
     row.confidence < 0 ||
-    row.confidence > 1 ||
-    !Array.isArray(row.actions) ||
-    typeof row.summary !== 'string' ||
-    typeof row.recommendedNextAction !== 'string' ||
-    !['hot', 'warm', 'cold', 'unchanged'].includes(String(row.leadTemperature))
+    row.confidence > 1
   ) {
-    throw new Error('AI provider returned an invalid structured response');
+    throw invalid('confidence must be a finite number in [0, 1]');
   }
   if (row.reply !== null && typeof row.reply !== 'string') {
-    throw new Error('AI provider returned an invalid reply');
+    throw invalid('reply must be a string or null');
+  }
+  if (typeof row.reply === 'string' && row.reply.length > 10_000) {
+    throw invalid('reply exceeds maximum length');
+  }
+  if (row.escalationReason !== null && typeof row.escalationReason !== 'string') {
+    throw invalid('escalationReason must be a string or null');
+  }
+  if (
+    typeof row.escalationReason === 'string' &&
+    row.escalationReason.length > 1_000
+  ) {
+    throw invalid('escalationReason exceeds maximum length');
+  }
+  if (typeof row.summary !== 'string' || row.summary.length > 2_000) {
+    throw invalid('summary must be a string of at most 2000 characters');
+  }
+  if (
+    typeof row.recommendedNextAction !== 'string' ||
+    row.recommendedNextAction.length > 500
+  ) {
+    throw invalid(
+      'recommendedNextAction must be a string of at most 500 characters',
+    );
+  }
+  if (!['hot', 'warm', 'cold', 'unchanged'].includes(String(row.leadTemperature))) {
+    throw invalid('leadTemperature must be hot|warm|cold|unchanged');
+  }
+  if (!Array.isArray(row.actions)) {
+    throw invalid('actions must be an array');
+  }
+  if (row.actions.length > 10) {
+    throw invalid('actions exceeds the 10-action limit');
   }
   for (const action of row.actions) {
     if (
-      !AI_TOOL_NAMES.includes(action?.name as any) ||
-      typeof action?.arguments !== 'string'
+      !action ||
+      typeof action !== 'object' ||
+      !AI_TOOL_NAMES.includes((action as any)?.name) ||
+      typeof (action as any)?.arguments !== 'string'
     ) {
-      throw new Error('AI provider requested an invalid tool');
+      throw invalid('action must have a valid name and string arguments');
+    }
+    if (Object.keys(action as object).some((k) => k !== 'name' && k !== 'arguments')) {
+      throw invalid('action has unexpected fields');
+    }
+    if (((action as any).arguments as string).length > 4_000) {
+      throw invalid('action arguments exceed maximum length');
     }
   }
   return row as AiProviderOutput;
