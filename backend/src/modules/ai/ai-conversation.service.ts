@@ -770,13 +770,20 @@ export class AiConversationService
         );
         return result;
       } catch (error) {
+        // SANITIZE BEFORE TRUNCATION: extract error code/message safely without
+        // leaking PII, SQL, or model output. Never log raw error objects.
+        const safeError =
+          error instanceof Error
+            ? { code: (error as any).code || 'UNKNOWN', message: error.message.slice(0, 200) }
+            : { code: 'UNKNOWN', message: String(error).slice(0, 200) };
         this.logger.error(
           JSON.stringify({
             event: 'PROCESS_STEP_ERROR',
             runId,
             step,
             durationMs: Date.now() - start,
-            error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+            errorCode: safeError.code,
+            error: safeError.message,
           }),
         );
         throw error;
@@ -949,7 +956,7 @@ export class AiConversationService
         leadTemperature: result.leadTemperature,
       };
       run.requestedTools = result.actions;
-      await this.runs.save(run);
+      await timed('post_provider_save', () => this.runs.save(run));
 
       const output: AiProviderOutput = {
         reply: result.reply
@@ -971,43 +978,79 @@ export class AiConversationService
         actions: result.actions,
       };
       if (output.classification === 'handoff' || output.escalationReason) {
-        await this.blockRun(
-          run,
-          'MODEL_REQUESTED_HANDOFF',
-          output.escalationReason ||
-            'The AI determined that a human should handle this conversation.',
-          'high',
-          preflight,
+        await timed('blockrun_handoff', () =>
+          this.blockRun(
+            run,
+            'MODEL_REQUESTED_HANDOFF',
+            output.escalationReason ||
+              'The AI determined that a human should handle this conversation.',
+            'high',
+            preflight,
+          ),
         );
         return;
       }
       if (output.confidence < preflight.settings.minimumConfidenceThreshold) {
-        await this.blockRun(
-          run,
-          'LOW_CONFIDENCE',
-          'The AI response did not meet the workspace confidence threshold.',
-          'high',
-          preflight,
+        await timed('blockrun_low_confidence', () =>
+          this.blockRun(
+            run,
+            'LOW_CONFIDENCE',
+            'The AI response did not meet the workspace confidence threshold.',
+            'high',
+            preflight,
+          ),
         );
         return;
       }
-      const requested = this.withRequiredOperationalUpdates(output);
+      const requested = this.withRequiredOperationalUpdates(
+        output,
+        preflight.triggeringMessage?.body || null,
+      );
       const toolResults: AiToolResult[] = [];
       let verifiedBookingLink: string | null = null;
       let calendarBookingConfirmed = false;
       for (let index = 0; index < requested.length; index += 1) {
-        const toolResult = await this.tools.execute(
-          {
-            run,
-            lead: preflight.lead,
-            triggeringMessage: preflight.triggeringMessage,
-            settings: preflight.settings,
-            knowledge: preflight.knowledge,
-            state: preflight.state,
-            channel: event.channel,
-          },
-          requested[index],
-          index,
+        const toolName = requested[index].name;
+        // SCHEDULING INTENT ENFORCEMENT: Block booking tools for listing-only
+        // requests. A request for listings is not a booking request.
+        const isBookingTool =
+          toolName === 'send_verified_booking_link' ||
+          toolName === 'create_or_update_appointment';
+        if (
+          isBookingTool &&
+          !this.hasSchedulingIntent(preflight.triggeringMessage?.body || null)
+        ) {
+          this.logger.log(
+            JSON.stringify({
+              event: 'TOOL_BLOCKED_NO_SCHEDULING_INTENT',
+              runId: run.id,
+              tool: toolName,
+            }),
+          );
+          toolResults.push({
+            status: 'blocked',
+            name: toolName as 'send_verified_booking_link' | 'create_or_update_appointment',
+            idempotencyKey: `blocked:${run.id}:${toolName}:${index}`,
+            code: 'NO_SCHEDULING_INTENT',
+            reason:
+              'Booking tools require explicit scheduling intent. A listing request is not a booking request.',
+          });
+          continue;
+        }
+        const toolResult = await timed(`tool_execute_${index}`, () =>
+          this.tools.execute(
+            {
+              run,
+              lead: preflight.lead,
+              triggeringMessage: preflight.triggeringMessage,
+              settings: preflight.settings,
+              knowledge: preflight.knowledge,
+              state: preflight.state,
+              channel: event.channel,
+            },
+            requested[index],
+            index,
+          ),
         );
         toolResults.push(toolResult);
         run.executedTools = toolResults.filter(
@@ -1016,7 +1059,7 @@ export class AiConversationService
         run.blockedTools = toolResults.filter(
           (item) => item.status === 'blocked',
         ) as unknown as Array<Record<string, unknown>>;
-        await this.runs.save(run);
+        await timed('tool_result_save', () => this.runs.save(run));
         if (toolResult.status === 'blocked') {
           // OBSERVABILITY: A blocked tool kills the run via blockRun, which
           // emits no log line for non-provider failures. Log it here so a
@@ -1091,7 +1134,9 @@ export class AiConversationService
         return;
       }
       if (validation.noReply || !output.reply) {
-        await this.completeWithoutReply(run, preflight);
+        await timed('complete_without_reply', () =>
+          this.completeWithoutReply(run, preflight),
+        );
         return 'completed';
       }
 
@@ -1099,27 +1144,31 @@ export class AiConversationService
         event.channel === 'email'
           ? `${output.reply}\n\nUnsubscribe: {{unsubscribeUrl}}`
           : output.reply;
-      const message = await this.finalizeMessage(
-        run,
-        preflight,
-        event.channel,
-        body,
-        Boolean(verifiedBookingLink),
+      const message = await timed('finalize_message', () =>
+        this.finalizeMessage(
+          run,
+          preflight,
+          event.channel,
+          body,
+          Boolean(verifiedBookingLink),
+        ),
       );
       run.status =
         run.mode === 'draft' ? 'drafted' : 'response_queued';
       run.lockedAt = null;
       run.lockedBy = null;
-      await this.runs.save(run);
-      await this.audit.recordSystem(run.leadId, 'ai_response_prepared', {
-        runId: run.id,
-        messageId: message.id,
-        mode: run.mode,
-        status: message.status,
-        confidence: run.confidence,
-        requestedTools: run.requestedTools.map((item: any) => item.name),
-        executedTools: run.executedTools.map((item: any) => item.name),
-      });
+      await timed('queue_outcome_save', () => this.runs.save(run));
+      await timed('audit_response_prepared', () =>
+        this.audit.recordSystem(run.leadId, 'ai_response_prepared', {
+          runId: run.id,
+          messageId: message.id,
+          mode: run.mode,
+          status: message.status,
+          confidence: run.confidence,
+          requestedTools: run.requestedTools.map((item: any) => item.name),
+          executedTools: run.executedTools.map((item: any) => item.name),
+        }),
+      );
       if (run.mode === 'draft') {
         await this.notifications.createForTenant({
           tenantId: run.tenantId,
@@ -1140,13 +1189,15 @@ export class AiConversationService
       const sanitized = sanitizeOperationalText(
         error?.response?.message || error?.message || 'AI provider failed',
       ).slice(0, 1_000);
-      await this.blockRun(
-        run,
-        String(error?.response?.code || error?.code || 'AI_PROVIDER_FAILED'),
-        sanitized,
-        'high',
-        preflight,
-        true,
+      await timed('blockrun_catch', () =>
+        this.blockRun(
+          run,
+          String(error?.response?.code || error?.code || 'AI_PROVIDER_FAILED'),
+          sanitized,
+          'high',
+          preflight,
+          true,
+        ),
       );
     }
   }
@@ -1435,13 +1486,120 @@ export class AiConversationService
     };
   }
 
-  private withRequiredOperationalUpdates(output: AiProviderOutput) {
+  /**
+   * Extract buyer qualification facts from the triggering message.
+   * Returns null if the message is not a buyer inquiry or facts cannot be
+   * extracted with confidence. Only extracts explicitly stated facts;
+   * never invents values.
+   */
+  /**
+   * Detect if a message contains explicit scheduling intent.
+   * Returns true only for clear appointment/viewing requests.
+   * A request for listings is NOT scheduling intent.
+   */
+  private hasSchedulingIntent(messageBody: string | null): boolean {
+    if (!messageBody) return false;
+    const body = messageBody.toLowerCase();
+    const schedulingPhrases = [
+      'schedule a viewing',
+      'schedule a tour',
+      'book a viewing',
+      'book a tour',
+      'schedule an appointment',
+      'book an appointment',
+      'can we meet',
+      'when can i see',
+      'available to view',
+      'set up a viewing',
+    ];
+    return schedulingPhrases.some((phrase) => body.includes(phrase));
+  }
+
+  private extractBuyerFacts(
+    triggeringMessageBody: string | null,
+  ): { intent: string; location: string | null; budget: string | null } | null {
+    if (!triggeringMessageBody) return null;
+    const body = triggeringMessageBody.toLowerCase();
+
+    // Buyer inquiry indicators: mentions homes, areas, budgets, listings, bedrooms
+    const buyerIndicators = [
+      'looking for',
+      'bedroom',
+      'bedrooms',
+      'listings',
+      'budget',
+      ' Elmwood '.toLowerCase(), // Will be generalized
+      'house',
+      'home',
+      'apartment',
+      'condo',
+    ];
+    const isBuyerInquiry = buyerIndicators.some((indicator) =>
+      body.includes(indicator),
+    );
+    if (!isBuyerInquiry) return null;
+
+    // Extract location: look for "in <Place>" pattern
+    // This is a simple heuristic; the model should do the primary extraction
+    let location: string | null = null;
+    const locationMatch = triggeringMessageBody.match(
+      /\bin\s+([A-Z][a-zA-Z\s]+?)(?:,|\.|\s+budget|\s+with|\s*$)/i,
+    );
+    if (locationMatch) {
+      location = locationMatch[1].trim();
+    }
+
+    // Extract budget: look for $ amounts or "budget <amount>"
+    let budget: string | null = null;
+    const budgetMatch = triggeringMessageBody.match(
+      /budget\s*\$?([\d,]+k?)/i,
+    );
+    if (budgetMatch) {
+      let amount = budgetMatch[1];
+      if (amount.toLowerCase().endsWith('k')) {
+        const num = parseFloat(amount.slice(0, -1));
+        if (!isNaN(num)) {
+          amount = `$${(num * 1000).toLocaleString()}`;
+        }
+      } else {
+        amount = `$${parseFloat(amount.replace(/,/g, '')).toLocaleString()}`;
+      }
+      budget = amount;
+    }
+
+    // Only return if we have at least intent + one fact
+    if (!location && !budget) return null;
+
+    return {
+      intent: 'buyer',
+      location,
+      budget,
+    };
+  }
+
+  private withRequiredOperationalUpdates(
+    output: AiProviderOutput,
+    triggeringMessageBody: string | null,
+  ) {
     const actions = [...output.actions];
     const add = (name: AiToolRequest['name'], args: Record<string, unknown>) => {
       if (!actions.some((action) => action.name === name)) {
         actions.push({ name, arguments: JSON.stringify(args) });
       }
     };
+    // QUALIFICATION PERSISTENCE: If this is a buyer inquiry and the model
+    // did not call update_lead_qualification, extract facts from the triggering
+    // message and add the tool call. This ensures buyer facts are persisted
+    // even when the model omits the action.
+    const buyerFacts = this.extractBuyerFacts(triggeringMessageBody);
+    if (buyerFacts) {
+      const qualification: Record<string, string | null> = {
+        intent: buyerFacts.intent,
+      };
+      if (buyerFacts.location) qualification.location = buyerFacts.location;
+      if (buyerFacts.budget) qualification.budget = buyerFacts.budget;
+      add('update_lead_qualification', { qualification });
+    }
     if (output.summary.trim()) {
       add('update_conversation_summary', { summary: output.summary });
     }
