@@ -78,6 +78,14 @@ update_lead_qualification requires its facts nested under a top-level
 "qualification" object; flat keys are rejected). Study each tool's "example"
 before composing arguments. Never send fields outside the schema, and never
 invent values the lead did not state.
+When the triggering message is a buyer inquiry (a question about homes, areas,
+budgets, or listings), ALWAYS call update_lead_qualification FIRST to save the
+structured facts (intent, location, budget, etc.) extracted from the message,
+then call update_conversation_summary to preserve details like bedroom counts.
+Only after saving qualification should you generate the reply. Do NOT call
+booking tools (send_verified_booking_link, create_or_update_appointment) for a
+buyer inquiry unless the lead explicitly requests to schedule a viewing or
+appointment. A request for listings is not a booking request.
 The input includes "triggeringMessage": the exact lead message this run must
 answer, plus "recentMessages" and "conversationSummary" for context. Judge the
 triggering message by its own content. A lead used for controlled testing may
