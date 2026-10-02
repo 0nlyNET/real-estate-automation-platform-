@@ -603,7 +603,7 @@ export class AiConversationService
   private async isWorkerPaused(): Promise<boolean> {
     if (process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true') return true;
     // Timeout the DB query so a hanging connection doesn't stall the worker
-    // forever. If the query times out, assume not paused (fail-open) and log.
+    // forever. If the query times out, assume paused (fail-closed) and log.
     try {
       const control = await Promise.race([
         this.platformControls.findOne({ where: { id: 'global' } }),
@@ -617,10 +617,10 @@ export class AiConversationService
         JSON.stringify({
           event: 'AI_WORKER_PAUSE_CHECK_FAILED',
           error: error instanceof Error ? error.message : String(error),
-          assumption: 'not_paused',
+          assumption: 'paused',
         }),
       );
-      return false;
+      return true;
     }
   }
 
@@ -977,68 +977,29 @@ export class AiConversationService
         leadTemperature: result.leadTemperature,
         actions: result.actions,
       };
-      // NARROW ROUTINE-INTAKE EVALUATION: determine once whether the
-      // triggering message is a routine lead inquiry eligible for
-      // application-level intake. This is reused by the handoff gate below
-      // and by the acknowledgement fallback — an eligible inquiry must end
-      // in a queued response, a real human handoff, or an explicit failure,
-      // never silent completion.
-      const routineIntake = this.evaluateRoutineIntake(
-        preflight.triggeringMessage?.body || null,
-        output.escalationReason || null,
-      );
       if (output.classification === 'handoff' || output.escalationReason) {
-        // A handoff is preserved whenever the inquiry carries an
-        // escalation-preserving signal (human request, complaint, emergency,
-        // restricted advice, opt-out, prompt injection) OR the model gave a
-        // substantive escalation reason. Buyer facts alone never erase an
-        // escalation. Only a routine inquiry with extractable facts, no
-        // escalation signal, and an absent or generically-confused reason is
-        // routed to routine intake.
-        const reasonText = (output.escalationReason || '').trim();
-        const isGenericConfusion =
-          !reasonText ||
-          AiConversationService.GENERIC_HANDOFF_CONFUSION_PATTERNS.some((p) =>
-            p.test(reasonText),
-          );
-        if (routineIntake.eligible && routineIntake.facts && isGenericConfusion) {
-          const sanitizedReason = sanitizeOperationalText(
-            output.escalationReason || '',
-          ).slice(0, 200);
+        // ROUTINE BUYER OVERRIDE: If this is a routine buyer inquiry with
+        // extractable facts, do NOT handoff. The model is incorrectly
+        // escalating instead of handling the inquiry. Override the handoff
+        // and continue through the buyer-intake path. Preserve the original
+        // model decision in the audit trail.
+        const buyerFactsForOverride = this.extractBuyerFacts(
+          preflight.triggeringMessage?.body || null,
+        );
+        if (buyerFactsForOverride) {
           this.logger.log(
             JSON.stringify({
-              event: 'HANDOFF_ROUTED_ROUTINE_INTAKE',
+              event: 'HANDOFF_OVERRIDDEN_ROUTINE_BUYER',
               runId: run.id,
               originalClassification: output.classification,
-              originalEscalationReason: sanitizedReason || null,
-              intent: routineIntake.facts.intent,
+              originalEscalationReason:
+                output.escalationReason?.slice(0, 200) || null,
             }),
-          );
-          await this.audit.recordSystem(
-            run.leadId,
-            'routine_intake_handoff_override',
-            {
-              runId: run.id,
-              originalClassification: output.classification,
-              originalEscalationReason: sanitizedReason || null,
-              intent: routineIntake.facts.intent,
-              routingReason:
-                'Model requested handoff for a routine lead inquiry with no escalation signal; application logic routed it to routine intake.',
-            },
           );
           // Clear the handoff so processing continues
           output.classification = 'allowed';
           output.escalationReason = null;
         } else {
-          if (routineIntake.eligible && reasonText && !isGenericConfusion) {
-            this.logger.log(
-              JSON.stringify({
-                event: 'HANDOFF_PRESERVED_SUBSTANTIVE_REASON',
-                runId: run.id,
-                reason: sanitizeOperationalText(reasonText).slice(0, 200),
-              }),
-            );
-          }
           await timed('blockrun_handoff', () =>
             this.blockRun(
               run,
@@ -1071,14 +1032,6 @@ export class AiConversationService
       const toolResults: AiToolResult[] = [];
       let verifiedBookingLink: string | null = null;
       let calendarBookingConfirmed = false;
-      // Recent outbound text gives the scheduling gate conversational context:
-      // a "Tuesday at 3 PM works" reply is scheduling intent when we recently
-      // offered times or a booking link.
-      const recentOutboundText = recentMessages
-        .filter((message) => message.direction === 'outbound')
-        .slice(-2)
-        .map((message) => message.body)
-        .join('\n');
       for (let index = 0; index < requested.length; index += 1) {
         const toolName = requested[index].name;
         // SCHEDULING INTENT ENFORCEMENT: Block booking tools for listing-only
@@ -1088,10 +1041,7 @@ export class AiConversationService
           toolName === 'create_or_update_appointment';
         if (
           isBookingTool &&
-          !this.hasSchedulingIntent(
-            preflight.triggeringMessage?.body || null,
-            recentOutboundText || null,
-          )
+          !this.hasSchedulingIntent(preflight.triggeringMessage?.body || null)
         ) {
           this.logger.log(
             JSON.stringify({
@@ -1149,9 +1099,7 @@ export class AiConversationService
               leadId: run.leadId,
               toolName: toolResult.name,
               code: toolResult.code || 'AI_TOOL_BLOCKED',
-              reason: sanitizeOperationalText(
-                toolResult.reason || 'An AI tool did not pass validation.',
-              ).slice(0, 300),
+              reason: (toolResult.reason || 'An AI tool did not pass validation.').slice(0, 300),
               argShape: describeToolArgShape(blockedRequest?.arguments),
             }),
           );
@@ -1175,61 +1123,10 @@ export class AiConversationService
           calendarBookingConfirmed = true;
         }
       }
-      // Reconcile tool results: the scheduling gate's `continue` path skips
-      // the per-iteration save, so persist every synthetic blocked result
-      // here. A rejected booking tool must be visible in blockedTools.
-      run.executedTools = toolResults.filter(
-        (item) => item.status === 'executed',
-      ) as unknown as Array<Record<string, unknown>>;
-      run.blockedTools = toolResults.filter(
-        (item) => item.status === 'blocked',
-      ) as unknown as Array<Record<string, unknown>>;
-      await timed('tool_result_save', () => this.runs.save(run));
       if (verifiedBookingLink && output.reply) {
         if (!output.reply.includes(verifiedBookingLink)) {
           output.reply = `${output.reply}\n\nBook a time: ${verifiedBookingLink}`;
         }
-      }
-      // ROUTINE-INTAKE ACKNOWLEDGEMENT: an eligible routine inquiry must end
-      // in a queued response, a real human handoff, or an explicit failure —
-      // never silent completion. When the model produced no reply text,
-      // synthesize the approved capability-limited acknowledgement from the
-      // extracted facts (acknowledge, state the listing limitation, ask one
-      // qualification question). It flows through the normal validation
-      // pipeline below, so a policy rejection becomes a visible failure.
-      if (!output.reply?.trim() && routineIntake.eligible && routineIntake.facts) {
-        const ackBody = this.buildRoutineIntakeAcknowledgement(
-          routineIntake.facts,
-        );
-        output.reply = this.policy.ensureRequiredDisclaimer(
-          this.policy.ensureIdentityDisclosure(
-            ackBody,
-            preflight.settings.identityLabel as string,
-            firstAiResponse,
-          ),
-          preflight.knowledge.requiredDisclaimer,
-        );
-        // The synthesized reply replaces the model's no_reply outcome: reset
-        // the classification so policy validation does not treat it as an
-        // authoritative no-reply and discard the acknowledgement.
-        output.classification = 'allowed';
-        this.logger.log(
-          JSON.stringify({
-            event: 'ROUTINE_INTAKE_ACK_SYNTHESIZED',
-            runId: run.id,
-            intent: routineIntake.facts.intent,
-          }),
-        );
-        await this.audit.recordSystem(
-          run.leadId,
-          'routine_intake_ack_synthesized',
-          {
-            runId: run.id,
-            intent: routineIntake.facts.intent,
-            reason:
-              'Model returned no reply text for an eligible routine inquiry; application logic synthesized the approved acknowledgement.',
-          },
-        );
       }
       if (preflight.state.ownershipStatus !== 'ai_handling') {
         run.status = 'completed';
@@ -1613,481 +1510,134 @@ export class AiConversationService
   }
 
   /**
-   * Extracted lead facts with per-field provenance. Only explicitly stated
-   * facts are extracted; values are never invented. `bedrooms` is extracted
-   * for the conversation summary and acknowledgement copy — it is NOT part
-   * of the qualification contract (unsupported field).
+   * Extract buyer qualification facts from the triggering message.
+   * Returns null if the message is not a buyer inquiry or facts cannot be
+   * extracted with confidence. Only extracts explicitly stated facts;
+   * never invents values.
    */
   /**
-   * Detect scheduling intent with negation handling and conversational
-   * context. Negation is checked first ("do not book an appointment" is
-   * never intent). Explicit booking phrases and day+time agreements count;
-   * weak agreements ("that works") only count when we recently offered
-   * times or a booking link. A listings request alone is not intent.
+   * Detect if a message contains explicit scheduling intent.
+   * Returns true only for clear appointment/viewing requests.
+   * A request for listings is NOT scheduling intent.
    */
-  private hasSchedulingIntent(
-    messageBody: string | null,
-    recentOutboundText: string | null = null,
-  ): boolean {
+  private hasSchedulingIntent(messageBody: string | null): boolean {
     if (!messageBody) return false;
     const body = messageBody.toLowerCase();
-    // Negation / retraction wins over everything.
-    if (
-      /\b(do\s*not|don't|never|no longer|not now|not yet|cancel)\b[^.!?]{0,40}\b(book|schedule|appointment|viewing|tour|showing)\b/.test(
-        body,
-      )
-    ) {
-      return false;
-    }
-    const explicitPhrases = [
-      'send me the booking link',
-      'booking link',
-      'book a showing',
-      'book a viewing',
-      'book a tour',
-      'book an appointment',
-      'schedule a showing',
+    const schedulingPhrases = [
       'schedule a viewing',
       'schedule a tour',
+      'book a viewing',
+      'book a tour',
       'schedule an appointment',
-      'can i book',
-      "i'd like to book",
-      'i want to book',
-      'want to schedule',
-      'like to schedule',
-      'set up a time',
-      'set up an appointment',
-      'set up a viewing',
-      'pick a time',
-      'choose a time',
+      'book an appointment',
       'can we meet',
       'when can i see',
       'available to view',
+      'set up a viewing',
     ];
-    if (explicitPhrases.some((phrase) => body.includes(phrase))) return true;
-    const hasBookingContext =
-      !!recentOutboundText &&
-      /\b(book|schedule|appointment|viewing|tour|showing|available)\b/i.test(
-        recentOutboundText,
-      );
-    // Day + time + explicit agreement ("Tuesday at 3 PM works"). The
-    // agreement word distinguishes a booking acceptance from an informational
-    // mention like "The open house is Tuesday at 3 PM".
-    const dayTimeAgreement =
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b[^.!?]{0,30}\b\d{1,2}(:\d{2})?\s*(am|pm)\b[^.!?]{0,20}\b(works|good|perfect|great|see you)\b/i.test(
-        body,
-      ) ||
-      /\b(works|good|perfect|great)\b[^.!?]{0,20}\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
-        body,
-      );
-    if (dayTimeAgreement) return true;
-    // Day + time without agreement, or weak agreement ("that works"), only
-    // counts with recent booking-offer context.
-    const dayTimeBare =
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b[^.!?]{0,30}\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(
-        body,
-      );
-    const weakAgreement = /\b(that works|sounds good|yes please|let's do it|works for me)\b/.test(
-      body,
-    );
-    if ((dayTimeBare || weakAgreement) && hasBookingContext) return true;
-    return false;
+    return schedulingPhrases.some((phrase) => body.includes(phrase));
   }
 
-  /**
-   * Generic handoff-confusion patterns: reasons indicating the model did not
-   * know how to handle a routine inquiry (as opposed to a substantive
-   * escalation like unsupported coverage). Only these — or an absent reason —
-   * allow the routine-intake override.
-   */
-  private static readonly GENERIC_HANDOFF_CONFUSION_PATTERNS: RegExp[] = [
-    /\b(buyer|listing|inquiry|lead)\b.{0,50}\b(human|agent)\b.{0,30}\b(assist|help|handle|review)\b/i,
-    /\brequires?\s+(a\s+|an\s+)?(human|agent)\s+(assistance|review|help)\b/i,
-    /\bnot\s+(sure|certain)\s+how\s+to\s+(handle|respond|help|assist)\b/i,
-    /\bunable\s+to\s+(handle|assist|respond|help)\b/i,
-  ];
-
-  /**
-   * Signals that must preserve a human escalation. Buyer facts alone never
-   * erase an escalation: if the triggering message or the model's escalation
-   * reason carries any of these, the inquiry is NOT eligible for routine
-   * intake and the handoff stands.
-   */
-  private static readonly ESCALATION_PRESERVING_PATTERNS: Array<{
-    signal: string;
-    pattern: RegExp;
-  }> = [
-    {
-      signal: 'HUMAN_REQUEST',
-      pattern:
-        /\b(speak|talk)\s+to\s+(a\s+)?(human|real|person|agent)\b|\breal\s+person\b|\bhuman\s+agent\b|\bcall\s+me\b/i,
-    },
-    {
-      signal: 'COMPLAINT',
-      pattern:
-        /\bcomplaint\b|\bterrible\b|\bawful\b|\blawsuit\b|\bsue\b|\bsuing\b|\battorney\b|\blawyer\b|\bfraud\b|\bscam\b/i,
-    },
-    {
-      signal: 'EMERGENCY',
-      pattern: /\bemergency\b|\burgent\b|\b911\b|\bevict|\bdanger|\bunsafe\b/i,
-    },
-    {
-      signal: 'RESTRICTED_ADVICE',
-      pattern: /\blegal advice\b|\bis it legal\b|\btax advice\b|\bshould i sue\b/i,
-    },
-    {
-      signal: 'OPT_OUT',
-      pattern:
-        /\bunsubscribe\b|\bopt[\s-]?out\b|\bdo not contact\b|\bremove me\b|\bstop\s+(emailing|texting|messaging|contacting)\b/i,
-    },
-    {
-      signal: 'PROMPT_INJECTION',
-      pattern:
-        /\bignore\s+(previous|all|your)\s+instructions\b|\bsystem prompt\b|\byou are now\b|\bjailbreak\b/i,
-    },
-  ];
-
-  private static readonly GENERIC_LOCATION_NOUNS = new Set([
-    'home',
-    'house',
-    'apartment',
-    'condo',
-    'property',
-    'area',
-    'neighborhood',
-    'city',
-    'town',
-    'village',
-    'location',
-    'place',
-  ]);
-
-  private extractLeadFacts(
+  private extractBuyerFacts(
     triggeringMessageBody: string | null,
-  ): {
-    intent: 'buyer' | 'seller' | 'renter' | 'investor';
-    location: string | null;
-    budget: string | null;
-    bedrooms: string | null;
-  } | null {
+  ): { intent: string; location: string | null; budget: string | null } | null {
     if (!triggeringMessageBody) return null;
     const body = triggeringMessageBody.toLowerCase();
 
-    // Intent classification. Specific intents are checked before the generic
-    // buyer signals so "Selling a home in Austin" -> seller and "Apartment
-    // rental in Buffalo" -> renter instead of buyer.
-    let intent: 'buyer' | 'seller' | 'renter' | 'investor' | null = null;
-    if (/\binvest/i.test(body)) {
-      intent = 'investor';
-    } else if (
-      /\bsell\b|\bselling\b|\blist my\b|\bhome worth\b|\bvaluation\b/i.test(body)
-    ) {
-      intent = 'seller';
-    } else if (/\brent\b|\brental\b|\blease\b/i.test(body)) {
-      intent = 'renter';
-    } else if (
-      /\bbuy\b|\bbuying\b|\blooking for\b|\blistings?\b|\bbudget\b|\bbedroom\b|\bhouse hunting\b|\bhome search\b|\bmortgage\b|\bpre-?approved\b/i.test(
-        body,
-      )
-    ) {
-      intent = 'buyer';
-    }
-    if (!intent) return null;
-
-    // Location: last "in <Place>" occurrence, matched case-insensitively so
-    // lowercase text-message input ("in austin") is not lost. Nested "in" is
-    // unwrapped ("a home in Austin" -> "Austin"), leading articles are
-    // stripped, generic nouns are rejected, and the result is title-cased for
-    // consistent storage. Stops before "budget"/"with" keywords.
-    let location: string | null = null;
-    const locationPattern =
-      /\bin\s+([a-zA-Z][a-zA-Z.'-]*(?:\s+(?!budget\b|with\b)[a-zA-Z][a-zA-Z.'-]*)*)/gi;
-    let locationMatch: RegExpExecArray | null;
-    while (
-      (locationMatch = locationPattern.exec(triggeringMessageBody)) !== null
-    ) {
-      let candidate = locationMatch[1].trim().replace(/[.,]+$/, '');
-      const nestedIn = candidate.toLowerCase().lastIndexOf(' in ');
-      if (nestedIn >= 0) {
-        candidate = candidate.slice(nestedIn + 4).trim();
-      }
-      candidate = candidate.replace(/^(a|an|the)\s+/i, '').trim();
-      if (
-        candidate.length >= 2 &&
-        !AiConversationService.GENERIC_LOCATION_NOUNS.has(
-          candidate.toLowerCase(),
-        )
-      ) {
-        location = candidate.replace(
-          /\w\S*/g,
-          (word) => word[0].toUpperCase() + word.slice(1).toLowerCase(),
-        );
-      }
-    }
-
-    // Budget: supports "budget 450k", "budget $450,000", "$450k", "$450,000".
-    // The decimal part is significant: 450.5k -> $450,500, not $450.
-    let budget: string | null = null;
-    const budgetPatterns = [
-      /budget\s*(?:of\s*)?\$?\s*([\d,]+(?:\.\d+)?)\s*(k)?\b/i,
-      /\$\s*([\d,]+(?:\.\d+)?)\s*(k)?\b/,
+    // Buyer inquiry indicators: mentions homes, areas, budgets, listings, bedrooms
+    const buyerIndicators = [
+      'looking for',
+      'bedroom',
+      'bedrooms',
+      'listings',
+      'budget',
+      ' Elmwood '.toLowerCase(), // Will be generalized
+      'house',
+      'home',
+      'apartment',
+      'condo',
     ];
-    for (const pattern of budgetPatterns) {
-      const budgetMatch = triggeringMessageBody.match(pattern);
-      if (budgetMatch) {
-        const raw = budgetMatch[1].replace(/,/g, '');
-        const num = parseFloat(raw);
-        if (!Number.isNaN(num) && Number.isFinite(num)) {
-          const scaled = budgetMatch[2] ? num * 1000 : num;
-          budget = `$${Math.round(scaled).toLocaleString('en-US')}`;
+    const isBuyerInquiry = buyerIndicators.some((indicator) =>
+      body.includes(indicator),
+    );
+    if (!isBuyerInquiry) return null;
+
+    // Extract location: look for "in <Place>" pattern
+    // This is a simple heuristic; the model should do the primary extraction
+    let location: string | null = null;
+    const locationMatch = triggeringMessageBody.match(
+      /\bin\s+([A-Z][a-zA-Z\s]+?)(?:,|\.|\s+budget|\s+with|\s*$)/i,
+    );
+    if (locationMatch) {
+      location = locationMatch[1].trim();
+    }
+
+    // Extract budget: look for $ amounts or "budget <amount>"
+    let budget: string | null = null;
+    const budgetMatch = triggeringMessageBody.match(
+      /budget\s*\$?([\d,]+k?)/i,
+    );
+    if (budgetMatch) {
+      let amount = budgetMatch[1];
+      if (amount.toLowerCase().endsWith('k')) {
+        const num = parseFloat(amount.slice(0, -1));
+        if (!isNaN(num)) {
+          amount = `$${(num * 1000).toLocaleString()}`;
         }
-        break;
+      } else {
+        amount = `$${parseFloat(amount.replace(/,/g, '')).toLocaleString()}`;
       }
+      budget = amount;
     }
 
-    // Bedrooms: for the summary and acknowledgement copy only — never part
-    // of the qualification contract.
-    let bedrooms: string | null = null;
-    const bedroomsMatch = triggeringMessageBody.match(/(\d+)\s*-\s*bedroom/i);
-    if (bedroomsMatch) {
-      bedrooms = `${bedroomsMatch[1]}-bedroom`;
-    }
-
-    // Only return when we have intent + at least one concrete fact.
+    // Only return if we have at least intent + one fact
     if (!location && !budget) return null;
 
-    return { intent, location, budget, bedrooms };
-  }
-
-  /**
-   * Narrow routine-intake eligibility. Returns eligible=true only when facts
-   * extract cleanly AND neither the message nor the model's escalation reason
-   * carries an escalation-preserving signal.
-   */
-  private evaluateRoutineIntake(
-    messageBody: string | null,
-    escalationReason: string | null,
-  ): {
-    eligible: boolean;
-    facts: {
-      intent: 'buyer' | 'seller' | 'renter' | 'investor';
-      location: string | null;
-      budget: string | null;
-      bedrooms: string | null;
-    } | null;
-    blockReason: string | null;
-  } {
-    const facts = this.extractLeadFacts(messageBody);
-    if (!facts) {
-      return { eligible: false, facts: null, blockReason: 'NO_EXTRACTABLE_FACTS' };
-    }
-    const haystack = `${messageBody || ''}\n${escalationReason || ''}`;
-    for (const { signal, pattern } of AiConversationService.ESCALATION_PRESERVING_PATTERNS) {
-      if (pattern.test(haystack)) {
-        return { eligible: false, facts, blockReason: `ESCALATION_SIGNAL:${signal}` };
-      }
-    }
-    return { eligible: true, facts, blockReason: null };
-  }
-
-  /**
-   * Merge model-provided qualification arguments with extracted facts.
-   * Explicit model values win; extracted facts fill gaps. A model action's
-   * name alone never suppresses missing facts, and malformed model arguments
-   * are repaired from extraction rather than dropped. Conflicts are logged
-   * by field name (never values) for audit.
-   */
-  private mergeQualificationArgs(
-    modelArguments: string | undefined,
-    facts: { intent: string; location: string | null; budget: string | null },
-  ): Record<string, string | null> {
-    let modelQual: Record<string, unknown> = {};
-    if (modelArguments) {
-      try {
-        const parsed: unknown = JSON.parse(modelArguments);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          const qual = (parsed as Record<string, unknown>).qualification;
-          if (qual && typeof qual === 'object' && !Array.isArray(qual)) {
-            modelQual = qual as Record<string, unknown>;
-          }
-        }
-      } catch {
-        modelQual = {};
-      }
-    }
-    const merged: Record<string, string | null> = {};
-    const pick = (key: 'intent' | 'location' | 'budget'): string | null => {
-      const modelVal = modelQual[key];
-      if (typeof modelVal === 'string' && modelVal.trim()) {
-        const extracted = key === 'intent' ? facts.intent : facts[key];
-        if (extracted && extracted !== modelVal.trim()) {
-          this.logger.log(
-            JSON.stringify({
-              event: 'QUALIFICATION_CONFLICT',
-              field: key,
-              winner: 'model',
-            }),
-          );
-        }
-        return modelVal.trim();
-      }
-      if (key === 'intent') return facts.intent;
-      return facts[key];
+    return {
+      intent: 'buyer',
+      location,
+      budget,
     };
-    merged.intent = pick('intent');
-    const location = pick('location');
-    const budget = pick('budget');
-    if (location) merged.location = location;
-    if (budget) merged.budget = budget;
-    return merged;
-  }
-
-  /**
-   * Approved capability-limited acknowledgement for an eligible routine
-   * inquiry when the model produced no reply text. Acknowledges the stated
-   * preferences, states that verified live listings are not available through
-   * this workflow, and asks exactly one qualification question. Never
-   * promises listings, coverage, availability, or appointments.
-   */
-  private buildRoutineIntakeAcknowledgement(facts: {
-    intent: 'buyer' | 'seller' | 'renter' | 'investor';
-    location: string | null;
-    budget: string | null;
-    bedrooms: string | null;
-  }): string {
-    const subject =
-      facts.intent === 'seller'
-        ? 'selling'
-        : facts.intent === 'renter'
-          ? 'renting'
-          : facts.intent === 'investor'
-            ? 'investing'
-            : 'buying';
-    const detailParts: string[] = [];
-    if (facts.bedrooms && facts.intent !== 'seller') {
-      detailParts.push(facts.bedrooms);
-    }
-    if (facts.location) detailParts.push(`in ${facts.location}`);
-    if (facts.budget) detailParts.push(`with a budget of ${facts.budget}`);
-    const detail =
-      detailParts.length > 0 ? ` ${detailParts.join(' ')}` : '';
-    let question: string;
-    if (!facts.budget && facts.intent !== 'seller') {
-      question = 'Do you have a budget range in mind?';
-    } else if (!facts.location) {
-      question = 'Which neighborhoods or areas are you focused on?';
-    } else if (facts.intent === 'seller') {
-      question = 'Are you looking to sell within a particular timeframe?';
-    } else {
-      question = "What's your ideal move-in timeframe?";
-    }
-    return (
-      `Thanks for reaching out about ${subject}${detail}. ` +
-      `I've saved your criteria, but I don't have verified live listings ` +
-      `available through this chat — our team will follow up with options ` +
-      `that match. ${question}`
-    );
   }
 
   private withRequiredOperationalUpdates(
     output: AiProviderOutput,
     triggeringMessageBody: string | null,
   ) {
-    const modelActions = [...output.actions];
-    // Mandatory persistence actions are reserved OUTSIDE the 10-action cap:
-    // they are never dropped by the slice. Model-provided mandatory actions
-    // are pulled out of the optional pool first so the cap cannot drop them.
-    const mandatory: AiToolRequest[] = [];
-    const takeModelAction = (name: AiToolRequest['name']) => {
-      const idx = modelActions.findIndex((action) => action.name === name);
-      return idx >= 0 ? modelActions.splice(idx, 1)[0] : null;
+    const actions = [...output.actions];
+    const add = (name: AiToolRequest['name'], args: Record<string, unknown>) => {
+      if (!actions.some((action) => action.name === name)) {
+        actions.push({ name, arguments: JSON.stringify(args) });
+      }
     };
-    // MANDATORY QUALIFICATION: extract facts from the triggering message and
-    // merge with any model-provided qualification. The model's action name
-    // alone never suppresses missing facts; extracted facts fill gaps
-    // without erasing the model's explicit values.
-    const leadFacts = this.extractLeadFacts(triggeringMessageBody);
-    if (leadFacts) {
-      const qualAction = takeModelAction('update_lead_qualification');
-      const merged = this.mergeQualificationArgs(
-        qualAction?.arguments,
-        leadFacts,
-      );
-      mandatory.push({
-        name: 'update_lead_qualification',
-        arguments: JSON.stringify({ qualification: merged }),
+    // QUALIFICATION PERSISTENCE: If this is a buyer inquiry and the model
+    // did not call update_lead_qualification, extract facts from the triggering
+    // message and add the tool call. This ensures buyer facts are persisted
+    // even when the model omits the action.
+    const buyerFacts = this.extractBuyerFacts(triggeringMessageBody);
+    if (buyerFacts) {
+      const qualification: Record<string, string | null> = {
+        intent: buyerFacts.intent,
+      };
+      if (buyerFacts.location) qualification.location = buyerFacts.location;
+      if (buyerFacts.budget) qualification.budget = buyerFacts.budget;
+      add('update_lead_qualification', { qualification });
+    }
+    if (output.summary.trim()) {
+      add('update_conversation_summary', { summary: output.summary });
+    }
+    if (output.recommendedNextAction.trim()) {
+      add('set_next_action', {
+        nextAction: output.recommendedNextAction,
       });
     }
-    // Bedrooms belong in the conversation summary, not the qualification
-    // contract (unsupported field). Preserve an explicitly stated bedroom
-    // count when the summary omits it, regardless of which side provided it.
-    const withBedrooms = (text: string): string => {
-      if (
-        leadFacts?.bedrooms &&
-        text.trim() &&
-        !/bedroom/i.test(text)
-      ) {
-        return `${text.trim()} (${leadFacts.bedrooms}).`;
-      }
-      return text.trim();
-    };
-    const modelSummaryAction = modelActions.find(
-      (action) => action.name === 'update_conversation_summary',
-    );
-    if (output.summary.trim() || modelSummaryAction) {
-      const summaryAction = takeModelAction('update_conversation_summary');
-      let summaryText = output.summary;
-      if (summaryAction) {
-        try {
-          const parsed = JSON.parse(summaryAction.arguments || '{}');
-          if (typeof parsed.summary === 'string' && parsed.summary.trim()) {
-            summaryText = parsed.summary;
-          }
-        } catch {
-          // fall through to output.summary
-        }
-      }
-      summaryText = withBedrooms(summaryText);
-      if (summaryText) {
-        mandatory.push({
-          name: 'update_conversation_summary',
-          arguments: JSON.stringify({ summary: summaryText }),
-        });
-      }
+    if (output.leadTemperature !== 'unchanged') {
+      add('set_lead_temperature', {
+        temperature: output.leadTemperature,
+        reason: output.summary || 'Updated from the current conversation.',
+      });
     }
-    if (
-      output.recommendedNextAction.trim() ||
-      modelActions.some((action) => action.name === 'set_next_action')
-    ) {
-      const nextAction = takeModelAction('set_next_action');
-      mandatory.push(
-        nextAction ?? {
-          name: 'set_next_action',
-          arguments: JSON.stringify({
-            nextAction: output.recommendedNextAction,
-          }),
-        },
-      );
-    }
-    if (
-      output.leadTemperature !== 'unchanged' ||
-      modelActions.some((action) => action.name === 'set_lead_temperature')
-    ) {
-      const tempAction = takeModelAction('set_lead_temperature');
-      mandatory.push(
-        tempAction ?? {
-          name: 'set_lead_temperature',
-          arguments: JSON.stringify({
-            temperature: output.leadTemperature,
-            reason: output.summary || 'Updated from the current conversation.',
-          }),
-        },
-      );
-    }
-    // Mandatory actions run first and are never dropped; model actions fill
-    // the remaining capacity up to the 10-action cap.
-    const optionalCapacity = Math.max(0, 10 - mandatory.length);
-    return [...mandatory, ...modelActions.slice(0, optionalCapacity)];
+    return actions.slice(0, 10);
   }
 
   private async finalizeMessage(

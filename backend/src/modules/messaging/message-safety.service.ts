@@ -222,30 +222,37 @@ export class MessageSafetyService {
       }
     }
 
-    if (tenant) {
-      if (tenant.lifecycleStatus === "SUSPENDED") {
-        block("CLIENT_SUSPENDED", "Client services are suspended");
-      } else if (tenant.lifecycleStatus === "PAUSED") {
-        block("CLIENT_PAUSED", "Client services are paused");
-      } else if (
-        tenant.lifecycleStatus !== "ACTIVE" &&
-        !(tenant.lifecycleStatus === "TESTING" && Boolean(lead?.testRunId))
-      ) {
-        block(
-          "CLIENT_INACTIVE",
-          `Client lifecycle is ${tenant.lifecycleStatus || "not active"}`,
-        );
-      }
-      if (
-        ["canceled", "unpaid", "paused", "incomplete_expired"].includes(
-          tenant.status,
-        )
-      ) {
-        block(
-          "CLIENT_ACCOUNT_INACTIVE",
-          `Client account status ${tenant.status} prohibits delivery`,
-        );
-      }
+    if (!tenant) {
+      block("TENANT_NOT_FOUND", "Tenant record not found; fail-closed");
+      return {
+        allowed: false,
+        reasons: [...reasons.values()],
+        ruleIds: [...reasons.keys()],
+      };
+    }
+
+    if (tenant.lifecycleStatus === "SUSPENDED") {
+      block("CLIENT_SUSPENDED", "Client services are suspended");
+    } else if (tenant.lifecycleStatus === "PAUSED") {
+      block("CLIENT_PAUSED", "Client services are paused");
+    } else if (
+      tenant.lifecycleStatus !== "ACTIVE" &&
+      !(tenant.lifecycleStatus === "TESTING" && Boolean(lead?.testRunId))
+    ) {
+      block(
+        "CLIENT_INACTIVE",
+        `Client lifecycle is ${tenant.lifecycleStatus || "not active"}`,
+      );
+    }
+    if (
+      ["canceled", "unpaid", "paused", "incomplete_expired"].includes(
+        tenant.status,
+      )
+    ) {
+      block(
+        "CLIENT_ACCOUNT_INACTIVE",
+        `Client account status ${tenant.status} prohibits delivery`,
+      );
     }
 
     const emailChannel = (job?.channel ?? input.communicationType) === "email";

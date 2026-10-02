@@ -359,9 +359,29 @@ export class BillingService implements OnModuleInit {
     // CRITICAL: Enforce Stripe livemode isolation. Test-mode events must never
     // mutate production billing state (this happened with The Row's $499 test
     // trial). Live-mode events must never hit non-production environments.
-    const isProduction = process.env.NODE_ENV === 'production';
+    //
+    // Billing environment identity is determined by APP_ENV, NOT by NODE_ENV.
+    // NODE_ENV controls Node runtime mode (production vs development) and is
+    // set to 'production' in the Dockerfile for runtime optimization, even on
+    // staging. Using NODE_ENV for billing identity would cause staging to
+    // reject sandbox webhooks. APP_ENV must be explicitly set to 'production'
+    // or 'staging' (or 'development'/'test'); any other value fails closed.
+    const billingEnv = (process.env.APP_ENV || '').toLowerCase().trim();
+    if (billingEnv !== 'production' && billingEnv !== 'staging' && billingEnv !== 'development' && billingEnv !== 'test') {
+      this.logger.error(
+        operationalEvent('billing_env_unconfigured', {
+          provider: 'stripe',
+          eventId: event.id,
+          eventType: event.type,
+        }),
+      );
+      throw new BadRequestException(
+        'APP_ENV must be set to production, staging, development, or test for billing webhook processing',
+      );
+    }
+    const isProductionBilling = billingEnv === 'production';
     const eventLivemode = Boolean(event.livemode);
-    if (isProduction && !eventLivemode) {
+    if (isProductionBilling && !eventLivemode) {
       this.logger.warn(
         operationalEvent('stripe_test_event_rejected_in_production', {
           provider: 'stripe',
@@ -372,13 +392,13 @@ export class BillingService implements OnModuleInit {
       // Return 200 to Stripe (don't retry), but do not process.
       return { received: true, rejected: 'test_mode_event_in_production' };
     }
-    if (!isProduction && eventLivemode) {
+    if (!isProductionBilling && eventLivemode) {
       this.logger.warn(
         operationalEvent('stripe_live_event_rejected_in_non_production', {
           provider: 'stripe',
           eventId: event.id,
           eventType: event.type,
-          nodeEnv: process.env.NODE_ENV,
+          billingEnv,
         }),
       );
       return { received: true, rejected: 'live_mode_event_in_non_production' };
