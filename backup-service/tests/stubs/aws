@@ -1,0 +1,18 @@
+#!/bin/sh
+# Test stub for `aws` (R2 S3 operations used by restore.sh).
+set -eu
+[ -n "${STUB_LOG:-}" ] || { echo "stub aws: STUB_LOG not set" >&2; exit 99; }
+echo "AWS ARGS: $*" >> "$STUB_LOG"
+case "$*" in
+  *"s3 cp"*)
+    dest=""
+    for a in "$@"; do dest="$a"; done
+    printf 'DUMMYDUMP' > "$dest"
+    exit 0
+    ;;
+  *"head-object"*|*"s3api"*)
+    exit 0
+    ;;
+esac
+echo "stub aws: unhandled: $*" >&2
+exit 3
