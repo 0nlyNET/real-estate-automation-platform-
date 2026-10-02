@@ -636,6 +636,7 @@ export function AdminDashboardClient({
   const [testSmsRecipient, setTestSmsRecipient] = useState("")
   const [testEmailRecipient, setTestEmailRecipient] = useState("")
   const [testingBusy, setTestingBusy] = useState(false)
+  const [activeTestRunId, setActiveTestRunId] = useState<string | null>(null)
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
 
   const [showCreateClient, setShowCreateClient] = useState(false)
@@ -852,6 +853,15 @@ export function AdminDashboardClient({
   }, [initialTenantId, loadClientCore, tenants])
 
   useEffect(() => {
+    if (!selectedTenant || clientTab !== "setup") {
+      if (!selectedTenant) setActiveTestRunId(null)
+      return
+    }
+    void refreshActiveTestRun()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTenant?.id, clientTab])
+
+  useEffect(() => {
     if (!selectedTenant || !["conversations", "activity"].includes(clientTab)) return
     let active = true
     setClientTabLoading(true)
@@ -1036,6 +1046,23 @@ export function AdminDashboardClient({
     setReadiness(await apiFetch<TenantReadiness>(`/admin/tenants/${selectedTenant.id}/readiness`))
   }
 
+  async function refreshActiveTestRun() {
+    if (!selectedTenant) {
+      setActiveTestRunId(null)
+      return
+    }
+    try {
+      const diagnostics = await apiFetch<{ testRunId?: string | null }>(
+        `/admin/tenants/${selectedTenant.id}/testing/diagnostics`,
+      )
+      setActiveTestRunId(diagnostics?.testRunId || null)
+    } catch {
+      // Diagnostics are best-effort here; the start/abort actions surface
+      // their own errors.
+      setActiveTestRunId(null)
+    }
+  }
+
   async function resendSelectedInvitation() {
     if (!selectedTenant || !isOwner) return
     try {
@@ -1119,6 +1146,7 @@ export function AdminDashboardClient({
       } else {
         setNotice("The controlled lead entered the real queue. Provider callbacks and replies will record evidence automatically.")
       }
+      setActiveTestRunId((result as any)?.run?.id || activeTestRunId)
     } catch (cause) {
       setError(messageFor(cause, "Testing mode could not be started"))
     } finally {
@@ -1130,12 +1158,14 @@ export function AdminDashboardClient({
     if (!selectedTenant || !isOwner || testingBusy) return
     setTestingBusy(true)
     try {
-      const diagnostics = await apiFetch<{ testRunId?: string | null }>(
-        `/admin/tenants/${selectedTenant.id}/testing/diagnostics`,
-      )
-      const runId = diagnostics?.testRunId
+      const runId = activeTestRunId || (
+        await apiFetch<{ testRunId?: string | null }>(
+          `/admin/tenants/${selectedTenant.id}/testing/diagnostics`,
+        )
+      )?.testRunId
       if (!runId) {
         setNotice("No active controlled test run found for this workspace.")
+        setActiveTestRunId(null)
         return
       }
       const result = await apiFetch<{ status?: string; alreadyTerminal?: boolean }>(
@@ -1146,6 +1176,7 @@ export function AdminDashboardClient({
         },
       )
       await refreshReadiness()
+      setActiveTestRunId(null)
       setNotice(
         result?.alreadyTerminal
           ? "The controlled test run was already finished."
@@ -2273,12 +2304,12 @@ export function AdminDashboardClient({
                       </Button>
                       <Button
                         variant="outline"
-                        disabled={!readiness?.testingReady || testingBusy || selectedTenant.lifecycleStatus === "TESTING"}
+                        disabled={!readiness?.testingReady || testingBusy || !!activeTestRunId}
                         onClick={() => void startTesting()}
                       >
-                        {selectedTenant.lifecycleStatus === "TESTING" ? "Testing mode active" : "Start controlled testing"}
+                        {activeTestRunId ? "Testing mode active" : "Start controlled testing"}
                       </Button>
-                      {selectedTenant.lifecycleStatus === "TESTING" ? (
+                      {activeTestRunId ? (
                         <Button
                           variant="destructive"
                           disabled={testingBusy}
