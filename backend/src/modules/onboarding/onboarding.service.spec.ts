@@ -439,6 +439,21 @@ describe('operator-controlled workspace activation', () => {
       undefined,
       undefined,
       testRuns as any,
+      undefined,
+      undefined,
+      undefined,
+      // Non-AI booking UAT journey: AI explicitly disabled, so no AI reply
+      // evidence is required. Fail-closed on missing settings is covered in
+      // the P1 invariant suite below.
+      {
+        findOne: jest.fn().mockResolvedValue({
+          tenantId: 'tenant-1',
+          aiEnabled: false,
+          aiPaused: false,
+          responseMode: 'controlled_autopilot',
+          allowedChannels: ['sms', 'email'],
+        }),
+      } as any,
     );
     await service.recordUatWorkflowEvidence('tenant-1', run.id, {
       calendarAvailability: true,
@@ -1353,6 +1368,8 @@ describe('P1 shared controlled-test completion invariant', () => {
     aiEnabled?: boolean;
     aiPaused?: boolean;
     responseMode?: string;
+    allowedChannels?: Array<'sms' | 'email'>;
+    aiSettingsMode?: 'ok' | 'missing' | 'error';
     smsEnabled?: boolean;
     emailEnabled?: boolean;
     bookingEnabled?: boolean;
@@ -1362,6 +1379,8 @@ describe('P1 shared controlled-test completion invariant', () => {
       aiEnabled = true,
       aiPaused = false,
       responseMode = 'controlled_autopilot',
+      allowedChannels,
+      aiSettingsMode = 'ok',
       smsEnabled = false,
       emailEnabled = true,
       bookingEnabled = true,
@@ -1396,11 +1415,16 @@ describe('P1 shared controlled-test completion invariant', () => {
       save: jest.fn(async (value) => value),
     };
     const workspaceAiSettings = {
-      findOne: jest.fn().mockResolvedValue({
-        tenantId: 'tenant-1',
-        aiEnabled,
-        aiPaused,
-        responseMode,
+      findOne: jest.fn().mockImplementation(async () => {
+        if (aiSettingsMode === 'error') throw new Error('settings store unavailable');
+        if (aiSettingsMode === 'missing') return null;
+        return {
+          tenantId: 'tenant-1',
+          aiEnabled,
+          aiPaused,
+          responseMode,
+          allowedChannels,
+        };
       }),
     };
     const service = new OnboardingService(
@@ -1507,5 +1531,103 @@ describe('P1 shared controlled-test completion invariant', () => {
     });
     expect(run.status).toBe('passed');
     expect(record.testLeadCompletedAt).toBeInstanceOf(Date);
+  });
+
+  it('completes an email-only tenant without any SMS proof', async () => {
+    const { service, run, record } = harness({
+      smsEnabled: false,
+      emailEnabled: true,
+      bookingEnabled: false,
+      aiEnabled: true,
+      allowedChannels: ['email'],
+      initialChecks: { outbound: 'delivered', inboundEmail: 'passed' },
+    });
+    // Email journey complete (inbound + AI reply delivered), no SMS checks
+    // recorded at all: an email-only workspace must not require SMS proof.
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundEmailAiReplyDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run).toMatchObject({ status: 'passed', completedAt: expect.any(Date) });
+    expect(record.testLeadCompletedAt).toBeInstanceOf(Date);
+  });
+
+  it('does not require an SMS AI reply when AI is approved for email only', async () => {
+    const { service, run } = harness({
+      smsEnabled: true,
+      emailEnabled: true,
+      bookingEnabled: false,
+      aiEnabled: true,
+      allowedChannels: ['email'],
+      initialChecks: {
+        outbound: 'delivered',
+        inboundSms: 'passed',
+        stop: 'passed',
+        inboundEmail: 'passed',
+      },
+    });
+    // Full SMS delivery journey + email AI reply, but no SMS AI reply:
+    // allowedChannels=['email'] means AI was never approved for SMS.
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundEmailAiReplyDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run.status).toBe('passed');
+  });
+
+  it('requires the SMS AI reply when AI is approved for both channels', async () => {
+    const { service, run } = harness({
+      smsEnabled: true,
+      emailEnabled: true,
+      bookingEnabled: false,
+      aiEnabled: true,
+      // allowedChannels omitted: the AI preflight default-channel behavior
+      // treats a missing list as approval for both channels.
+      initialChecks: {
+        outbound: 'delivered',
+        inboundSms: 'passed',
+        stop: 'passed',
+        inboundEmail: 'passed',
+        inboundEmailAiReplyDelivered: 'passed',
+      },
+    });
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      outboundDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run.status).toBe('running');
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundSmsAiReplyDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run.status).toBe('passed');
+  });
+
+  it('fails closed when the AI configuration is unreadable', async () => {
+    const { service, run, record } = harness({
+      aiSettingsMode: 'error',
+      bookingEnabled: false,
+      initialChecks: { outbound: 'delivered', inboundEmail: 'passed' },
+    });
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundEmailAiReplyDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run.status).toBe('running');
+    expect(record.testLeadCompletedAt).toBeNull();
+  });
+
+  it('fails closed when the AI configuration is missing', async () => {
+    const { service, run, record } = harness({
+      aiSettingsMode: 'missing',
+      bookingEnabled: false,
+      initialChecks: { outbound: 'delivered', inboundEmail: 'passed' },
+    });
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundEmailAiReplyDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run.status).toBe('running');
+    expect(record.testLeadCompletedAt).toBeNull();
   });
 });

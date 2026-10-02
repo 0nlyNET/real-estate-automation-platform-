@@ -665,6 +665,10 @@ export function AdminDashboardClient({
   const loadedSections = useRef(new Set<DataSection>())
   const inFlightSections = useRef(new Map<DataSection, Promise<void>>())
   const clientRequest = useRef(0)
+  // Guards refreshActiveTestRun against out-of-order responses: a slow
+  // diagnostics fetch for a previously selected tenant must never overwrite
+  // the active-test-run state of the currently selected tenant.
+  const testRunRequest = useRef(0)
   const debouncedSearch = useDebouncedValue(search)
 
   useEffect(() => {
@@ -857,6 +861,10 @@ export function AdminDashboardClient({
       if (!selectedTenant) setActiveTestRunId(null)
       return
     }
+    // Clear immediately so the previous tenant's run state is never
+    // presented as this tenant's while the fresh diagnostics fetch is in
+    // flight.
+    setActiveTestRunId(null)
     void refreshActiveTestRun()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTenant?.id, clientTab])
@@ -1047,18 +1055,25 @@ export function AdminDashboardClient({
   }
 
   async function refreshActiveTestRun() {
-    if (!selectedTenant) {
+    const tenant = selectedTenant
+    if (!tenant) {
       setActiveTestRunId(null)
       return
     }
+    // Tenant-scoped freshness: capture the request id so a stale response
+    // for a previously selected tenant is discarded instead of leaking
+    // another tenant's run state into this workspace's UI.
+    const requestId = ++testRunRequest.current
     try {
       const diagnostics = await apiFetch<{ testRunId?: string | null }>(
-        `/admin/tenants/${selectedTenant.id}/testing/diagnostics`,
+        `/admin/tenants/${tenant.id}/testing/diagnostics`,
       )
+      if (requestId !== testRunRequest.current) return
       setActiveTestRunId(diagnostics?.testRunId || null)
     } catch {
       // Diagnostics are best-effort here; the start/abort actions surface
       // their own errors.
+      if (requestId !== testRunRequest.current) return
       setActiveTestRunId(null)
     }
   }
@@ -1146,6 +1161,9 @@ export function AdminDashboardClient({
       } else {
         setNotice("The controlled lead entered the real queue. Provider callbacks and replies will record evidence automatically.")
       }
+      // Invalidate any in-flight diagnostics refresh: the start response is
+      // the freshest run state, and a stale fetch must not overwrite it.
+      testRunRequest.current += 1
       setActiveTestRunId((result as any)?.run?.id || activeTestRunId)
     } catch (cause) {
       setError(messageFor(cause, "Testing mode could not be started"))
@@ -1158,14 +1176,18 @@ export function AdminDashboardClient({
     if (!selectedTenant || !isOwner || testingBusy) return
     setTestingBusy(true)
     try {
-      const runId = activeTestRunId || (
-        await apiFetch<{ testRunId?: string | null }>(
-          `/admin/tenants/${selectedTenant.id}/testing/diagnostics`,
-        )
-      )?.testRunId
+      // Resolve the CURRENT active run from the server. The cached
+      // activeTestRunId may point at an already-terminal run (e.g. a run
+      // that completed while the UI was not refreshed); preferring it would
+      // abort the wrong run or misreport the state when a newer run is
+      // actually active.
+      const active = await apiFetch<{ testRunId?: string | null; status?: string | null }>(
+        `/admin/tenants/${selectedTenant.id}/testing/runs/active`,
+      )
+      const runId = active?.status === "running" ? active?.testRunId : null
       if (!runId) {
         setNotice("No active controlled test run found for this workspace.")
-        setActiveTestRunId(null)
+        await refreshActiveTestRun()
         return
       }
       const result = await apiFetch<{ status?: string; alreadyTerminal?: boolean }>(
@@ -1176,7 +1198,9 @@ export function AdminDashboardClient({
         },
       )
       await refreshReadiness()
-      setActiveTestRunId(null)
+      // Server refresh: re-resolve from the server so the UI reflects the
+      // true post-abort state instead of assuming it.
+      await refreshActiveTestRun()
       setNotice(
         result?.alreadyTerminal
           ? "The controlled test run was already finished."
