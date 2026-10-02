@@ -1216,9 +1216,39 @@ export function AdminDashboardClient({
   async function saveUsagePolicy() {
     if (!selectedTenant || !usagePolicy) return
     try {
+      // Send only the UsagePolicyDto-whitelisted fields. The GET response is
+      // the entity shape (id, scopeType, scopeId, updatedAt) and the global
+      // ValidationPipe has forbidNonWhitelisted: true, so round-tripping the
+      // whole object is rejected with "property ... should not exist".
+      const {
+        maxSmsPerHour,
+        maxSmsPerDay,
+        maxEmailsPerHour,
+        maxEmailsPerDay,
+        maxAiCallsPerDay,
+        maxLeadsPerHour,
+        warningPercentage,
+        warningCostThresholdUsd,
+        hardCostThresholdUsd,
+        enabled,
+      } = usagePolicy
       const saved = await apiFetch<UsagePolicy>(
         `/admin/tenants/${selectedTenant.id}/usage-policy`,
-        { method: "PUT", body: usagePolicy },
+        {
+          method: "PUT",
+          body: {
+            maxSmsPerHour,
+            maxSmsPerDay,
+            maxEmailsPerHour,
+            maxEmailsPerDay,
+            maxAiCallsPerDay,
+            maxLeadsPerHour,
+            warningPercentage,
+            warningCostThresholdUsd,
+            hardCostThresholdUsd,
+            enabled,
+          },
+        },
       )
       setUsagePolicy(saved)
       await refreshReadiness()
