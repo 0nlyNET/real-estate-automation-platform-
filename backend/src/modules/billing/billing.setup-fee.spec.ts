@@ -13,6 +13,7 @@ describe('Stripe one-time setup fee billing', () => {
       STRIPE_WEBHOOK_SECRET: 'whsec_test',
       STRIPE_PRICE_SERVICE_MONTH: 'price_service_month',
       STRIPE_PRICE_SETUP_ONCE: 'price_setup_once',
+      APP_ENV: 'staging',
     });
   });
 

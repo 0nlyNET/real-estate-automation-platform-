@@ -13,7 +13,7 @@ import {
 function harness(
   options: {
     lead?: Partial<Lead>;
-    tenant?: Partial<Tenant>;
+    tenant?: Partial<Tenant> | null;
     settings?: Partial<TenantSettings> | null;
     job?: Partial<Message> | null;
     noShow?: boolean;
@@ -36,12 +36,15 @@ function harness(
     stage: "new",
     ...options.lead,
   });
-  const tenant = Object.assign(new Tenant(), {
-    id: tenantId,
-    status: "active",
-    lifecycleStatus: "ACTIVE",
-    ...options.tenant,
-  });
+  const tenant =
+    options.tenant === null
+      ? null
+      : Object.assign(new Tenant(), {
+          id: tenantId,
+          status: "active",
+          lifecycleStatus: "ACTIVE",
+          ...options.tenant,
+        });
   const settings =
     options.settings === null
       ? null
@@ -457,7 +460,7 @@ describe("MessageSafetyService", () => {
   it("keeps the required public boolean verifier available", async () => {
     const item = harness({ job: null });
     await expect(
-      item.service.verifyMessageSafety(item.lead.id, item.tenant.id),
+      item.service.verifyMessageSafety(item.lead.id, item.tenant!.id),
     ).resolves.toBe(true);
   });
   it("does not refresh an old message's replay age when its retry time changes", async () => {
@@ -471,5 +474,12 @@ describe("MessageSafetyService", () => {
     const result = await item.service.evaluateMessageSafety(item.input);
     expect(result.allowed).toBe(false);
     expect(result.ruleIds).toContain("STALE_AUTOMATION");
+  });
+
+  it("blocks when tenant record is missing (fail-closed)", async () => {
+    const item = harness({ tenant: null });
+    const result = await item.service.evaluateMessageSafety(item.input);
+    expect(result.allowed).toBe(false);
+    expect(result.ruleIds).toContain("TENANT_NOT_FOUND");
   });
 });

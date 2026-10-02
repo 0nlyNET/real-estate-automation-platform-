@@ -11,7 +11,7 @@ import { TenantsService } from '../tenants/tenants.service';
  */
 describe('BillingService webhook livemode enforcement', () => {
   const tenants = {} as TenantsService;
-  const origNodeEnv = process.env.NODE_ENV;
+  const origAppEnv = process.env.APP_ENV;
   const origWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   // Minimal Stripe.Event shapes — only the fields handleWebhook reads
@@ -45,7 +45,7 @@ describe('BillingService webhook livemode enforcement', () => {
   });
 
   afterEach(() => {
-    process.env.NODE_ENV = origNodeEnv;
+    process.env.APP_ENV = origAppEnv;
     if (origWebhookSecret === undefined) {
       delete process.env.STRIPE_WEBHOOK_SECRET;
     } else {
@@ -56,7 +56,7 @@ describe('BillingService webhook livemode enforcement', () => {
   });
 
   it('rejects test-mode events in production without mutating billing state', async () => {
-    process.env.NODE_ENV = 'production';
+    process.env.APP_ENV = 'production';
     const service = serviceWithMockedVerify(testModeEvent);
 
     const result = await service.handleWebhook(
@@ -71,7 +71,7 @@ describe('BillingService webhook livemode enforcement', () => {
   });
 
   it('rejects live-mode events in non-production without mutating billing state', async () => {
-    process.env.NODE_ENV = 'staging';
+    process.env.APP_ENV = 'staging';
     const service = serviceWithMockedVerify(liveModeEvent);
 
     const result = await service.handleWebhook(
@@ -86,7 +86,7 @@ describe('BillingService webhook livemode enforcement', () => {
   });
 
   it('accepts test-mode events in non-production (passes the gate)', async () => {
-    process.env.NODE_ENV = 'staging';
+    process.env.APP_ENV = 'staging';
     const service = serviceWithMockedVerify(testModeEvent);
     // withCustomerLock is called after the gate — stub it to prove we got
     // past the gate without touching the DB.
@@ -100,5 +100,23 @@ describe('BillingService webhook livemode enforcement', () => {
     await service.handleWebhook(Buffer.from('{}'), 't=123,v1=abc');
 
     expect(lockSpy).toHaveBeenCalled();
+  });
+
+  it('fails closed when APP_ENV is missing', async () => {
+    delete process.env.APP_ENV;
+    const service = serviceWithMockedVerify(testModeEvent);
+
+    await expect(
+      service.handleWebhook(Buffer.from('{}'), 't=123,v1=abc'),
+    ).rejects.toThrow('APP_ENV must be set');
+  });
+
+  it('fails closed when APP_ENV is invalid', async () => {
+    process.env.APP_ENV = 'prod';
+    const service = serviceWithMockedVerify(testModeEvent);
+
+    await expect(
+      service.handleWebhook(Buffer.from('{}'), 't=123,v1=abc'),
+    ).rejects.toThrow('APP_ENV must be set');
   });
 });
