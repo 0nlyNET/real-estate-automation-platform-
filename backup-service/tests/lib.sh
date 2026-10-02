@@ -28,7 +28,11 @@ drill_env() {
   export R2_SECRET_ACCESS_KEY=fake-secret
   export R2_BUCKET=fake-bucket
   export BACKUP_ENCRYPTION_KEY=ZmFrZS1lbmNyeXB0aW9uLWtleQ==
-  export RESTORE_DATABASE_URL="postgres://postgres:postgres@localhost:5432/postgres"
+  # Test-only database URL. This value is never used to open a real connection:
+  # every test stubs `psql`, so it only flows into stub logs. It must never
+  # contain a real credential — override via the environment only for local
+  # runs that need a live database.
+  export RESTORE_DATABASE_URL="${RESTORE_DATABASE_URL:-postgres://localhost:5432/postgres}"
   # Recent snapshot so the RPO (<=3600s) gate passes; t5 overrides this.
   export BACKUP_KEY="rta-prod-$(date -u -d '5 minutes ago' +%Y%m%dT%H%M%SZ).dump.gpg"
   export TEST_TENANT_ID="11111111-1111-1111-1111-111111111111"
