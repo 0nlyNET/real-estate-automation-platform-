@@ -665,3 +665,79 @@ describe('TestingService production-pipeline UAT', () => {
     expect(result.isNew).toBe(false);
   });
 });
+
+describe('TestingService diagnostics', () => {
+  it('returns the active run diagnostics without querying Message by tenantId', async () => {
+    const messageWhere: any[] = [];
+    const runs = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'run-1',
+        tenantId: 'tenant-1',
+        status: 'running',
+        testLeadId: 'lead-1',
+      }),
+    };
+    const messages = {
+      find: jest.fn(async (options: any) => {
+        messageWhere.push(options?.where);
+        return [];
+      }),
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+    const service = new TestingService(
+      runs as any,
+      {} as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+      messages as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    const diagnostics = await service.getTestDiagnostics('tenant-1');
+    expect(diagnostics.testRunId).toBe('run-1');
+    expect(diagnostics.leadId).toBe('lead-1');
+    // Regression: Message has no tenantId column; the query must scope by
+    // leadId only (the lead is already tenant-scoped through the run).
+    expect(messageWhere.length).toBeGreaterThan(0);
+    for (const where of messageWhere) {
+      expect(where).not.toHaveProperty('tenantId');
+      expect(where.leadId).toBe('lead-1');
+    }
+  });
+
+  it('aborts a running test run and cancels claimable outbound messages', async () => {
+    const run: any = {
+      id: 'run-1',
+      tenantId: 'tenant-1',
+      status: 'running',
+      testLeadId: 'lead-1',
+      failureReason: null,
+      completedAt: null,
+    };
+    const runs = {
+      findOne: jest.fn().mockResolvedValue(run),
+      save: jest.fn(async (value) => value),
+    };
+    const queued = { id: 'msg-1', status: 'queued', direction: 'outbound' };
+    const sent = { id: 'msg-2', status: 'sent', direction: 'outbound' };
+    const messages = {
+      find: jest.fn().mockResolvedValue([queued, sent]),
+      save: jest.fn(async (value) => value),
+    };
+    const service = new TestingService(
+      runs as any,
+      {} as any,
+      {} as any,
+      messages as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    const result = await service.abortTestRun('tenant-1', 'run-1', 'aborted_by_operator');
+    expect(result).toMatchObject({ runId: 'run-1', status: 'expired', alreadyTerminal: false });
+    expect(result.canceledMessages).toEqual(['msg-1']);
+    expect(queued.status).toBe('canceled');
+    expect(sent.status).toBe('sent');
+    expect(run.failureReason).toBe('aborted_by_operator');
+  });
+});
