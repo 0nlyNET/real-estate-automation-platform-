@@ -14,7 +14,7 @@ import { Message } from './message.entity';
 import { Lead } from '../leads/lead.entity';
 import { Tenant } from '../tenants/tenant.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
-import { SequencesService } from '../sequences/sequences.service';
+import { SequencesService, sequenceEnrollmentIdFromIdempotencyKey } from '../sequences/sequences.service';
 import { Credential } from '../settings/credential.entity';
 import { decryptIntegrationPayload } from '../integrations/integration-crypto';
 import { ComplianceService } from '../compliance/compliance.service';
@@ -550,6 +550,56 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
             return false;
           }
 
+          // ENROLLMENT PROVENANCE: a sequence-owned message must still belong
+          // to an active enrollment at the moment of provider submission. The
+          // inbound path cancels queued sequence messages when an enrollment
+          // stops, but a message claimed just before the stop could otherwise
+          // slip through the claim race. Non-sequence messages (AI/manual
+          // replies, approved one-off reminders) are unaffected.
+          if (message.communicationType === 'sequence') {
+            const enrollmentId = sequenceEnrollmentIdFromIdempotencyKey(
+              message.idempotencyKey,
+            );
+            const enrollmentStatus = enrollmentId
+              ? await this.sequencesService.getSequenceEnrollmentStatus(
+                  lead.tenantId,
+                  lead.id,
+                  enrollmentId,
+                )
+              : null;
+            if (enrollmentStatus === 'paused') {
+              // Paused is "not now", not "never": release back to queued so a
+              // later resume can still deliver. Do not burn quota or submit.
+              message.status = 'queued';
+              message.lockedAt = null;
+              message.lockedBy = null;
+              message.nextAttemptAt = null;
+              await this.messageRepository.save(message);
+              this.logger.log(
+                operationalEvent('message_dispatch_deferred_enrollment_paused', {
+                  tenantId: lead.tenantId,
+                  leadId: lead.id,
+                  messageId: message.id,
+                  enrollmentId,
+                }),
+              );
+              return false;
+            }
+            if (enrollmentStatus !== 'active') {
+              await this.sendDecisions?.record({
+                message: current,
+                safety,
+                decision: 'blocked',
+              });
+              await this.cancelOutboundMessage(
+                message,
+                'ENROLLMENT_STOPPED',
+                'Cancelled because the sequence enrollment is no longer active',
+              );
+              return false;
+            }
+          }
+
           const usage = await this.limits?.reserveUsage({
             tenantId: lead.tenantId,
             metric: message.channel === 'email' ? 'email' : 'sms',
@@ -852,6 +902,39 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     // provider send below it must not run (fail-closed).
     message.providerSubmissionStartedAt = new Date();
     await this.messageRepository.save(message);
+  }
+
+  private async cancelOutboundMessage(message: Message, code: string, reason: string) {
+    // Dispatch-path cancellation (e.g. enrollment provenance failure). The
+    // message is claimed and in 'sending', but provider submission has not
+    // started yet, so canceling cannot double-send. Messages already
+    // submitted to the provider are never routed here.
+    message.status = 'canceled';
+    message.canceledAt = new Date();
+    message.cancellationReason = reason;
+    message.errorCode = code;
+    message.lastError = reason;
+    message.sanitizedErrorMessage = reason;
+    message.lockedAt = null;
+    message.lockedBy = null;
+    message.nextAttemptAt = null;
+    await this.messageRepository.save(message);
+    this.logger.log(
+      operationalEvent('message_canceled', {
+        tenantId: message.lead?.tenantId || null,
+        leadId: message.leadId,
+        messageId: message.id,
+        errorCode: code,
+      }),
+    );
+    if (message.lead) {
+      await this.logLeadEvent(message.lead, 'message_canceled', {
+        messageId: message.id,
+        channel: message.channel,
+        code,
+        reason,
+      });
+    }
   }
 
   private async skipMessage(message: Message, code: string, reason: string) {
