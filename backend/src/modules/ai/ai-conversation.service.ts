@@ -770,13 +770,20 @@ export class AiConversationService
         );
         return result;
       } catch (error) {
+        // SANITIZE BEFORE TRUNCATION: extract error code/message safely without
+        // leaking PII, SQL, or model output. Never log raw error objects.
+        const safeError =
+          error instanceof Error
+            ? { code: (error as any).code || 'UNKNOWN', message: error.message.slice(0, 200) }
+            : { code: 'UNKNOWN', message: String(error).slice(0, 200) };
         this.logger.error(
           JSON.stringify({
             event: 'PROCESS_STEP_ERROR',
             runId,
             step,
             durationMs: Date.now() - start,
-            error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+            errorCode: safeError.code,
+            error: safeError.message,
           }),
         );
         throw error;
@@ -949,7 +956,7 @@ export class AiConversationService
         leadTemperature: result.leadTemperature,
       };
       run.requestedTools = result.actions;
-      await this.runs.save(run);
+      await timed('post_provider_save', () => this.runs.save(run));
 
       const output: AiProviderOutput = {
         reply: result.reply
@@ -996,18 +1003,20 @@ export class AiConversationService
       let verifiedBookingLink: string | null = null;
       let calendarBookingConfirmed = false;
       for (let index = 0; index < requested.length; index += 1) {
-        const toolResult = await this.tools.execute(
-          {
-            run,
-            lead: preflight.lead,
-            triggeringMessage: preflight.triggeringMessage,
-            settings: preflight.settings,
-            knowledge: preflight.knowledge,
-            state: preflight.state,
-            channel: event.channel,
-          },
-          requested[index],
-          index,
+        const toolResult = await timed(`tool_execute_${index}`, () =>
+          this.tools.execute(
+            {
+              run,
+              lead: preflight.lead,
+              triggeringMessage: preflight.triggeringMessage,
+              settings: preflight.settings,
+              knowledge: preflight.knowledge,
+              state: preflight.state,
+              channel: event.channel,
+            },
+            requested[index],
+            index,
+          ),
         );
         toolResults.push(toolResult);
         run.executedTools = toolResults.filter(
@@ -1016,7 +1025,7 @@ export class AiConversationService
         run.blockedTools = toolResults.filter(
           (item) => item.status === 'blocked',
         ) as unknown as Array<Record<string, unknown>>;
-        await this.runs.save(run);
+        await timed('tool_result_save', () => this.runs.save(run));
         if (toolResult.status === 'blocked') {
           // OBSERVABILITY: A blocked tool kills the run via blockRun, which
           // emits no log line for non-provider failures. Log it here so a
@@ -1091,7 +1100,9 @@ export class AiConversationService
         return;
       }
       if (validation.noReply || !output.reply) {
-        await this.completeWithoutReply(run, preflight);
+        await timed('complete_without_reply', () =>
+          this.completeWithoutReply(run, preflight),
+        );
         return 'completed';
       }
 
@@ -1099,27 +1110,31 @@ export class AiConversationService
         event.channel === 'email'
           ? `${output.reply}\n\nUnsubscribe: {{unsubscribeUrl}}`
           : output.reply;
-      const message = await this.finalizeMessage(
-        run,
-        preflight,
-        event.channel,
-        body,
-        Boolean(verifiedBookingLink),
+      const message = await timed('finalize_message', () =>
+        this.finalizeMessage(
+          run,
+          preflight,
+          event.channel,
+          body,
+          Boolean(verifiedBookingLink),
+        ),
       );
       run.status =
         run.mode === 'draft' ? 'drafted' : 'response_queued';
       run.lockedAt = null;
       run.lockedBy = null;
-      await this.runs.save(run);
-      await this.audit.recordSystem(run.leadId, 'ai_response_prepared', {
-        runId: run.id,
-        messageId: message.id,
-        mode: run.mode,
-        status: message.status,
-        confidence: run.confidence,
-        requestedTools: run.requestedTools.map((item: any) => item.name),
-        executedTools: run.executedTools.map((item: any) => item.name),
-      });
+      await timed('queue_outcome_save', () => this.runs.save(run));
+      await timed('audit_response_prepared', () =>
+        this.audit.recordSystem(run.leadId, 'ai_response_prepared', {
+          runId: run.id,
+          messageId: message.id,
+          mode: run.mode,
+          status: message.status,
+          confidence: run.confidence,
+          requestedTools: run.requestedTools.map((item: any) => item.name),
+          executedTools: run.executedTools.map((item: any) => item.name),
+        }),
+      );
       if (run.mode === 'draft') {
         await this.notifications.createForTenant({
           tenantId: run.tenantId,
