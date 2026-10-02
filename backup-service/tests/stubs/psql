@@ -1,0 +1,96 @@
+#!/bin/sh
+# Test stub for `psql`. Interprets a small set of SQL shapes used by
+# restore.sh and logs every invocation to $STUB_LOG for assertions.
+# Controlled via env: STUB_LOG (required), STUB_CREATE_FAIL,
+# STUB_PSQL_CANDIDATES (";" separated datnames), STUB_REGISTRY_ACTIVE_DBS
+# (";" separated dbnames), STUB_MISSING_TABLES (";" separated),
+# STUB_TENANT_MISSING, STUB_TENANT_LEADS, STUB_REGISTRY_QUERY_FAIL.
+set -eu
+[ -n "${STUB_LOG:-}" ] || { echo "stub psql: STUB_LOG not set" >&2; exit 99; }
+echo "PSQL ARGS: $*" >> "$STUB_LOG"
+
+SQL=""
+SQLFILE=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-c" ]; then SQL="$a"; fi
+  if [ "$prev" = "-f" ]; then SQLFILE="$a"; fi
+  prev="$a"
+done
+
+if [ -n "$SQLFILE" ]; then
+  echo "PSQL FILE CONTENT:" >> "$STUB_LOG"
+  cat "$SQLFILE" >> "$STUB_LOG"
+  echo "END PSQL FILE" >> "$STUB_LOG"
+  exit 0
+fi
+
+echo "PSQL SQL: $SQL" >> "$STUB_LOG"
+
+case "$SQL" in
+  *"CREATE DATABASE"*)
+    if [ "${STUB_CREATE_FAIL:-0}" = "1" ]; then
+      echo "stub: CREATE DATABASE failed" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  *"DROP DATABASE"*)
+    exit 0
+    ;;
+  *"pg_advisory_lock"*)
+    echo "t"
+    exit 0
+    ;;
+  *"pg_advisory_unlock"*)
+    echo "t"
+    exit 0
+    ;;
+  *"FROM pg_database"*)
+    printf '%s' "${STUB_PSQL_CANDIDATES:-}" | tr ';' '\n'
+    exit 0
+    ;;
+  *"FROM rta_restore_runs"*)
+    if [ "${STUB_REGISTRY_QUERY_FAIL:-0}" = "1" ]; then
+      echo "stub: registry query failed" >&2
+      exit 1
+    fi
+    db=$(printf '%s' "$SQL" | sed -n "s/.*dbname *= *'\([^']*\)'.*/\1/p")
+    case ";${STUB_REGISTRY_ACTIVE_DBS:-};" in
+      *";$db;"*) echo "1" ;;
+      *) echo "0" ;;
+    esac
+    exit 0
+    ;;
+  *"CREATE TABLE IF NOT EXISTS rta_restore_runs"*|*"INSERT INTO rta_restore_runs"*|*"DELETE FROM rta_restore_runs"*)
+    exit 0
+    ;;
+  *"SELECT name FROM tenants"*)
+    if [ "${STUB_TENANT_MISSING:-0}" = "1" ]; then
+      echo ""
+    else
+      echo "Test Tenant"
+    fi
+    exit 0
+    ;;
+  *"SELECT count(*) FROM "*)
+    tbl=$(printf '%s' "$SQL" | sed -n 's/.*SELECT count(\*) FROM \([a-z_]*\).*/\1/p')
+    case ";${STUB_MISSING_TABLES:-};" in
+      *";$tbl;"*)
+        echo "stub: relation \"$tbl\" does not exist" >&2
+        exit 1
+        ;;
+    esac
+    case "$SQL" in
+      *"FROM leads WHERE tenant_id"*) echo "${STUB_TENANT_LEADS:-3}" ;;
+      *"FROM messages WHERE"*) echo "5" ;;
+      *"FROM lead_consent_records WHERE"*) echo "2" ;;
+      *"FROM audit_logs"*) echo "10" ;;
+      *) echo "1" ;;
+    esac
+    exit 0
+    ;;
+esac
+
+echo "stub psql: unhandled SQL: $SQL" >&2
+exit 3

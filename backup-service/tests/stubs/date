@@ -1,0 +1,27 @@
+#!/bin/sh
+# Test stub for `date`, used ONLY by the RPO test (t5).
+# Calls of the form `date [+/-u] +%s` (no -d) return a controlled clock:
+#   first call  -> $FAKE_START_EPOCH
+#   later calls -> $FAKE_START_EPOCH + 600   (simulates a 10-minute restore)
+# Everything else passes through to the real /bin/date.
+set -eu
+[ -n "${FAKE_DATE_STATE:-}" ] || { echo "stub date: FAKE_DATE_STATE not set" >&2; exit 99; }
+has_d=0
+has_s=0
+for a in "$@"; do
+  [ "$a" = "-d" ] && has_d=1
+  case "$a" in
+    *"+%s"*) has_s=1 ;;
+  esac
+done
+if [ "$has_d" = "0" ] && [ "$has_s" = "1" ]; then
+  n=$(cat "$FAKE_DATE_STATE" 2>/dev/null || echo 0)
+  echo $((n + 1)) > "$FAKE_DATE_STATE"
+  if [ "$n" = "0" ]; then
+    echo "$FAKE_START_EPOCH"
+  else
+    echo $((FAKE_START_EPOCH + 600))
+  fi
+  exit 0
+fi
+exec /bin/date "$@"

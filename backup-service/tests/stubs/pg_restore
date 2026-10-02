@@ -1,0 +1,10 @@
+#!/bin/sh
+# Test stub for `pg_restore`. Controlled via STUB_PGRESTORE_FAIL.
+set -eu
+[ -n "${STUB_LOG:-}" ] || { echo "stub pg_restore: STUB_LOG not set" >&2; exit 99; }
+echo "PGRESTORE ARGS: $*" >> "$STUB_LOG"
+if [ "${STUB_PGRESTORE_FAIL:-0}" = "1" ]; then
+  echo "stub: pg_restore: FATAL: could not restore (simulated)" >&2
+  exit 1
+fi
+exit 0
