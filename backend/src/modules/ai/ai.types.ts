@@ -47,6 +47,18 @@ export type AiProviderInput = {
   firstAiResponse: boolean;
   lead: Record<string, unknown>;
   conversationSummary: string | null;
+  /**
+   * The exact inbound message that triggered this run. Judge its business
+   * intent by its own content; test scaffolding in the lead name, source
+   * labels, or older messages never changes what this message means.
+   */
+  triggeringMessage: {
+    direction: 'inbound' | 'outbound';
+    channel: 'sms' | 'email';
+    body: string;
+    authorship: string;
+    createdAt: string;
+  } | null;
   recentMessages: Array<{
     direction: 'inbound' | 'outbound';
     channel: 'sms' | 'email';

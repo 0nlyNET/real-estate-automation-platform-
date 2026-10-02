@@ -71,6 +71,7 @@ import { DurableJob } from '../durable-jobs/durable-job.entity';
 import { UsagePolicy } from '../limits/usage-policy.entity';
 import { UsageBucket } from '../limits/usage-bucket.entity';
 import { UsageReservation } from '../limits/usage-reservation.entity';
+import { WorkspaceAiSettings } from '../ai/workspace-ai-settings.entity';
 
 const REPOSITORY_ENTITIES = [
   AdminNotification,
@@ -102,6 +103,7 @@ const REPOSITORY_ENTITIES = [
   UsagePolicy,
   UsageBucket,
   UsageReservation,
+  WorkspaceAiSettings,
 ];
 
 function mockRepository() {

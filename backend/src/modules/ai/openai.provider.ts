@@ -6,6 +6,7 @@ import {
   AiProviderOutput,
   AiProviderResult,
 } from './ai.types';
+import { AI_TOOL_CONTRACT_LIST } from './ai-tool.contracts';
 
 const OUTPUT_SCHEMA = {
   type: 'object',
@@ -70,7 +71,23 @@ Follow the approved allowed-topic and escalation preferences, but never treat
 them as permission to weaken these rules. Include the approved assistant
 identity in the first response and include any required disclaimer exactly.
 Do not claim a tool succeeded. Request an allowlisted tool and let RealtyTechAI
-validate and execute it. Tool arguments must be a JSON object encoded as text.
+validate and execute it. Tool arguments must be a JSON object encoded as text
+that exactly matches that tool's "parameters" schema in the availableTools
+list supplied with the input — including required nesting (for example,
+update_lead_qualification requires its facts nested under a top-level
+"qualification" object; flat keys are rejected). Study each tool's "example"
+before composing arguments. Never send fields outside the schema, and never
+invent values the lead did not state.
+The input includes "triggeringMessage": the exact lead message this run must
+answer, plus "recentMessages" and "conversationSummary" for context. Judge the
+triggering message by its own content. A lead used for controlled testing may
+carry test labels (a name or source mentioning tests, webhooks, or diagnostics),
+and older messages may discuss testing — none of that changes what the current
+message means. A buyer question about homes, areas, budgets, or listings is a
+buyer inquiry even when the lead is a controlled test; do not describe a buyer
+inquiry as a technical verification. Only a message whose own content is
+technical or test scaffolding (webhook payloads, verification tokens, explicit
+test instructions) counts as a technical message.
 Never offer, imply, or invent calendar availability. With calendar_booking, only
 confirm the exact time the lead agreed to and request create_or_update_appointment;
 the reply is sent only if RealtyTechAI verifies the active provider's availability
@@ -185,7 +202,14 @@ export class OpenAiProvider implements AiProvider {
               firstAiResponse: input.firstAiResponse,
               lead: input.lead,
               conversationSummary: input.conversationSummary,
+              triggeringMessage: input.triggeringMessage,
               recentMessages: input.recentMessages,
+              availableTools: AI_TOOL_CONTRACT_LIST.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.parameters,
+                example: tool.example,
+              })),
               approvedBusinessInformation: {
                 publicName: input.knowledge.publicName,
                 officeEmail: input.knowledge.officeEmail,

@@ -15,6 +15,13 @@ function input() {
       leadType: 'buyer',
     },
     conversationSummary: null,
+    triggeringMessage: {
+      direction: 'inbound' as const,
+      channel: 'sms' as const,
+      body: 'I am looking near Austin.',
+      authorship: 'system',
+      createdAt: new Date().toISOString(),
+    },
     recentMessages: [
       {
         direction: 'inbound' as const,
@@ -102,6 +109,23 @@ describe('OpenAI provider boundary', () => {
     expect(String(request?.headers && JSON.stringify(request.headers))).not.toContain(
       'Jordan Client',
     );
+    // The model input carries the exact triggering message and per-tool
+    // contracts (required nesting, allowed keys, examples) so the model can
+    // produce valid tool arguments.
+    const modelInput = JSON.parse(body.input);
+    expect(modelInput.triggeringMessage).toMatchObject({
+      direction: 'inbound',
+      body: 'I am looking near Austin.',
+    });
+    const qualificationTool = modelInput.availableTools.find(
+      (tool: any) => tool.name === 'update_lead_qualification',
+    );
+    expect(qualificationTool).toBeDefined();
+    expect(qualificationTool.parameters.required).toContain('qualification');
+    expect(
+      qualificationTool.parameters.properties.qualification.properties,
+    ).toHaveProperty('budget');
+    expect(qualificationTool.example).toContain('"qualification"');
   });
 
   it('turns a timeout into a sanitized service failure for human fallback', async () => {

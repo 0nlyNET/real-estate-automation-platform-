@@ -35,6 +35,7 @@ import {
 } from '../calendar/booking-provider.types';
 import { TenantWebhookSubscription } from '../crm-events/tenant-webhook-subscription.entity';
 import { OperationalEventsService } from '../notifications/operational-events.service';
+import { WorkspaceAiSettings } from '../ai/workspace-ai-settings.entity';
 
 type ReadinessCategory =
   | 'client_information'
@@ -160,6 +161,9 @@ export class OnboardingService {
     @InjectRepository(TenantWebhookSubscription)
     private readonly crmSubscriptions?: Repository<TenantWebhookSubscription>,
     @Optional() private readonly operationalEvents?: OperationalEventsService,
+    @Optional()
+    @InjectRepository(WorkspaceAiSettings)
+    private readonly workspaceAiSettings?: Repository<WorkspaceAiSettings>,
   ) {}
 
   /**
@@ -608,13 +612,7 @@ export class OnboardingService {
       'provider_rejection',
       evidence.providerRejection,
     );
-    if (evidence.outboundDelivered && !record.testLeadCompletedAt) {
-      record.testLeadCompletedAt = now;
-      verifiedItems.test_lead = {
-        verifiedAt: now.toISOString(),
-        verifiedBy: 'system:provider_callback',
-        testRunId: run.id,
-      };
+    if (evidence.outboundDelivered) {
       run.checks = { ...run.checks, outbound: 'delivered' };
       record.providerTests = {
         ...(record.providerTests || {}),
@@ -649,28 +647,25 @@ export class OnboardingService {
       changed = true;
     }
     const checks = run.checks as Record<string, unknown>;
-    // P1 FIX: A run must not be marked passed until the inbound-triggered AI
-    // reply is delivered (not just the inbound receipt). This prevents premature
-    // completion where the run closes before the AI even processes the reply.
-    const passed =
-      checks.outbound === 'delivered' &&
-      (!record.smsEnabled ||
-        (checks.inboundSms === 'passed' &&
-          checks.stop === 'passed' &&
-          checks.inboundSmsAiReplyDelivered === 'passed')) &&
-      (!record.emailEnabled ||
-        (checks.inboundEmail === 'passed' &&
-          checks.inboundEmailAiReplyDelivered === 'passed')) &&
-      (!record.bookingEnabled ||
-        (checks.calendarAvailability === 'passed' &&
-          checks.externalCalendarEvent === 'passed' &&
-          checks.internalAppointment === 'passed' &&
-          checks.agentNotification === 'passed' &&
-          checks.crmAppointmentEvent === 'passed' &&
-          checks.humanTakeover === 'passed'));
-    if (passed) {
+    // Shared completion invariant (see isTestRunComplete): the run passes
+    // only when the full required journey is proven, including the
+    // inbound-triggered AI reply delivery when the workspace's AI automation
+    // is enabled.
+    if (await this.isTestRunComplete(tenantId, record, checks)) {
       run.status = 'passed';
       run.completedAt = now;
+      record.testLeadCompletedAt = now;
+      verifiedItems.test_lead = {
+        verifiedAt: now.toISOString(),
+        verifiedBy: 'system:provider_callback',
+        testRunId: run.id,
+      };
+      record.providerTests = {
+        ...(record.providerTests || {}),
+        endToEndTestReference: `test-run:${run.id}`,
+        endToEndTestRecordedAt: now.toISOString(),
+      };
+      changed = true;
     }
     await this.testRuns.save(run);
     if (!changed) return record;
@@ -715,14 +710,10 @@ export class OnboardingService {
       ),
     };
     const checks = run.checks as Record<string, unknown>;
-    const passed =
-      checks.outbound === 'delivered' &&
-      (!record.smsEnabled ||
-        (checks.inboundSms === 'passed' && checks.stop === 'passed')) &&
-      (!record.emailEnabled || checks.inboundEmail === 'passed') &&
-      (!record.bookingEnabled ||
-        names.every((name) => checks[name] === 'passed'));
-    if (passed) {
+    // Shared completion invariant (see isTestRunComplete): appointment and
+    // takeover evidence alone can never mark the run passed while the
+    // inbound-triggered AI reply delivery is still pending.
+    if (await this.isTestRunComplete(tenantId, record, checks)) {
       const now = new Date();
       run.status = 'passed';
       run.completedAt = now;
@@ -750,6 +741,63 @@ export class OnboardingService {
     }
     await this.testRuns.save(run);
     return record;
+  }
+
+  /**
+   * P1 FIX: the single shared completion invariant for controlled test
+   * runs. Both recordAutomatedTestEvidence() and recordUatWorkflowEvidence()
+   * use it, so appointment/takeover evidence can never mark a run passed
+   * while the inbound-triggered AI reply delivery is still pending.
+   *
+   * AI-response evidence is required only when the workspace's AI automation
+   * is actually enabled (mirroring the AI preflight's WORKSPACE_AI_PAUSED
+   * condition: aiEnabled && !aiPaused && responseMode !== 'human_only').
+   * A legitimate non-AI workflow stays completable: when AI is disabled or
+   * paused, no AI reply will ever be delivered and the invariant does not
+   * demand one.
+   */
+  private async isTestRunComplete(
+    tenantId: string,
+    record: OnboardingRecord,
+    checks: Record<string, unknown>,
+  ): Promise<boolean> {
+    let aiRequired = true;
+    try {
+      const settings = await this.workspaceAiSettings?.findOne({
+        where: { tenantId },
+      });
+      aiRequired = Boolean(
+        settings?.aiEnabled &&
+          !settings?.aiPaused &&
+          settings?.responseMode !== 'human_only',
+      );
+    } catch {
+      // Fail closed: an unreadable AI configuration must not silently drop
+      // the AI-reply requirement.
+      aiRequired = true;
+    }
+    const bookingChecks = [
+      'calendarAvailability',
+      'externalCalendarEvent',
+      'internalAppointment',
+      'agentNotification',
+      'crmAppointmentEvent',
+      'humanTakeover',
+    ];
+    return (
+      checks.outbound === 'delivered' &&
+      (!record.smsEnabled ||
+        (checks.inboundSms === 'passed' &&
+          checks.stop === 'passed' &&
+          (!aiRequired ||
+            checks.inboundSmsAiReplyDelivered === 'passed'))) &&
+      (!record.emailEnabled ||
+        (checks.inboundEmail === 'passed' &&
+          (!aiRequired ||
+            checks.inboundEmailAiReplyDelivered === 'passed'))) &&
+      (!record.bookingEnabled ||
+        bookingChecks.every((name) => checks[name] === 'passed'))
+    );
   }
 
   /**

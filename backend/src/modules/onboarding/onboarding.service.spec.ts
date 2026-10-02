@@ -1347,3 +1347,165 @@ describe('operator consent review (Review → Approve / Reject)', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
+
+describe('P1 shared controlled-test completion invariant', () => {
+  function harness(options: {
+    aiEnabled?: boolean;
+    aiPaused?: boolean;
+    responseMode?: string;
+    smsEnabled?: boolean;
+    emailEnabled?: boolean;
+    bookingEnabled?: boolean;
+    initialChecks?: Record<string, unknown>;
+  }) {
+    const {
+      aiEnabled = true,
+      aiPaused = false,
+      responseMode = 'controlled_autopilot',
+      smsEnabled = false,
+      emailEnabled = true,
+      bookingEnabled = true,
+      initialChecks = { outbound: 'delivered', inboundEmail: 'passed' },
+    } = options;
+    const record = Object.assign(new OnboardingRecord(), {
+      tenantId: 'tenant-1',
+      smsEnabled,
+      emailEnabled,
+      bookingEnabled,
+      verifiedItems: {},
+      providerTests: {},
+      testLeadCompletedAt: null,
+    });
+    const run: any = {
+      id: 'test-run-1',
+      tenantId: 'tenant-1',
+      status: 'running',
+      expiresAt: new Date(Date.now() + 60_000),
+      checks: { ...initialChecks },
+      completedAt: null,
+      failureReason: null,
+    };
+    const records = {
+      findOne: jest.fn().mockResolvedValue(record),
+      save: jest.fn(async (value) => value),
+    };
+    const testRuns = {
+      findOne: jest.fn().mockImplementation(async ({ where }) =>
+        run.status === where.status ? run : null,
+      ),
+      save: jest.fn(async (value) => value),
+    };
+    const workspaceAiSettings = {
+      findOne: jest.fn().mockResolvedValue({
+        tenantId: 'tenant-1',
+        aiEnabled,
+        aiPaused,
+        responseMode,
+      }),
+    };
+    const service = new OnboardingService(
+      records as any,
+      {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'tenant-1',
+          lifecycleStatus: 'TESTING',
+        }),
+      } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      testRuns as any,
+      undefined,
+      undefined,
+      undefined,
+      workspaceAiSettings as any,
+    );
+    return { service, record, run, records, testRuns };
+  }
+
+  const allBookingEvidence = {
+    calendarAvailability: true,
+    externalCalendarEvent: true,
+    internalAppointment: true,
+    agentNotification: true,
+    crmAppointmentEvent: true,
+    humanTakeover: true,
+  };
+
+  it('does not pass on appointment/takeover evidence while the AI reply is pending', async () => {
+    const { service, run, record } = harness({});
+    await service.recordUatWorkflowEvidence('tenant-1', run.id, allBookingEvidence);
+    expect(run.status).toBe('running');
+    expect(record.testLeadCompletedAt).toBeNull();
+    expect(record.verifiedItems).not.toHaveProperty('appointment_uat');
+  });
+
+  it('passes through recordUatWorkflowEvidence once the AI reply delivery arrives', async () => {
+    const { service, run, record } = harness({});
+    await service.recordUatWorkflowEvidence('tenant-1', run.id, allBookingEvidence);
+    expect(run.status).toBe('running');
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundEmailAiReplyDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run).toMatchObject({ status: 'passed', completedAt: expect.any(Date) });
+    expect(record.testLeadCompletedAt).toBeInstanceOf(Date);
+  });
+
+  it('recordAutomatedTestEvidence also requires the AI reply when AI is enabled', async () => {
+    const { service, run } = harness({
+      bookingEnabled: false,
+      initialChecks: { outbound: 'delivered', inboundEmail: 'passed' },
+    });
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      outboundDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run.status).toBe('running');
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundEmailAiReplyDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run.status).toBe('passed');
+  });
+
+  it('lets a legitimate non-AI workflow complete without AI reply evidence', async () => {
+    const { service, run, record } = harness({ aiEnabled: false });
+    await service.recordUatWorkflowEvidence('tenant-1', run.id, allBookingEvidence);
+    expect(run).toMatchObject({ status: 'passed', completedAt: expect.any(Date) });
+    expect(record.testLeadCompletedAt).toBeInstanceOf(Date);
+  });
+
+  it('lets a paused-AI workflow complete without AI reply evidence', async () => {
+    const { service, run } = harness({ aiPaused: true });
+    await service.recordUatWorkflowEvidence('tenant-1', run.id, allBookingEvidence);
+    expect(run.status).toBe('passed');
+  });
+
+  it('keeps testLeadCompletedAt unset until the full journey passes', async () => {
+    const { service, run, record } = harness({
+      bookingEnabled: false,
+      initialChecks: {},
+    });
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      outboundDelivered: true,
+      inboundEmail: true,
+      testRunId: run.id,
+    });
+    expect(run.status).toBe('running');
+    expect(record.testLeadCompletedAt).toBeNull();
+    await service.recordAutomatedTestEvidence('tenant-1', {
+      inboundEmailAiReplyDelivered: true,
+      testRunId: run.id,
+    });
+    expect(run.status).toBe('passed');
+    expect(record.testLeadCompletedAt).toBeInstanceOf(Date);
+  });
+});
