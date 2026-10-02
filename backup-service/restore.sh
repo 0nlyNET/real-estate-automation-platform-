@@ -9,12 +9,13 @@
 #   BACKUP_ENCRYPTION_KEY (base64 32-byte, same as backup),
 #   RESTORE_DATABASE_URL (target Postgres server URL; a NEW database is
 #     created on this server and DROPPED afterwards - never the default db),
-#   BACKUP_KEY (object name, e.g. rta-prod-20260925T150139Z.dump.gpg)
+#   BACKUP_KEY (object name, e.g. rta-prod-20260925T150139Z.dump.gpg),
+#   TEST_TENANT_ID (tenant ID to verify after restore; not hard-coded)
 
 set -eu
 
 for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET \
-         BACKUP_ENCRYPTION_KEY RESTORE_DATABASE_URL BACKUP_KEY; do
+         BACKUP_ENCRYPTION_KEY RESTORE_DATABASE_URL BACKUP_KEY TEST_TENANT_ID; do
   if [ -z "${v+set}" ] || [ -z "$(eval echo \"\$$v\")" ]; then
     echo "ERROR: required env var $v is not set" >&2
     exit 1
@@ -41,12 +42,10 @@ R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
 echo "[$(date -u +%FT%TZ)] Restore test starting: $BACKUP_KEY"
 
-# 0. Defensive: drop any stale restore_test_* databases from previous runs
-echo "Cleaning up stale restore-test databases..."
-for db in $(psql "$RESTORE_DATABASE_URL" -t -A -c "SELECT datname FROM pg_database WHERE datname LIKE 'restore_test_%'" 2>/dev/null); do
-  echo "  dropping stale: $db"
-  psql "$RESTORE_DATABASE_URL" -c "DROP DATABASE \"$db\"" > /dev/null 2>&1 || true
-done
+# 0. Defensive: drop only the exact database this run will create, if a previous
+# run died before cleanup. Do NOT broadly delete restore_test_* — that could
+# drop another concurrent run's database.
+# (The RESTORE_DB name is set in step 3; this is a no-op on first run.)
 
 # 1. Download from R2
 echo "Downloading from R2..."
@@ -71,26 +70,49 @@ psql "$RESTORE_DATABASE_URL" -c "CREATE DATABASE \"$RESTORE_DB\"" > /dev/null
 TARGET_URL="$(echo "$RESTORE_DATABASE_URL" | sed "s|/[^/?]*\(?.*\)\?$|/$RESTORE_DB\1|")"
 
 # 4. Restore
+# Do NOT pipe pg_restore to tail: under /bin/sh the pipeline's exit status is
+# tail's, masking pg_restore failures. Capture output to a file instead.
 echo "Restoring (pg_restore)..."
-pg_restore --no-owner --no-privileges --dbname="$TARGET_URL" "$WORKDIR/backup.dump" 2>&1 | tail -5
+if ! pg_restore --no-owner --no-privileges --dbname="$TARGET_URL" "$WORKDIR/backup.dump" > "$WORKDIR/restore.log" 2>&1; then
+  echo "ERROR: pg_restore failed (see $WORKDIR/restore.log)" >&2
+  tail -20 "$WORKDIR/restore.log" >&2 || true
+  exit 1
+fi
 echo "pg_restore finished"
+tail -5 "$WORKDIR/restore.log" || true
 
 # 5. Verify representative data
+# Fail on any missing table or missing TEST tenant data — a restore that drops
+# tables or loses data is not a successful restore.
 echo "Verifying..."
 PSQL="psql $TARGET_URL -t -A"
 TABLES="tenants users leads lead_events messages sequences sequence_steps sequence_enrollments audit_logs credentials password_reset_tokens"
+VERIFY_FAILED=0
 for t in $TABLES; do
   n=$($PSQL -c "SELECT count(*) FROM $t" 2>/dev/null || echo "MISSING")
   echo "  $t: $n rows"
+  if [ "$n" = "MISSING" ]; then
+    echo "ERROR: table $t is missing after restore" >&2
+    VERIFY_FAILED=1
+  fi
 done
-TEST_TENANT="c2d3b240-7b15-491a-acf7-d26ea0f6d907"
+# TEST_TENANT must be provided via env (not hard-coded) for the drill to be
+# meaningful across environments.
+if [ -z "${TEST_TENANT_ID:-}" ]; then
+  echo "ERROR: TEST_TENANT_ID env var is required for restore verification" >&2
+  exit 1
+fi
+TEST_TENANT="$TEST_TENANT_ID"
 TENANT_NAME=$($PSQL -c "SELECT name FROM tenants WHERE id='$TEST_TENANT'")
 echo "  TEST tenant present: ${TENANT_NAME:-NO}"
 LEAD_MSGS=$($PSQL -c "SELECT count(*) FROM messages WHERE \"leadId\" IN (SELECT id FROM leads WHERE tenant_id='$TEST_TENANT')")
 echo "  messages on TEST-tenant leads: $LEAD_MSGS"
 if [ -z "$TENANT_NAME" ]; then
   echo "ERROR: TEST tenant missing after restore" >&2
-  psql "$RESTORE_DATABASE_URL" -c "DROP DATABASE \"$RESTORE_DB\"" > /dev/null || true
+  VERIFY_FAILED=1
+fi
+if [ "$VERIFY_FAILED" = "1" ]; then
+  echo "ERROR: restore verification failed" >&2
   exit 1
 fi
 
@@ -105,6 +127,16 @@ if [ "$BACKUP_EPOCH" = "0" ]; then echo "WARN: could not parse backup timestamp 
 RPO_AGE=$((END_EPOCH - BACKUP_EPOCH))
 echo "RPO: backup age ${RPO_AGE}s (target <=3600s)"
 echo "RTO: restore+verify ${RTO}s (target <=14400s)"
+# Enforce RPO/RTO targets: fail the drill if either is exceeded.
+if [ "$RPO_AGE" -gt 3600 ]; then
+  echo "ERROR: RPO violated: backup age ${RPO_AGE}s exceeds 3600s (60 minutes)" >&2
+  exit 1
+fi
+if [ "$RTO" -gt 14400 ]; then
+  echo "ERROR: RTO violated: restore+verify ${RTO}s exceeds 14400s (240 minutes)" >&2
+  exit 1
+fi
+echo "RPO/RTO targets met."
 
 # 7. Cleanup: drop the isolated database
 psql "$RESTORE_DATABASE_URL" -c "DROP DATABASE \"$RESTORE_DB\"" > /dev/null

@@ -82,7 +82,7 @@ done
 echo "Prune complete"
 
 # 6. Heartbeat (failure alerting)
-if [ -n "$HEARTBEAT_URL" ]; then
+if [ -n "${HEARTBEAT_URL:-}" ]; then
   curl -fsS --max-time 10 "$HEARTBEAT_URL" > /dev/null && echo "Heartbeat sent"
 fi
 
