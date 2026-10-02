@@ -929,6 +929,19 @@ export class AiConversationService
         knowledge: preflight.knowledge,
         settings: preflight.settings,
       }));
+      // DIAGNOSTIC: Log result shape to identify null/undefined issues
+      this.logger.log(
+        JSON.stringify({
+          event: 'PROVIDER_RESULT_SHAPE',
+          runId: run.id,
+          hasResult: !!result,
+          hasReply: !!result?.reply,
+          replyType: typeof result?.reply,
+          classification: result?.classification,
+          hasEscalation: !!result?.escalationReason,
+          actionsCount: Array.isArray(result?.actions) ? result.actions.length : 'not-array',
+        }),
+      );
       run.provider = result.provider;
       run.model = result.model;
       run.confidence = result.confidence;
