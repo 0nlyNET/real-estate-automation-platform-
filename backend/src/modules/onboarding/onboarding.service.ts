@@ -755,27 +755,53 @@ export class OnboardingService {
    * A legitimate non-AI workflow stays completable: when AI is disabled or
    * paused, no AI reply will ever be delivered and the invariant does not
    * demand one.
+   *
+   * Channel eligibility: inbound/stop delivery evidence is required per
+   * channel the workspace enabled on its onboarding record (smsEnabled /
+   * emailEnabled). AI-reply evidence is required per ENABLED, AI-approved
+   * channel: AI automation must be active AND the channel must be in the
+   * workspace AI settings' allowedChannels, using the AI preflight's
+   * default-channel behavior (an empty/missing allowedChannels list means
+   * AI is approved for both sms and email). An email-only workspace
+   * therefore never requires impossible SMS proof, and an email-only AI
+   * approval never requires an SMS AI reply.
+   *
+   * Fail closed: an unreadable or missing AI configuration must not mark
+   * the run complete.
    */
   private async isTestRunComplete(
     tenantId: string,
     record: OnboardingRecord,
     checks: Record<string, unknown>,
   ): Promise<boolean> {
-    let aiRequired = true;
+    let settings: WorkspaceAiSettings | null | undefined;
     try {
-      const settings = await this.workspaceAiSettings?.findOne({
+      settings = await this.workspaceAiSettings?.findOne({
         where: { tenantId },
       });
-      aiRequired = Boolean(
-        settings?.aiEnabled &&
-          !settings?.aiPaused &&
-          settings?.responseMode !== 'human_only',
-      );
     } catch {
-      // Fail closed: an unreadable AI configuration must not silently drop
-      // the AI-reply requirement.
-      aiRequired = true;
+      // Fail closed: an unreadable AI configuration must not silently mark
+      // the run complete.
+      return false;
     }
+    if (!settings) {
+      // Fail closed: a missing AI configuration must not mark the run
+      // complete.
+      return false;
+    }
+    const aiAutomationActive = Boolean(
+      settings.aiEnabled &&
+        !settings.aiPaused &&
+        settings.responseMode !== 'human_only',
+    );
+    // Mirrors the AI preflight's default-channel behavior: an empty or
+    // missing allowedChannels list means AI is approved for both channels.
+    const allowedChannels: ReadonlyArray<'sms' | 'email'> =
+      settings.allowedChannels?.length
+        ? settings.allowedChannels
+        : ['sms', 'email'];
+    const aiReplyRequiredFor = (channel: 'sms' | 'email'): boolean =>
+      aiAutomationActive && allowedChannels.includes(channel);
     const bookingChecks = [
       'calendarAvailability',
       'externalCalendarEvent',
@@ -789,11 +815,11 @@ export class OnboardingService {
       (!record.smsEnabled ||
         (checks.inboundSms === 'passed' &&
           checks.stop === 'passed' &&
-          (!aiRequired ||
+          (!aiReplyRequiredFor('sms') ||
             checks.inboundSmsAiReplyDelivered === 'passed'))) &&
       (!record.emailEnabled ||
         (checks.inboundEmail === 'passed' &&
-          (!aiRequired ||
+          (!aiReplyRequiredFor('email') ||
             checks.inboundEmailAiReplyDelivered === 'passed'))) &&
       (!record.bookingEnabled ||
         bookingChecks.every((name) => checks[name] === 'passed'))

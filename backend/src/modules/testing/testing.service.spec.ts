@@ -741,3 +741,89 @@ describe('TestingService diagnostics', () => {
     expect(run.failureReason).toBe('aborted_by_operator');
   });
 });
+
+describe('TestingService tenant isolation', () => {
+  function isolatedRunsHarness() {
+    const dbRuns: any[] = [
+      { id: 'run-a-active', tenantId: 'tenant-a', status: 'running', testLeadId: 'lead-a', failureReason: null, completedAt: null },
+      { id: 'run-a-old', tenantId: 'tenant-a', status: 'expired', testLeadId: 'lead-a-old', failureReason: 'old', completedAt: new Date() },
+      { id: 'run-b-active', tenantId: 'tenant-b', status: 'running', testLeadId: 'lead-b', failureReason: null, completedAt: null },
+    ];
+    const runs = {
+      // Tenant-scoped lookup: mirrors the real repository contract where
+      // { id, tenantId } must both match.
+      findOne: jest.fn(async ({ where }: any) =>
+        dbRuns.find(
+          (r) =>
+            (!where.id || r.id === where.id) &&
+            (!where.tenantId || r.tenantId === where.tenantId) &&
+            (!where.status || r.status === where.status),
+        ) || null,
+      ),
+      save: jest.fn(async (value: any) => value),
+    };
+    return { dbRuns, runs };
+  }
+
+  function isolatedService(runs: any, messages?: any) {
+    return new TestingService(
+      runs as any,
+      {} as any,
+      { count: jest.fn().mockResolvedValue(0) } as any,
+      (messages || { find: jest.fn().mockResolvedValue([]), save: jest.fn(async (v: any) => v) }) as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+  }
+
+  it('getActiveRun returns only the requesting tenant\'s running run', async () => {
+    const { runs } = isolatedRunsHarness();
+    const service = isolatedService(runs);
+    const a = await service.getActiveRun('tenant-a');
+    const b = await service.getActiveRun('tenant-b');
+    expect(a).toMatchObject({ testRunId: 'run-a-active', tenantId: 'tenant-a', status: 'running', leadId: 'lead-a' });
+    expect(b).toMatchObject({ testRunId: 'run-b-active', tenantId: 'tenant-b', status: 'running', leadId: 'lead-b' });
+  });
+
+  it('getActiveRun never surfaces a cached terminal run as active', async () => {
+    const { runs } = isolatedRunsHarness();
+    // Expire tenant-b's only running run: refresh must show no active run,
+    // not the terminal one.
+    const service = isolatedService(runs);
+    await service.abortTestRun('tenant-b', 'run-b-active', 'operator abort');
+    const after = await service.getActiveRun('tenant-b');
+    expect(after.testRunId).toBeNull();
+    expect(after.status).toBeNull();
+  });
+
+  it('abortTestRun rejects a run id belonging to another tenant', async () => {
+    const { runs } = isolatedRunsHarness();
+    const messages = { find: jest.fn(), save: jest.fn() };
+    const service = isolatedService(runs, messages);
+    await expect(service.abortTestRun('tenant-a', 'run-b-active', 'cross-tenant abort')).rejects.toThrow();
+    // No state was touched: no messages queried, nothing saved.
+    expect(messages.find).not.toHaveBeenCalled();
+    expect(runs.save).not.toHaveBeenCalled();
+  });
+
+  it('aborting tenant A never cancels tenant B messages', async () => {
+    const { dbRuns, runs } = isolatedRunsHarness();
+    const msgA = { id: 'msg-a', status: 'queued', direction: 'outbound' };
+    const msgB = { id: 'msg-b', status: 'queued', direction: 'outbound' };
+    const messages = {
+      // Lead-scoped message lookup: the abort path only ever queries the
+      // aborted run's own test lead.
+      find: jest.fn(async ({ where }: any) =>
+        where.leadId === 'lead-a' ? [msgA] : where.leadId === 'lead-b' ? [msgB] : [],
+      ),
+      save: jest.fn(async (value: any) => value),
+    };
+    const service = isolatedService(runs, messages);
+    const result = await service.abortTestRun('tenant-a', 'run-a-active', 'operator abort');
+    expect(result.canceledMessages).toEqual(['msg-a']);
+    expect(msgA.status).toBe('canceled');
+    expect(msgB.status).toBe('queued');
+    expect(dbRuns.find((r) => r.id === 'run-b-active')!.status).toBe('running');
+  });
+});
