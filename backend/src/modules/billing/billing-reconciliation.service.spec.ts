@@ -45,9 +45,19 @@ describe('Stripe reconciliation uses the canonical payment verifier', () => {
     expect(h.tenants.updateBilling).not.toHaveBeenCalled();
   });
 
-  it('does not call Stripe before a customer is created', async () => {
+  it('falls back to metadata search when no customer mapping exists', async () => {
     const h = setup(); h.tenant.stripeCustomerId = null;
+    h.list.mockResolvedValue({ data: [], has_more: false });
     await expect(h.service.reconcileTenant(h.tenant.id)).resolves.toMatchObject({ reconciled: false });
-    expect(h.list).not.toHaveBeenCalled();
+    expect(h.list).toHaveBeenCalledWith(expect.objectContaining({ status: 'all', limit: 100 }));
+    expect(h.billing.reconcileSubscription).not.toHaveBeenCalled();
+  });
+
+  it('reconciles via metadata match when the customer mapping is missing', async () => {
+    const h = setup(); h.tenant.stripeCustomerId = null;
+    const subscription = { id: 'sub_meta', status: 'active', created: 3, metadata: { tenantId: 'tenant-1' } };
+    h.list.mockResolvedValue({ data: [subscription], has_more: false });
+    await expect(h.service.reconcileTenant(h.tenant.id)).resolves.toMatchObject({ reconciled: true });
+    expect(h.billing.reconcileSubscription).toHaveBeenCalledWith(subscription, 'tenant-1');
   });
 });
