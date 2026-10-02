@@ -80,9 +80,12 @@ for (const file of trackedFiles()) {
 }
 
 const historyFindings = [];
+// Scan only the current checkout's history (HEAD), not every ref. Scanning
+// --all would flag secrets in unrelated pull-request refs that will never
+// merge from this checkout, breaking every PR's CI for another PR's mistake.
 const history = execFileSync(
   'git',
-  ['log', '--all', '--format=commit:%H', '--no-ext-diff', '-p'],
+  ['log', 'HEAD', '--format=commit:%H', '--no-ext-diff', '-p'],
   { encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 },
 );
 let commit = 'unknown';
