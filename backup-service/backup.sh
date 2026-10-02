@@ -63,10 +63,14 @@ echo "Upload complete"
 aws --endpoint-url "$R2_ENDPOINT" s3api head-object --bucket "$R2_BUCKET" --key "$FILENAME" > /dev/null
 echo "Upload verified"
 
-# 5. Prune backups older than 7 days
+# 5. Prune backups older than 7 days (skipped when BACKUP_PRUNE_DISABLED=true,
+# e.g. during restore-drill investigations to preserve evidence)
 # Compute cutoff via epoch arithmetic: portable across GNU date, BSD date,
 # and busybox date (Alpine). Filenames are UTC YYYYMMDDTHHMMSSZ which sort
 # lexicographically in chronological order, so string comparison is safe.
+if [ "${BACKUP_PRUNE_DISABLED}" = "true" ]; then
+  echo "Prune skipped (BACKUP_PRUNE_DISABLED=true)"
+else
 echo "Pruning old backups..."
 CUTOFF_EPOCH=$(($(date -u +%s) - 7*24*3600))
 CUTOFF=$(date -u -d "@${CUTOFF_EPOCH}" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -r "$CUTOFF_EPOCH" +%Y%m%dT%H%M%SZ)
@@ -80,6 +84,7 @@ aws --endpoint-url "$R2_ENDPOINT" s3 ls "s3://${R2_BUCKET}/" | while read -r _ _
   fi
 done
 echo "Prune complete"
+fi
 
 # 6. Heartbeat (failure alerting)
 if [ -n "${HEARTBEAT_URL:-}" ]; then
