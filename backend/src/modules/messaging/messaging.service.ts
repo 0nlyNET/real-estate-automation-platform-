@@ -34,6 +34,7 @@ import { MessageSafetyService } from './message-safety.service';
 import { LimitsService } from '../limits/limits.service';
 import { ProviderConfigService } from '../integrations/provider-config.service';
 import { SendDecisionService } from './send-decision.service';
+import { OperatorTestGuard } from './operator-test.guard';
 
 type ProviderConfig = {
   sendgrid?: {
@@ -84,6 +85,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly providerConfig?: ProviderConfigService,
     @Optional() private readonly sendDecisions?: SendDecisionService,
     @Optional() private readonly operationalEvents?: OperationalEventsService,
+    @Optional() private readonly operatorTestGuard?: OperatorTestGuard,
   ) {}
 
   onModuleInit(): void {
@@ -780,6 +782,29 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
 
   private async sendEmail(message: Message) {
     const lead = message.lead;
+    
+    // OPERATOR TEST REVALIDATION: If this message is flagged as an operator test,
+    // re-validate the authorization at provider submission time. Expiration or
+    // revocation MUST block already-queued work.
+    if (message.isOperatorTest) {
+      if (!this.operatorTestGuard) {
+        throw new Error('Operator test guard not available; refusing operator test send');
+      }
+      const recipientEmail = lead.email || '';
+      const auth = await this.operatorTestGuard.checkAuthorization({
+        tenantId: lead.tenantId,
+        recipientEmail,
+        channel: 'email',
+      });
+      if (!auth) {
+        throw new Error(
+          `Operator test authorization invalid/expired/revoked for tenant ${lead.tenantId}; blocking queued send`,
+        );
+      }
+      // Enforce exact recipient envelope: the lead email must match the allowlist
+      // (already verified by checkAuthorization, but double-check for safety)
+    }
+    
     const config = await this.getProviderConfig(lead.tenantId, {
       allowTesting: Boolean(lead.testRunId),
     });

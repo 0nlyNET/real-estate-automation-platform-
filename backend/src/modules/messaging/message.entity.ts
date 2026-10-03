@@ -189,4 +189,7 @@ export class Message extends BaseEntity {
 
   @Column({ name: 'edited_at', type: 'timestamptz', nullable: true })
   editedAt?: Date | null;
+
+  @Column({ name: 'is_operator_test', type: 'boolean', default: false })
+  isOperatorTest: boolean;
 }
