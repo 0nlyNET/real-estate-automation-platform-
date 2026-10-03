@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { Credential } from '../settings/credential.entity';
@@ -8,6 +9,7 @@ import { LeadEvent } from '../leads/lead-event.entity';
 
 import { WebhooksController } from './webhooks.controller';
 import { WebhooksService } from './webhooks.service';
+import { DeliveryStatusPollService } from './delivery-status-poll.service';
 import { ComplianceModule } from '../compliance/compliance.module';
 import { SequencesModule } from '../sequences/sequences.module';
 import { LeadsModule } from '../leads/leads.module';
@@ -22,6 +24,7 @@ import { AiRun } from '../ai/ai-run.entity';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       Credential,
       Lead,
@@ -40,6 +43,6 @@ import { AiRun } from '../ai/ai-run.entity';
     OnboardingModule,
   ],
   controllers: [WebhooksController, TelephonyController],
-  providers: [WebhooksService],
+  providers: [WebhooksService, DeliveryStatusPollService],
 })
 export class WebhooksModule {}
