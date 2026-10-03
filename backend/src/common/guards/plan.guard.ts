@@ -3,6 +3,7 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  Optional,
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -23,7 +24,7 @@ export class ServiceAccessGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     @InjectRepository(Tenant) private readonly tenantRepo: Repository<Tenant>,
-    private readonly operatorTestGuard: OperatorTestGuard,
+    @Optional() private readonly operatorTestGuard?: OperatorTestGuard,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -54,13 +55,16 @@ export class ServiceAccessGuard implements CanActivate {
     // The guard checks if there's a valid authorization for this tenant.
     // Per-recipient allowlist is enforced at message send time.
     // billingEligible remains false; we record a distinct authorization.
-    const operatorTestAuth = await this.operatorTestGuard.checkTenantAuthorization(tenantId);
-    if (operatorTestAuth) {
-      // Mark the request so downstream code flags messages as operator tests
-      // DO NOT set billingEligible=true; keep it false and record distinct auth
-      req.isOperatorTest = true;
-      req.operatorTestAuthorizationId = operatorTestAuth.id;
-      return true;
+    // If the guard is not available (DI), fail closed — no operator test allowed.
+    if (this.operatorTestGuard) {
+      const operatorTestAuth = await this.operatorTestGuard.checkTenantAuthorization(tenantId);
+      if (operatorTestAuth) {
+        // Mark the request so downstream code flags messages as operator tests
+        // DO NOT set billingEligible=true; keep it false and record distinct auth
+        req.isOperatorTest = true;
+        req.operatorTestAuthorizationId = operatorTestAuth.id;
+        return true;
+      }
     }
 
     throw new ForbiddenException('This workspace is not available');
