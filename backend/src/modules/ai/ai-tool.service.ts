@@ -256,14 +256,23 @@ export class AiToolService {
       // test in a TESTING workspace are denied even though the run itself
       // was allowed.
       const testRunId =
-        (context.run.promptMetadata as any)?.testRunId ||
-        (context.lead as any)?.testRunId ||
+        context.run.promptMetadata?.testRunId ||
+        lead.testRunId ||
         null;
+      // Revalidate the grant already pinned by run preflight. A tool must not
+      // discover a new grant for an ordinary or previously queued run. Use the
+      // freshly loaded recipient so a changed lead cannot reuse its old grant.
+      const grantId = context.run.promptMetadata?.operatorTestGrantId;
       const entitlement = await this.entitlements.evaluate(
         context.run.tenantId,
         action,
         new Date(),
-        { controlledTest: Boolean(testRunId) },
+        {
+          controlledTest: Boolean(testRunId),
+          ...(context.channel === 'email' && typeof grantId === 'string' && grantId
+            ? { operatorTest: { grantId, recipientEmail: lead.email || '', channel: 'email' as const } }
+            : {}),
+        },
       );
       if (!entitlement.allowed) {
         throw new ForbiddenException({

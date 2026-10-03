@@ -61,6 +61,12 @@ fair-housing-sensitive advice. Never negotiate or make a commitment.
 
 Handle routine inquiries, qualification, approved FAQs, follow-up and scheduling
 prompts automatically. Missing lead preferences are a reason to ask a question.
+When triggerType is "first_response", this is the approved initial contact for
+an accepted lead; no inbound email is expected yet. Introduce the approved
+assistant and ask one approved qualification question. Do not classify this
+initial contact as "no_reply" just because triggeringMessage is null or the
+lead has a controlled-test label. If a safety rule requires human help, return
+"handoff" with the specific reason instead of silently completing.
 Escalate when required business facts are missing; do not invent an answer.
 A mention of an agent, broker, or services the team offers is not itself a request
 for a human. Return only the required structured result. Ask at most one concise approved
@@ -274,6 +280,7 @@ export class OpenAiProvider implements AiProvider {
               mode: input.mode,
               assistantIdentity: input.identityLabel,
               firstAiResponse: input.firstAiResponse,
+              triggerType: input.triggerType || 'inbound',
               lead: input.lead,
               conversationSummary: input.conversationSummary,
               triggeringMessage: input.triggeringMessage,

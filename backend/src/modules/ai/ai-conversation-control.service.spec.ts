@@ -277,6 +277,50 @@ describe('AI conversation ownership', () => {
       ),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(fixture.repositories.messages.find).not.toHaveBeenCalled();
+    expect(fixture.repositories.handoffs.findOne).not.toHaveBeenCalled();
+  });
+
+  it('exposes the scoped active handoff without changing human ownership', async () => {
+    const fixture = build();
+    fixture.state.ownershipStatus = 'human_handling';
+    fixture.repositories.handoffs.findOne.mockResolvedValue({
+      id: '00000000-0000-4000-8000-000000000050', status: 'opened',
+      reason: 'The team took over this conversation.',
+    });
+    const result = await fixture.service.getConversation(fixture.tenantId, fixture.lead.id,
+      { userId: fixture.userId, role: 'owner' });
+    expect(result.activeHandoff).toEqual({
+      id: '00000000-0000-4000-8000-000000000050', status: 'opened',
+      reason: 'The team took over this conversation.',
+    });
+    expect(result.ownershipStatus).toBe('human_handling');
+    expect(fixture.repositories.handoffs.findOne).toHaveBeenCalledWith({
+      where: { tenantId: fixture.tenantId, leadId: fixture.lead.id, status: expect.anything() },
+    });
+    expect(fixture.repositories.states.save).not.toHaveBeenCalled();
+  });
+
+  it('revalidates the existing email grant when returning a controlled conversation to AI', async () => {
+    const fixture = build();
+    process.env.OPENAI_API_KEY = 'configured-for-test';
+    fixture.lead.email = 'owned@example.test';
+    fixture.lead.testRunId = 'test-run-1';
+    fixture.state.ownershipStatus = 'human_handling';
+    fixture.repositories.messages.findOne.mockResolvedValue({ channel: 'email' } as any);
+    fixture.repositories.runs.findOne.mockResolvedValue({ promptMetadata: { operatorTestGrantId: 'grant-1' } } as any);
+    fixture.dependencies.entitlements.evaluate.mockImplementation(async (...args: any[]) => ({
+      allowed: args[3]?.operatorTest?.grantId === 'grant-1', reasons: ['Payment has not been confirmed by Stripe'],
+    }));
+    await expect(fixture.service.returnToAi(fixture.tenantId, fixture.lead.id,
+      { userId: fixture.userId, role: 'owner' }, true)).resolves.toMatchObject({ ownershipStatus: 'ai_handling' });
+    expect(fixture.dependencies.entitlements.evaluate).toHaveBeenLastCalledWith(fixture.tenantId,
+      'send_automated_email', expect.any(Date), { controlledTest: true,
+        operatorTest: { grantId: 'grant-1', recipientEmail: fixture.lead.email, channel: 'email' } });
+    fixture.repositories.runs.findOne.mockResolvedValue(null);
+    fixture.state.ownershipStatus = 'human_handling';
+    await expect(fixture.service.returnToAi(fixture.tenantId, fixture.lead.id,
+      { userId: fixture.userId, role: 'owner' }, true)).rejects.toThrow('Payment has not been confirmed');
+    expect(fixture.state.ownershipStatus).toBe('human_handling');
   });
 
   it('exposes the latest durable AI processing state for the conversation UI', async () => {

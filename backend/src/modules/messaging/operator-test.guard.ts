@@ -25,7 +25,7 @@ import { OperatorTestGrantUsage } from './operator-test-grant-usage.entity';
  * Quota semantics:
  * - Each (grant_id, message_id) reservation is UNIQUE.
  * - Retries reuse the same reservation; they do not consume additional quota.
- * - Concurrent workers are serialized by the UNIQUE constraint.
+ * - Concurrent workers are serialized by a write lock on the grant row.
  */
 @Injectable()
 export class OperatorTestGuard {
@@ -47,6 +47,7 @@ export class OperatorTestGuard {
     tenantId: string;
     recipientEmail?: string;
     channel: 'email' | 'sms';
+    grantId?: string;
   }): Promise<OperatorTestAuthorization | null> {
     const { tenantId, recipientEmail, channel } = params;
 
@@ -56,7 +57,7 @@ export class OperatorTestGuard {
     }
 
     const auth = await this.authorizations.findOne({
-      where: { tenantId, isRevoked: false },
+      where: { tenantId, isRevoked: false, ...(params.grantId ? { id: params.grantId } : {}) },
       order: { createdAt: 'DESC' },
     });
 
@@ -65,7 +66,7 @@ export class OperatorTestGuard {
     if (auth.channel !== 'email') return null;
 
     // If recipient specified, verify allowlist
-    if (recipientEmail) {
+    if (recipientEmail !== undefined) {
       const normalized = recipientEmail.toLowerCase().trim();
       const allowlisted = auth.recipientAllowlist.some(
         (a) => a.toLowerCase().trim() === normalized,
@@ -92,19 +93,20 @@ export class OperatorTestGuard {
     recipientEmail: string;
     channel: 'email' | 'sms';
     messageId: string;
+    grantId: string;
   }): Promise<OperatorTestAuthorization | null> {
     const { tenantId, recipientEmail, channel, messageId } = params;
     const normalizedRecipient = recipientEmail.toLowerCase().trim();
 
-    if (channel !== 'email' || !normalizedRecipient || !messageId) {
+    if (channel !== 'email' || !normalizedRecipient || !messageId || !params.grantId) {
       return null;
     }
 
     return this.dataSource.transaction(async (manager) => {
       // 1. Validate grant
       const auth = await manager.findOne(OperatorTestAuthorization, {
-        where: { tenantId, isRevoked: false },
-        order: { createdAt: 'DESC' },
+        where: { id: params.grantId, tenantId, isRevoked: false },
+        lock: { mode: 'pessimistic_write' },
       });
 
       if (!auth) return null;
@@ -125,11 +127,12 @@ export class OperatorTestGuard {
       // 2. Try to insert reservation (idempotent for retries)
       // If this message already has a reservation, it's a retry — allow it.
       const existing = await manager.findOne(OperatorTestGrantUsage, {
-        where: { grantId: auth.id, messageId },
+        where: { messageId },
       });
       if (existing) {
         // Retry: already reserved, do not double-count
-        return auth;
+        return existing.grantId === auth.id && existing.tenantId === tenantId &&
+          existing.recipientEmail === normalizedRecipient ? auth : null;
       }
 
       // 3. Check quota within transaction
@@ -137,7 +140,7 @@ export class OperatorTestGuard {
         .createQueryBuilder(OperatorTestGrantUsage, 'u')
         .where('u.grantId = :grantId', { grantId: auth.id })
         .andWhere('u.reservedAt >= :startOfDay', {
-          startOfDay: new Date(new Date().setHours(0, 0, 0, 0)),
+          startOfDay: new Date(new Date().setUTCHours(0, 0, 0, 0)),
         })
         .getCount();
 
@@ -156,24 +159,15 @@ export class OperatorTestGuard {
         return null;
       }
 
-      // 4. Reserve (UNIQUE constraint prevents concurrent double-reserve)
-      try {
-        await manager.insert(OperatorTestGrantUsage, {
-          grantId: auth.id,
-          messageId,
-          tenantId,
-          recipientEmail: normalizedRecipient,
-        });
-      } catch (err: any) {
-        // Unique violation = concurrent reservation for same message (retry)
-        // or concurrent grant exhaustion. Treat as retry if message exists.
-        const retry = await manager.findOne(OperatorTestGrantUsage, {
-          where: { grantId: auth.id, messageId },
-        });
-        if (retry) return auth;
-        this.logger.warn(`Quota reservation failed for grant ${auth.id}: ${err.message}`);
-        return null;
-      }
+      // The grant row lock serializes distinct messages as well as retries.
+      // Let database errors roll back: querying inside an aborted transaction
+      // after a unique violation is not a valid retry strategy in PostgreSQL.
+      await manager.insert(OperatorTestGrantUsage, {
+        grantId: auth.id,
+        messageId,
+        tenantId,
+        recipientEmail: normalizedRecipient,
+      });
 
       return auth;
     });

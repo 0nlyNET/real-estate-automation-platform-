@@ -45,6 +45,7 @@ export type AiProviderInput = {
   channel: 'sms' | 'email';
   identityLabel: string;
   firstAiResponse: boolean;
+  triggerType?: 'inbound' | 'first_response';
   lead: Record<string, unknown>;
   conversationSummary: string | null;
   /**

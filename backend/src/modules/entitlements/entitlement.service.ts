@@ -1,6 +1,7 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { OperatorTestGuard } from '../messaging/operator-test.guard';
 import { Tenant } from '../tenants/tenant.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 
@@ -19,6 +20,11 @@ export type ProtectedServiceAction =
   | 'enable_automation'
   | 'add_team_member';
 
+export type EntitlementOptions = {
+  controlledTest?: boolean;
+  operatorTest?: { grantId?: string; recipientEmail: string; channel: 'email' | 'sms' };
+};
+
 export type EntitlementDecision = {
   allowed: boolean;
   reasons: string[];
@@ -27,6 +33,7 @@ export type EntitlementDecision = {
   automationEnabled: boolean;
   globalAutomationPaused: boolean;
   graceEndsAt: string | null;
+  operatorTestGrantId?: string | null;
 };
 
 export function configuredBillingGraceDays() {
@@ -77,6 +84,7 @@ export class EntitlementService {
     private readonly tenants: Repository<Tenant>,
     @InjectRepository(TenantSettings)
     private readonly settings: Repository<TenantSettings>,
+    @Optional() private readonly operatorTests?: OperatorTestGuard,
   ) {}
 
   async workspaceAccess(tenantId: string) {
@@ -104,7 +112,7 @@ export class EntitlementService {
     tenantId: string,
     action: ProtectedServiceAction,
     now = new Date(),
-    options?: { controlledTest?: boolean },
+    options?: EntitlementOptions,
   ): Promise<EntitlementDecision> {
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) {
@@ -140,8 +148,24 @@ export class EntitlementService {
       'send_manual_sms',
       'send_manual_email',
     ].includes(action);
+    // Only email sends may use a server-side grant. It never changes billing
+    // eligibility, lifecycle, automation controls, or any other service action.
+    const emailAction = ['send_manual_email', 'send_automated_email'].includes(action);
+    let operatorTestGrantId: string | null = null;
+    if (emailAction && options?.operatorTest?.channel === 'email' && this.operatorTests) {
+      const grant = await this.operatorTests.validateGrant({
+        tenantId,
+        recipientEmail: options.operatorTest.recipientEmail,
+        channel: 'email',
+        grantId: options.operatorTest.grantId,
+      });
+      operatorTestGrantId = grant?.id || null;
+    }
     const reasons: string[] = [];
-    if (!billing.allowed && billing.reason) reasons.push(billing.reason);
+    if (options?.operatorTest?.grantId && !operatorTestGrantId) {
+      reasons.push('Operator test grant is invalid, expired, or revoked');
+    }
+    if (!billing.allowed && !operatorTestGrantId && billing.reason) reasons.push(billing.reason);
     if (!lifecycleEligible)
       reasons.push(`Workspace lifecycle is ${tenant.lifecycleStatus || 'ONBOARDING'}`);
     if (automationAction && globalAutomationPaused)
@@ -157,13 +181,14 @@ export class EntitlementService {
       automationEnabled,
       globalAutomationPaused,
       graceEndsAt: billing.graceEndsAt?.toISOString() || null,
+      operatorTestGrantId,
     };
   }
 
   async assertAllowed(
     tenantId: string,
     action: ProtectedServiceAction,
-    options?: { controlledTest?: boolean },
+    options?: EntitlementOptions,
   ) {
     const decision = await this.evaluate(tenantId, action, new Date(), options);
     if (!decision.allowed) {

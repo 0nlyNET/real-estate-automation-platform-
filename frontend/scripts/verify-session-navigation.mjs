@@ -19,7 +19,8 @@ const { clientNavigation, isSetupPath } = await loadTs("lib/client-navigation.ts
 assert.deepEqual(Array.from(clientNavigation, (item) => item.href), ["/app/dashboard", "/app/leads", "/app/inbox", "/app/appointments", "/app/integrations", "/app/assistant"])
 const session = { userId: "client", platformRole: null }
 let status = 200, upstreamError = false, calls = 0
-const { proxy } = await loadTs("proxy.ts", {}, { fetch: async (url) => {
+const diagnostics = []
+const { proxy } = await loadTs("proxy.ts", {}, { console: { ...console, error: (value) => diagnostics.push(JSON.parse(value)) }, fetch: async (url) => {
   calls++
   assert.ok(url.endsWith("/auth/session"))
   if (upstreamError) throw new Error("Backend unavailable")
@@ -41,6 +42,7 @@ for (const code of [403, 429, 500, 502, 503]) {
   assert.equal(result.headers.get("location"), null, `HTTP ${code} must not sign out`)
   assert.equal(result.headers.get("set-cookie"), null)
   assert.ok(result.headers.get("x-middleware-rewrite").endsWith("/session-unavailable"))
+  assert.equal(diagnostics.at(-1).upstreamStatus, code)
 }
 upstreamError = true
 assert.equal((await proxy(req("/app/integrations"))).status, 503)
@@ -51,6 +53,8 @@ await proxy(req("/app/dashboard", ""))
 assert.equal(calls, beforeMissing, "Missing session must not query the backend")
 status = 200; delete session.userId
 assert.equal((await proxy(req("/admin/dashboard"))).status, 503, "Malformed responses fail closed without logging out")
+assert.equal(diagnostics.at(-1).reason, "invalid_response")
+assert.ok(diagnostics.every((entry) => Object.keys(entry).join(",") === "event,reason,upstreamStatus"), "Session diagnostics must not include cookies, identity or URLs")
 
 // API route executes against real NextRequest/NextResponse, including JSON
 // mutation serialization, cookies, no-store errors and bounded failure paths.

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { OperatorTestModule } from '../messaging/operator-test.module';
+import { OperatorTestAdminController } from '../messaging/operator-test-admin.controller';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { AuthModule } from '../auth/auth.module';
@@ -32,6 +34,7 @@ import { AiModule } from '../ai/ai.module';
 @Module({
   imports: [
     AuthModule,
+    OperatorTestModule,
     TypeOrmModule.forFeature([
       Tenant,
       User,
@@ -57,7 +60,7 @@ import { AiModule } from '../ai/ai.module';
     OffboardingModule,
     AiModule,
   ],
-  controllers: [AdminController, ClientSuspensionController],
+  controllers: [AdminController, ClientSuspensionController, OperatorTestAdminController],
   providers: [AdminService],
   exports: [AdminService],
 })

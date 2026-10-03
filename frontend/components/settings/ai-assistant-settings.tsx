@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { cloneElement, useCallback, useEffect, useId, useState, type ReactElement } from "react"
 import Link from "next/link"
 import { Bot, CheckCircle2, PauseCircle, ShieldCheck } from "lucide-react"
 import { apiFetch } from "@/lib/api"
@@ -666,12 +666,14 @@ function Field({
   children,
 }: {
   label: string
-  children: React.ReactNode
+  children: ReactElement<{ id?: string }>
 }) {
+  const generatedId = useId()
+  const id = children.props.id || generatedId
   return (
     <div className="space-y-2">
-      <Label>{label}</Label>
-      {children}
+      <Label htmlFor={id}>{label}</Label>
+      {cloneElement(children, { id })}
     </div>
   )
 }
