@@ -267,8 +267,18 @@ export class MessageSafetyService {
       input.clientId,
       action,
       now,
-      { controlledTest: Boolean(lead?.testRunId) },
+      {
+        controlledTest: Boolean(lead?.testRunId),
+        ...(job?.isOperatorTest && job.operatorTestGrantId ? {
+          operatorTest: { grantId: job.operatorTestGrantId, recipientEmail: lead?.email || '', channel: 'email' as const },
+        } : {}),
+      },
     );
+    if ((job?.isOperatorTest || job?.operatorTestGrantId) &&
+        (!job.isOperatorTest || !job.operatorTestGrantId || !emailChannel ||
+         entitlement.operatorTestGrantId !== job.operatorTestGrantId)) {
+      block('OPERATOR_TEST_GRANT_INVALID', 'Operator test message authorization is invalid');
+    }
     for (const reason of entitlement.reasons) {
       if (/globally paused/i.test(reason)) {
         block("GLOBAL_AUTOMATION_PAUSED", reason);

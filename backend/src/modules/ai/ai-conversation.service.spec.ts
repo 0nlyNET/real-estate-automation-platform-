@@ -1201,3 +1201,49 @@ describe('HARDENING: claim→process handoff never silently drops runs (2026-09-
     });
   });
 });
+
+
+describe('operator grant identity survives the AI worker', () => {
+  it('does not mark an empty initial response completed or create a message', async () => {
+    const item = fixture('controlled_autopilot');
+    item.run.triggerType = 'first_response';
+    (item.run as AiRun).triggeringMessageId = null;
+    item.run.promptMetadata = { channel: 'email', operatorTestGrantId: 'grant-1' };
+    item.lead.email = 'owned@example.test';
+    (item.service as any).preflight.mockResolvedValue({ allowed: true, settings: item.settings,
+      knowledge: item.knowledge, state: item.state, lead: item.lead, triggeringMessage: null });
+    (item.service as any).contextMessages.mockResolvedValue([]);
+    item.dependencies.provider.generate.mockResolvedValue({
+      ...(await item.dependencies.provider.generate()), reply: null, classification: 'no_reply',
+    });
+    item.dependencies.provider.generate.mockClear();
+    await (item.service as any).processRun(item.run.id);
+    expect(item.dependencies.provider.generate).toHaveBeenCalledWith(expect.objectContaining({ triggerType: 'first_response', triggeringMessage: null }));
+    expect(item.run).toMatchObject({ status: 'blocked', errorCode: 'AI_FIRST_RESPONSE_MISSING' });
+    expect(item.savedMessages).toEqual([]);
+    expect(item.state.ownershipStatus).toBe('waiting_for_human');
+    expect(item.dependencies.clientOperations.createHandoff).toHaveBeenCalled();
+  });
+
+  it('preserves legitimate no-reply completion for an ordinary inbound', async () => {
+    const item = fixture('controlled_autopilot');
+    item.run.triggerType = 'inbound';
+    item.trigger.body = 'Thanks.';
+    item.dependencies.provider.generate.mockResolvedValue({
+      ...(await item.dependencies.provider.generate()), reply: null, classification: 'no_reply',
+    });
+    await (item.service as any).processRun(item.run.id);
+    expect(item.run.status).toBe('completed');
+    expect(item.savedMessages).toEqual([]);
+  });
+
+  it('persists the pinned grant through prompt rebuilding and outbound queueing', async () => {
+    const item = fixture('controlled_autopilot');
+    item.trigger.channel = 'email'; item.lead.email = 'owned@example.test';
+    item.run.promptMetadata = { channel: 'email', operatorTestGrantId: 'grant-1' };
+    await (item.service as any).processRun(item.run.id);
+    expect(item.run.promptMetadata).toMatchObject({ operatorTestGrantId: 'grant-1' });
+    expect(item.savedMessages).toEqual(expect.arrayContaining([expect.objectContaining({
+      isOperatorTest: true, operatorTestGrantId: 'grant-1', channel: 'email' })]));
+  });
+});

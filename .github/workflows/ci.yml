@@ -21,6 +21,8 @@ jobs:
           node-version: 24
       - run: node scripts/secret-scan.mjs
       - run: node scripts/workflow-security-scan.mjs
+      - name: Backup and restore regression tests
+        run: sh backup-service/tests/run-tests.sh
 
   backend:
     runs-on: ubuntu-latest

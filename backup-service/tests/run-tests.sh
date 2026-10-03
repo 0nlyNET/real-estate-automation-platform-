@@ -1,5 +1,5 @@
 #!/bin/sh
-# Test harness for backup-service/restore.sh regression tests.
+# Test harness for backup-service backup/restore regression tests.
 # Runs each t*.sh as its own process; all externals are stubbed.
 set -eu
 TESTS_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -12,7 +12,8 @@ for t in t1_failed_create_no_drop \
          t4_reclaim_scoping \
          t5_rpo_from_start \
          t6_concurrent_runs \
-         t7_verification_fails_loudly; do
+         t7_verification_fails_loudly \
+         t8_backup_optional_prune; do
   echo "--- $t"
   if sh "$TESTS_DIR/$t.sh"; then
     echo "PASS $t"; PASS=$((PASS + 1))
@@ -21,6 +22,6 @@ for t in t1_failed_create_no_drop \
   fi
 done
 echo ""
-echo "restore.sh regression tests: PASS=$PASS FAIL=$FAIL"
+echo "backup-service regression tests: PASS=$PASS FAIL=$FAIL"
 [ -z "$FAILED" ] || echo "failed:$FAILED"
 [ "$FAIL" = "0" ]

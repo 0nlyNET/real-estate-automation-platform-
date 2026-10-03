@@ -20,6 +20,9 @@ export type InboxAiStatus =
   | "AI Paused"
   | "Needs Attention";
 
+// Server-derived from an authenticated, explicitly scoped operator session.
+export type ConversationReadAccess = { operatorTenantId: string };
+
 @Injectable()
 export class ConversationInboxService {
   constructor(
@@ -32,6 +35,7 @@ export class ConversationInboxService {
     tenantId: string,
     userId: string,
     leadId?: string,
+    access?: ConversationReadAccess,
   ) {
     if (!tenantId || !userId)
       throw new ForbiddenException("Missing conversation identity");
@@ -45,18 +49,18 @@ export class ConversationInboxService {
     const rows = await manager.query(
       `
       SELECT u.id FROM users u
-      WHERE u.id = $2 AND u."tenantId" = $1 AND u."isActive" = true
+      WHERE u.id = $2 AND (u."tenantId" = $1 OR $4::boolean) AND u."isActive" = true
         AND ($3::uuid IS NULL OR EXISTS (
           SELECT 1 FROM leads l WHERE l.id = $3 AND l.tenant_id = $1
         ))
     `,
-      [tenantId, userId, leadId || null],
+      [tenantId, userId, leadId || null, access?.operatorTenantId === tenantId],
     );
     if (!rows.length) throw new ForbiddenException("Conversation not found");
   }
 
-  async readStates(tenantId: string, userId: string, leadIds: string[]) {
-    await this.requireAccess(this.source.manager, tenantId, userId);
+  async readStates(tenantId: string, userId: string, leadIds: string[], access?: ConversationReadAccess) {
+    await this.requireAccess(this.source.manager, tenantId, userId, undefined, access);
     if (!leadIds.length) return [];
     const rows = await this.source.query(
       `
@@ -85,6 +89,7 @@ export class ConversationInboxService {
     leadId: string,
     messageId: string,
     unreadVersion: number,
+    access?: ConversationReadAccess,
   ) {
     if (
       !isUUID(messageId || "") ||
@@ -96,7 +101,7 @@ export class ConversationInboxService {
       );
     }
     await this.source.transaction(async (manager) => {
-      await this.requireAccess(manager, tenantId, userId, leadId);
+      await this.requireAccess(manager, tenantId, userId, leadId, access);
       const message = await manager.query(
         `
         SELECT id FROM messages WHERE id = $1 AND "leadId" = $2
@@ -129,12 +134,12 @@ export class ConversationInboxService {
         [tenantId, userId, leadId, messageId, unreadVersion],
       );
     });
-    return (await this.readStates(tenantId, userId, [leadId]))[0];
+    return (await this.readStates(tenantId, userId, [leadId], access))[0];
   }
 
-  async markUnread(tenantId: string, userId: string, leadId: string) {
+  async markUnread(tenantId: string, userId: string, leadId: string, access?: ConversationReadAccess) {
     await this.source.transaction(async (manager) => {
-      await this.requireAccess(manager, tenantId, userId, leadId);
+      await this.requireAccess(manager, tenantId, userId, leadId, access);
       await this.ensureState(manager, tenantId, userId, leadId);
       await manager.query(
         `
@@ -145,7 +150,7 @@ export class ConversationInboxService {
         [tenantId, userId, leadId],
       );
     });
-    return (await this.readStates(tenantId, userId, [leadId]))[0];
+    return (await this.readStates(tenantId, userId, [leadId], access))[0];
   }
 
   private ensureState(
@@ -189,7 +194,7 @@ export class ConversationInboxService {
           .findOne({ where: { id: "global" } }),
         this.source.getRepository(Lead).find({
           where: { tenantId, id: In(leadIds) },
-          select: { id: true, testRunId: true },
+          select: { id: true, testRunId: true, email: true },
         }),
         this.source
           .getRepository(AiRun)
@@ -217,17 +222,22 @@ export class ConversationInboxService {
     >();
     const entitlements = await Promise.all(
       threads.map(({ leadId, channel }) => {
+        const lead = leads.find((row) => row.id === leadId);
+        const grantId = runs.find((row) => row.leadId === leadId)?.promptMetadata?.operatorTestGrantId;
+        const operatorTest = channel === "email" && typeof grantId === "string" && grantId
+          ? { grantId, recipientEmail: lead?.email || "", channel: "email" as const } : undefined;
         const controlledTest = Boolean(
-          leads.find((lead) => lead.id === leadId)?.testRunId,
+          lead?.testRunId,
         );
         const action =
           channel === "sms" ? "send_automated_sms" : "send_automated_email";
-        const key = `${action}:${controlledTest}`;
+        const key = `${action}:${controlledTest}:${operatorTest ? leadId : ""}`;
         if (!decisions.has(key))
           decisions.set(
             key,
             this.entitlements.evaluate(tenantId, action, new Date(), {
               controlledTest,
+              ...(operatorTest ? { operatorTest } : {}),
             }),
           );
         return decisions.get(key)!;

@@ -11,6 +11,13 @@ describe("database migration startup policy", () => {
     else process.env.RUN_MIGRATIONS = originalRunMigrations;
   });
 
+  it('registers the operator schema repair after migrations creating messages', () => {
+    const migrations = buildDatabaseOptions().migrations as Function[];
+    expect(migrations.at(-1)?.name).toBe('OperatorTestMessagingSchema1790985600000');
+    expect(migrations.map(migration => Number(migration.name.slice(-13))))
+      .toEqual(migrations.map(migration => Number(migration.name.slice(-13))).sort((a, b) => a - b));
+  });
+
   it("runs migrations by default in deployed runtimes", () => {
     delete process.env.NODE_ENV;
     delete process.env.RUN_MIGRATIONS;
