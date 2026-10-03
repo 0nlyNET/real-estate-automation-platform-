@@ -192,4 +192,7 @@ export class Message extends BaseEntity {
 
   @Column({ name: 'is_operator_test', type: 'boolean', default: false })
   isOperatorTest: boolean;
+
+  @Column({ name: 'operator_test_grant_id', type: 'uuid', nullable: true })
+  operatorTestGrantId?: string | null;
 }

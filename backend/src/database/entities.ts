@@ -6,6 +6,8 @@ import { Credential } from "../modules/settings/credential.entity";
 import { Lead } from "../modules/leads/lead.entity";
 import { LeadEvent } from "../modules/leads/lead-event.entity";
 import { Message } from "../modules/messaging/message.entity";
+import { OperatorTestAuthorization } from "../modules/messaging/operator-test-authorization.entity";
+import { OperatorTestGrantUsage } from "../modules/messaging/operator-test-grant-usage.entity";
 import { PasswordResetToken } from "../modules/auth/password-reset-token.entity";
 import { RoutingAssignmentLog } from "../modules/routing/routing-assignment-log.entity";
 import { RoutingRule } from "../modules/routing/routing-rule.entity";
@@ -69,6 +71,8 @@ export const databaseEntities = [
   Lead,
   LeadEvent,
   Message,
+  OperatorTestAuthorization,
+  OperatorTestGrantUsage,
   Sequence,
   SequenceEnrollment,
   SequenceStep,

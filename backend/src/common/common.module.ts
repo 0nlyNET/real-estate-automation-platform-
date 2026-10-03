@@ -9,9 +9,13 @@ import { Tenant } from '../modules/tenants/tenant.entity';
 import { User } from '../modules/users/user.entity';
 import { PlatformOperatorsService } from './platform-operators.service';
 import { ConversationLockService } from './conversation-lock.service';
+import { OperatorTestModule } from '../modules/messaging/operator-test.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Tenant, User])],
+  imports: [
+    TypeOrmModule.forFeature([Tenant, User]),
+    OperatorTestModule,
+  ],
   providers: [
     Reflector,
     RolesGuard,

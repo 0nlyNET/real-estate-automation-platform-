@@ -786,23 +786,25 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     // OPERATOR TEST REVALIDATION: If this message is flagged as an operator test,
     // re-validate the authorization at provider submission time. Expiration or
     // revocation MUST block already-queued work.
+    // Re-validate the grant bound to this message. A newer grant must not
+    // silently authorize old queued work — we check the SPECIFIC grant ID
+    // stored on the message.
     if (message.isOperatorTest) {
       if (!this.operatorTestGuard) {
         throw new Error('Operator test guard not available; refusing operator test send');
       }
       const recipientEmail = lead.email || '';
-      const auth = await this.operatorTestGuard.checkAuthorization({
+      // Validate the specific grant bound to this message (not just any grant)
+      const auth = await this.operatorTestGuard.validateGrant({
         tenantId: lead.tenantId,
         recipientEmail,
         channel: 'email',
       });
-      if (!auth) {
+      if (!auth || auth.id !== message.operatorTestGrantId) {
         throw new Error(
-          `Operator test authorization invalid/expired/revoked for tenant ${lead.tenantId}; blocking queued send`,
+          `Operator test grant ${message.operatorTestGrantId} invalid/expired/revoked for tenant ${lead.tenantId}; blocking queued send`,
         );
       }
-      // Enforce exact recipient envelope: the lead email must match the allowlist
-      // (already verified by checkAuthorization, but double-check for safety)
     }
     
     const config = await this.getProviderConfig(lead.tenantId, {

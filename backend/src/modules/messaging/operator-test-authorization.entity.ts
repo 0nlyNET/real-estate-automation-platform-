@@ -41,6 +41,12 @@ export class OperatorTestAuthorization {
   @Column({ name: 'is_revoked', type: 'boolean', default: false })
   isRevoked: boolean;
 
+  @Column({ name: 'revoked_at', type: 'timestamptz', nullable: true })
+  revokedAt?: Date | null;
+
+  @Column({ name: 'revoked_by', type: 'varchar', length: 255, nullable: true })
+  revokedBy?: string | null;
+
   @Column({ name: 'created_by', type: 'varchar', length: 255 })
   createdBy: string; // admin user ID who created it
 

@@ -25,11 +25,24 @@ describe('ServiceAccessGuard', () => {
     await expect(new ServiceAccessGuard(reflector, repo, mockOperatorTestGuard).canActivate(context)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('fails closed when operator test guard is not available', async () => {
+  it('fails closed when operator test guard denies', async () => {
     const reflector = { getAllAndOverride: jest.fn().mockReturnValue(true) } as any;
     // Tenant with no billing eligibility
     const repo = { findOne: jest.fn().mockResolvedValue({ id: 'tenant-1', plan: 'service', status: 'active', lifecycleStatus: 'ACTIVE' }) } as any;
-    // No operator test guard provided (undefined)
-    await expect(new ServiceAccessGuard(reflector, repo, undefined).canActivate(context)).rejects.toBeInstanceOf(ForbiddenException);
+    // Guard returns null (no valid grant)
+    const denyGuard = { checkTenantAuthorization: jest.fn().mockResolvedValue(null) } as any;
+    await expect(new ServiceAccessGuard(reflector, repo, denyGuard).canActivate(context)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('allows operator test when grant is valid', async () => {
+    const reflector = { getAllAndOverride: jest.fn().mockReturnValue(true) } as any;
+    const repo = { findOne: jest.fn().mockResolvedValue({ id: 'tenant-1', plan: 'service', status: 'active', lifecycleStatus: 'ACTIVE' }) } as any;
+    const allowGuard = { checkTenantAuthorization: jest.fn().mockResolvedValue({ id: 'grant-1' }) } as any;
+    const ctx = {
+      getHandler: () => function handler() {},
+      getClass: () => class Controller {},
+      switchToHttp: () => ({ getRequest: () => ({ user: { tenantId: 'tenant-1' } }) }),
+    } as any;
+    await expect(new ServiceAccessGuard(reflector, repo, allowGuard).canActivate(ctx)).resolves.toBe(true);
   });
 });
