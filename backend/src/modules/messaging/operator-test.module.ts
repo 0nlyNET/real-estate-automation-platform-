@@ -1,10 +1,9 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OperatorTestAuthorization } from './operator-test-authorization.entity';
 import { OperatorTestGrantUsage } from './operator-test-grant-usage.entity';
 import { OperatorTestGuard } from './operator-test.guard';
 import { OperatorTestAdminService } from './operator-test-admin.service';
-import { OperatorTestAdminController } from './operator-test-admin.controller';
 
 /**
  * Operator test messaging module.
@@ -13,8 +12,12 @@ import { OperatorTestAdminController } from './operator-test-admin.controller';
  * - OperatorTestGuard: Validates grants and reserves quota transactionally.
  * - OperatorTestAdminService: Operator-restricted grant creation/revocation with audit.
  * 
+ * Note: The admin controller is NOT included here to avoid a circular
+ * dependency with CommonModule (which provides PlatformOperatorGuard).
+ * Grant management is via the service directly (or a separate admin module).
+ * 
  * This module is imported by CommonModule so ServiceAccessGuard can inject
- * the real guard (not optional). It is also imported by MessagingModule.
+ * the real guard. It is also imported by MessagingModule.
  */
 @Module({
   imports: [
@@ -24,7 +27,6 @@ import { OperatorTestAdminController } from './operator-test-admin.controller';
     ]),
   ],
   providers: [OperatorTestGuard, OperatorTestAdminService],
-  controllers: [OperatorTestAdminController],
   exports: [OperatorTestGuard, OperatorTestAdminService],
 })
 export class OperatorTestModule {}
