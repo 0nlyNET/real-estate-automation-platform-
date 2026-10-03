@@ -178,6 +178,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       // Phase 3: exclude test/UAT conversations from the normal inbox.
       // Test conversations remain available via includeTest=true.
       .andWhere(includeTest ? '1=1' : 'lead.testRunId IS NULL')
+      .andWhere(includeTest ? '1=1' : 'message.isOperatorTest = false')
       .andWhere(assignedOnly ? 'lead.assignedToUserId = :userId' : '1=1', {
         userId: ctx?.userId,
       })
@@ -783,30 +784,6 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
   private async sendEmail(message: Message) {
     const lead = message.lead;
     
-    // OPERATOR TEST REVALIDATION: If this message is flagged as an operator test,
-    // re-validate the authorization at provider submission time. Expiration or
-    // revocation MUST block already-queued work.
-    // Re-validate the grant bound to this message. A newer grant must not
-    // silently authorize old queued work — we check the SPECIFIC grant ID
-    // stored on the message.
-    if (message.isOperatorTest) {
-      if (!this.operatorTestGuard) {
-        throw new Error('Operator test guard not available; refusing operator test send');
-      }
-      const recipientEmail = lead.email || '';
-      // Validate the specific grant bound to this message (not just any grant)
-      const auth = await this.operatorTestGuard.validateGrant({
-        tenantId: lead.tenantId,
-        recipientEmail,
-        channel: 'email',
-      });
-      if (!auth || auth.id !== message.operatorTestGrantId) {
-        throw new Error(
-          `Operator test grant ${message.operatorTestGrantId} invalid/expired/revoked for tenant ${lead.tenantId}; blocking queued send`,
-        );
-      }
-    }
-    
     const config = await this.getProviderConfig(lead.tenantId, {
       allowTesting: Boolean(lead.testRunId),
     });
@@ -857,6 +834,22 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     // method's existing save; a save failure then prevents the provider call
     // (fail-closed ordering).
     message.renderedBody = text;
+    // Reserve under a grant-row lock at the final provider boundary. Retries
+    // reuse the same message reservation; an expired/revoked/replaced grant
+    // cannot authorize queued work, even if billing later becomes eligible.
+    if (message.isOperatorTest) {
+      if (!this.operatorTestGuard || !message.operatorTestGrantId) {
+        throw new Error('Operator test grant identity unavailable; refusing send');
+      }
+      const auth = await this.operatorTestGuard.reserveQuota({
+        tenantId: lead.tenantId,
+        recipientEmail: lead.email,
+        channel: 'email',
+        messageId: message.id,
+        grantId: message.operatorTestGrantId,
+      });
+      if (!auth) throw new Error('Operator test grant invalid or quota exhausted; refusing send');
+    }
     await this.markProviderSubmissionStarted(message);
     const response = await sendSendGridEmail({
       apiKey,
@@ -866,8 +859,8 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       replyTo,
       subject: message.subject || `Follow-up from ${fromName}`,
       text,
-      categories: ['lead_follow_up'],
-      customArgs: { rta_message_id: message.id },
+      categories: [message.isOperatorTest ? 'operator_test' : 'lead_follow_up'],
+      customArgs: { rta_message_id: message.id, ...(message.isOperatorTest ? { rta_operator_test_grant_id: message.operatorTestGrantId! } : {}) },
       ...(message.inReplyToProviderMessageId
         ? {
             headers: {
@@ -891,6 +884,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
 
   private async sendSms(message: Message) {
     const lead = message.lead;
+    if (message.isOperatorTest || message.operatorTestGrantId) {
+      throw new Error('Operator test grants never authorize SMS');
+    }
     const config = await this.getProviderConfig(lead.tenantId, {
       allowTesting: Boolean(lead.testRunId),
     });

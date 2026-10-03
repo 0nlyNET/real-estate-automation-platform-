@@ -7,6 +7,8 @@ import { ConversationAiState } from './conversation-ai-state.entity';
 import { PlatformAiControl } from './platform-ai-control.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
 import { ServiceUnavailableException } from '@nestjs/common';
+import { EntitlementService } from '../entitlements/entitlement.service';
+import { OperatorTestGuard } from '../messaging/operator-test.guard';
 
 function fixture() {
   const tenantId = '00000000-0000-4000-8000-000000000001';
@@ -339,6 +341,78 @@ describe('AI tool allowlist and validation', () => {
       expect.any(Date),
       { controlledTest: false },
     );
+  });
+});
+
+describe('operator test grants at the AI tool boundary', () => {
+  const originalPause = process.env.GLOBAL_AUTOMATIONS_DISABLED;
+  beforeEach(() => { process.env.GLOBAL_AUTOMATIONS_DISABLED = 'false'; });
+  afterEach(() => {
+    if (originalPause === undefined) delete process.env.GLOBAL_AUTOMATIONS_DISABLED;
+    else process.env.GLOBAL_AUTOMATIONS_DISABLED = originalPause;
+  });
+
+  function operatorFixture() {
+    const item = fixture();
+    const freshLead = Object.assign(new Lead(), item.context.lead, {
+      email: 'owned@example.test', testRunId: 'test-run-1',
+    });
+    item.repositories.leads.findOne.mockResolvedValue(freshLead);
+    item.context.run.promptMetadata = { channel: 'email', testRunId: 'test-run-1', operatorTestGrantId: 'grant-1' };
+    const grant = { id: 'grant-1', tenantId: freshLead.tenantId, channel: 'email',
+      recipientAllowlist: [freshLead.email], isRevoked: false, expiresAt: new Date(Date.now() + 60_000) };
+    const grants = { findOne: jest.fn(async ({ where }: any) =>
+      where.tenantId === grant.tenantId && (!where.id || where.id === grant.id) &&
+      where.isRevoked === grant.isRevoked ? grant : null) };
+    const guard = new OperatorTestGuard({} as any, grants as any, {} as any);
+    const tenant = { id: freshLead.tenantId, status: 'incomplete', lifecycleStatus: 'TESTING' };
+    const entitlements = new EntitlementService(
+      { findOne: jest.fn().mockResolvedValue(tenant) } as any,
+      { findOne: jest.fn().mockResolvedValue({ automationsEnabled: true }) } as any,
+      guard,
+    );
+    item.dependencies.entitlements.evaluate.mockImplementation((...args: any[]) =>
+      (entitlements.evaluate as any)(...args));
+    const context = { ...item.context, channel: 'email' as const };
+    const execute = () => item.service.execute(context, {
+      name: 'update_conversation_summary', arguments: JSON.stringify({ summary: 'Buyer wants three bedrooms in Elmwood Village.' }),
+    }, 0);
+    return { ...item, context, freshLead, grant, grants, tenant, execute };
+  }
+
+  it('executes the buyer summary with the pinned grant while billing remains incomplete', async () => {
+    const item = operatorFixture();
+    await expect(item.execute()).resolves.toMatchObject({ status: 'executed' });
+    expect(item.dependencies.entitlements.evaluate).toHaveBeenCalledWith(item.tenant.id,
+      'send_automated_email', expect.any(Date), { controlledTest: true,
+        operatorTest: { grantId: item.grant.id, recipientEmail: item.freshLead.email, channel: 'email' } });
+    expect(item.repositories.leads.save).toHaveBeenCalledWith(expect.objectContaining({ conversationSummary: expect.stringContaining('Elmwood Village') }));
+    expect(item.tenant.status).toBe('incomplete');
+  });
+
+  it.each(['expired', 'revoked', 'different tenant', 'changed recipient', 'missing grant', 'sms'] as const)(
+    'blocks the tool for %s without changing the lead', async (scenario) => {
+      const item = operatorFixture();
+      if (scenario === 'expired') item.grant.expiresAt = new Date(Date.now() - 1);
+      if (scenario === 'revoked') item.grant.isRevoked = true;
+      if (scenario === 'different tenant') item.grant.tenantId = 'another-tenant';
+      if (scenario === 'changed recipient') item.freshLead.email = 'stranger@example.test';
+      if (scenario === 'missing grant') delete item.context.run.promptMetadata.operatorTestGrantId;
+      if (scenario === 'sms') (item.context as any).channel = 'sms';
+      await expect(item.execute()).resolves.toMatchObject({ status: 'blocked', code: 'SERVICE_NOT_ENTITLED' });
+      expect(item.repositories.leads.save).not.toHaveBeenCalled();
+      if (scenario === 'missing grant' || scenario === 'sms') expect(item.grants.findOne).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still enforces platform pause and consent with a valid pinned grant', async () => {
+    const item = operatorFixture();
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
+    await expect(item.execute()).resolves.toMatchObject({ status: 'blocked', code: 'SERVICE_NOT_ENTITLED' });
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'false';
+    item.dependencies.compliance.communicationEligibility.mockResolvedValue({ allowed: false } as any);
+    await expect(item.execute()).resolves.toMatchObject({ status: 'blocked', code: 'MISSING_CONSENT' });
+    expect(item.repositories.leads.save).not.toHaveBeenCalled();
   });
 });
 

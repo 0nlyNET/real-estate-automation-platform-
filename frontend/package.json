@@ -9,7 +9,7 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
-    "test": "node scripts/verify-client-readiness.mjs && node scripts/verify-admin-routing.mjs && node scripts/verify-assistant-workflows.mjs && node scripts/verify-security-boundaries.mjs && node scripts/verify-first-client.mjs && node scripts/verify-session-navigation.mjs && node scripts/verify-onboarding-workspace.mjs && node scripts/verify-managed-sendgrid-assign.mjs",
+    "test": "node scripts/verify-client-readiness.mjs && node scripts/verify-admin-routing.mjs && node scripts/verify-assistant-workflows.mjs && node scripts/verify-security-boundaries.mjs && node scripts/verify-first-client.mjs && node scripts/verify-session-navigation.mjs && node scripts/verify-onboarding-workspace.mjs && node scripts/verify-managed-sendgrid-assign.mjs && node scripts/verify-next-root-glob.mjs",
     "test:e2e": "playwright test --project=desktop && playwright test --project=mobile",
     "start": "next start"
   },
@@ -83,6 +83,9 @@
     "brace-expansion@^5.0.5": "5.0.12",
     "js-yaml": "4.3.2",
     "postcss": "$postcss",
-    "sharp": "0.35.4"
+    "sharp": "0.35.4",
+    "@next/eslint-plugin-next": {
+      "fast-glob": "file:../../../vendor/next-root-glob"
+    }
   }
 }

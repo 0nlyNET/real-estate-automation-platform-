@@ -53,6 +53,7 @@ type AiConversationEvent = {
   // re-inferred from a re-fetched lead. The worker's preflight re-fetch
   // was losing testRunId, causing SERVICE_NOT_ENTITLED for controlled tests.
   testRunId?: string | null;
+  operatorTestGrantId?: string | null;
 };
 
 type PreflightContext = {
@@ -73,7 +74,7 @@ type PreflightDecision =
     } & Partial<PreflightContext>);
 
 type EscalationContext = Pick<PreflightContext, 'settings' | 'state' | 'lead'> & {
-  triggeringMessage: Message;
+  triggeringMessage: Message | null;
 };
 
 const AI_RUN_LEASE_SECONDS = 120;
@@ -829,6 +830,7 @@ export class AiConversationService
       // via the lead. This ensures worker preflight matches acceptLead
       // preflight for the same controlled test.
       testRunId: (run.promptMetadata as any)?.testRunId || null,
+      operatorTestGrantId: (run.promptMetadata as any)?.operatorTestGrantId || null,
     };
     const triggeringMessageId = run.triggeringMessageId;
     const trigger = triggeringMessageId
@@ -892,6 +894,7 @@ export class AiConversationService
         // Without this, a retry reconstructs the event from promptMetadata
         // (line ~795) and loses the testRunId, causing SERVICE_NOT_ENTITLED.
         ...(event.testRunId ? { testRunId: event.testRunId } : {}),
+        ...(event.operatorTestGrantId ? { operatorTestGrantId: event.operatorTestGrantId } : {}),
       };
       await this.runs.save(run);
 
@@ -918,6 +921,7 @@ export class AiConversationService
         channel: event.channel,
         identityLabel: preflight.settings.identityLabel as string,
         firstAiResponse,
+        triggerType: run.triggerType || 'inbound',
         lead: this.providerLeadContext(preflight.lead),
         conversationSummary: preflight.lead.conversationSummary || null,
         triggeringMessage: preflight.triggeringMessage
@@ -1260,6 +1264,12 @@ export class AiConversationService
         return;
       }
       if (validation.noReply || !output.reply) {
+        if (run.triggerType === 'first_response') {
+          await this.blockRun(run, 'AI_FIRST_RESPONSE_MISSING',
+            'The AI produced no initial reply. Human review is required before this lead can complete its first response.',
+            'high', preflight);
+          return;
+        }
         await timed('complete_without_reply', () =>
           this.completeWithoutReply(run, preflight),
         );
@@ -1433,11 +1443,20 @@ export class AiConversationService
       // re-fetched lead. This ensures worker preflight matches acceptLead
       // preflight for controlled tests. Falls back to lead.testRunId for
       // backward compatibility with runs created before this fix.
-      { controlledTest: Boolean(event.testRunId || lead.testRunId) },
+      {
+        controlledTest: Boolean(event.testRunId || lead.testRunId),
+        // Discovery is permitted only before the run is persisted. Workers
+        // reconstruct null when a run has no grant, preventing retroactive
+        // authorization by a newly created grant.
+        ...(event.channel === 'email' && event.operatorTestGrantId !== null ? {
+          operatorTest: { grantId: event.operatorTestGrantId || undefined, recipientEmail: lead.email || '', channel: 'email' as const },
+        } : {}),
+      },
     );
     if (!entitlement.allowed) {
       return deny('SERVICE_NOT_ENTITLED', entitlement.reasons.join('; '));
     }
+    event.operatorTestGrantId = entitlement.operatorTestGrantId || null;
     const consent = await this.compliance.communicationEligibility(
       event.tenantId,
       lead,
@@ -1524,6 +1543,7 @@ export class AiConversationService
             // BUG 2 FIX: Persist controlled-test identity on the ai_run so
             // the worker does not need to re-infer it from the lead.
             ...(event.testRunId ? { testRunId: event.testRunId } : {}),
+        ...(event.operatorTestGrantId ? { operatorTestGrantId: event.operatorTestGrantId } : {}),
           },
           requestedTools: [],
           executedTools: [],
@@ -2163,6 +2183,8 @@ export class AiConversationService
           idempotencyKey: `ai:${run.id}`,
           authorship: 'ai',
           aiRunId: run.id,
+          isOperatorTest: Boolean(run.promptMetadata?.operatorTestGrantId),
+          operatorTestGrantId: (run.promptMetadata?.operatorTestGrantId as string) || null,
           communicationType: channel,
           requiresBookingLink,
         }),
@@ -2237,7 +2259,8 @@ export class AiConversationService
       context.settings &&
       context.state &&
       context.lead &&
-      context.triggeringMessage
+      (context.triggeringMessage || (run.triggerType === 'first_response' &&
+        ['AI_FIRST_RESPONSE_MISSING', 'MODEL_REQUESTED_HANDOFF'].includes(code)))
     ) {
       await this.escalate(
         context as EscalationContext,
@@ -2278,15 +2301,16 @@ export class AiConversationService
     context.state.ownershipStatus = 'waiting_for_human';
     context.state.escalationReason = reason.slice(0, 1_000);
     context.state.aiPausedReason = code;
-    context.state.lastInboundMessageIdProcessed =
+    if (context.triggeringMessage) context.state.lastInboundMessageIdProcessed =
       context.triggeringMessage.id;
     await this.states.save(context.state);
     context.lead.recommendedNextAction =
-      'Review the latest message and respond personally.';
+      context.triggeringMessage ? 'Review the latest message and respond personally.' :
+        'Review the blocked initial response and contact this lead personally.';
     await this.leads.save(context.lead);
     await this.clientOperations.createHandoff(
       context.lead,
-      context.triggeringMessage.body,
+      context.triggeringMessage?.body || 'Initial contact needs human review; no inbound message was received.',
       {
         priority,
         reason,

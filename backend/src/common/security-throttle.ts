@@ -1,4 +1,10 @@
 import { createHash } from 'crypto';
+import { JwtService } from '@nestjs/jwt';
+import { requireJwtSecret } from './env';
+import { JWT_VERIFY_OPTIONS } from '../modules/auth/auth-token';
+import { readCookie, SESSION_COOKIE } from '../modules/auth/session-cookie';
+
+const sessionJwt = new JwtService();
 
 const ACCOUNT_SCOPED_AUTH_PATHS = new Set([
   '/auth/login',
@@ -47,4 +53,33 @@ export async function directIpThrottleTracker(
   request: Record<string, any>,
 ): Promise<string> {
   return `ip:${String(request.ip || request.socket?.remoteAddress || 'unknown')}`;
+}
+
+/**
+ * Session checks arrive through the shared frontend peer. Keep the same limit
+ * per signed subject so one user's navigation cannot block another user.
+ * This only selects a throttle bucket: JwtStrategy still checks the current
+ * database account, revocation, role and operator context before authorization.
+ * Invalid/expired tokens and every other route retain the direct-peer bucket.
+ */
+export async function sessionSecurityThrottleTracker(request: Record<string, any>): Promise<string> {
+  if (requestPath(request) === '/auth/session') {
+    try {
+      const token = readCookie(request as any, SESSION_COOKIE) ||
+        String(request.headers?.authorization || '').match(/^Bearer\s+(\S+)$/i)?.[1];
+      if (token) {
+        const payload = sessionJwt.verify<Record<string, unknown>>(token, {
+          secret: requireJwtSecret(), ...JWT_VERIFY_OPTIONS,
+        });
+        if (typeof payload.sub === 'string' && payload.sub.trim() &&
+          typeof payload.exp === 'number' && Number.isFinite(payload.exp)) {
+          return `session-user:${digest(payload.sub)}`;
+        }
+      }
+    } catch {
+      // Never trust decoded claims, forwarding headers or request.user here;
+      // this global guard runs before the route authentication guard.
+    }
+  }
+  return directIpThrottleTracker(request);
 }
