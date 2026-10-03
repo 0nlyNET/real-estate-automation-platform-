@@ -239,6 +239,7 @@ export class InboxSendService {
     body: string,
     actor?: ConversationActor,
     requestId?: string,
+    operatorTest?: { isOperatorTest: boolean; grantId: string },
   ) {
     const tenantId = this.requireTenant(tenantIdRaw);
     const text = String(body || '').trim();
@@ -327,6 +328,9 @@ export class InboxSendService {
             attemptCount: 0,
             idempotencyKey,
             authorship: 'human',
+            // Server-derived operator test classification (from guard, not client)
+            isOperatorTest: operatorTest?.isOperatorTest ?? false,
+            operatorTestGrantId: operatorTest?.grantId ?? null,
           }),
         );
         return {

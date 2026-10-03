@@ -166,6 +166,11 @@ export class MessagingController {
       email: req.user?.email,
       role,
     };
+    // Operator test: pass server-derived grant identity (from guard, not client)
+    const operatorTest = req.isOperatorTest ? {
+      isOperatorTest: true,
+      grantId: req.operatorTestAuthorizationId,
+    } : undefined;
     return channel === 'email'
       ? this.inboxSendService.queueEmailToLead(
           tenantId,
@@ -173,6 +178,7 @@ export class MessagingController {
           messageBody,
           actor,
           body.requestId,
+          operatorTest,
         )
       : this.inboxSendService.sendSmsToLead(
           tenantId,

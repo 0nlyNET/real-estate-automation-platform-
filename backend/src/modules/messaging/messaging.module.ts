@@ -10,8 +10,7 @@ import { Lead } from '../leads/lead.entity';
 import { Tenant } from '../tenants/tenant.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { Credential } from '../settings/credential.entity';
-import { OperatorTestAuthorization } from './operator-test-authorization.entity';
-import { OperatorTestGuard } from './operator-test.guard';
+import { OperatorTestModule } from './operator-test.module';
 
 import { SequencesModule } from '../sequences/sequences.module';
 import { ComplianceModule } from '../compliance/compliance.module';
@@ -42,8 +41,8 @@ import { ConversationInboxService } from './conversation-inbox.service';
       SendDecision,
       SequenceEnrollment,
       TestRun,
-      OperatorTestAuthorization,
     ]),
+    OperatorTestModule,
     SequencesModule,
     ComplianceModule,
     ClientOperationsModule,
@@ -59,8 +58,7 @@ import { ConversationInboxService } from './conversation-inbox.service';
     InboxSendService,
     MessageSafetyService,
     SendDecisionService,
-    OperatorTestGuard,
   ],
-  exports: [MessagingService, MessageSafetyService, OperatorTestGuard, AiModule],
+  exports: [MessagingService, MessageSafetyService, AiModule],
 })
 export class MessagingModule {}
