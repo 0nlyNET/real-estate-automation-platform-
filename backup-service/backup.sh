@@ -68,7 +68,7 @@ echo "Upload verified"
 # Compute cutoff via epoch arithmetic: portable across GNU date, BSD date,
 # and busybox date (Alpine). Filenames are UTC YYYYMMDDTHHMMSSZ which sort
 # lexicographically in chronological order, so string comparison is safe.
-if [ "${BACKUP_PRUNE_DISABLED}" = "true" ]; then
+if [ "${BACKUP_PRUNE_DISABLED:-false}" = "true" ]; then
   echo "Prune skipped (BACKUP_PRUNE_DISABLED=true)"
 else
 echo "Pruning old backups..."
