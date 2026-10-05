@@ -71,6 +71,8 @@ import { DurableJob } from '../durable-jobs/durable-job.entity';
 import { UsagePolicy } from '../limits/usage-policy.entity';
 import { UsageBucket } from '../limits/usage-bucket.entity';
 import { UsageReservation } from '../limits/usage-reservation.entity';
+import { OperatorTestAuthorization } from '../messaging/operator-test-authorization.entity';
+import { OperatorTestGrantUsage } from '../messaging/operator-test-grant-usage.entity';
 import { WorkspaceAiSettings } from '../ai/workspace-ai-settings.entity';
 
 const REPOSITORY_ENTITIES = [
@@ -104,6 +106,8 @@ const REPOSITORY_ENTITIES = [
   UsageBucket,
   UsageReservation,
   WorkspaceAiSettings,
+  OperatorTestAuthorization,
+  OperatorTestGrantUsage,
 ];
 
 function mockRepository() {
@@ -160,7 +164,7 @@ describe('notifications module graph boot (circular dependency regression)', () 
   });
 
   afterAll(async () => {
-    await moduleRef.close();
+    await moduleRef?.close();
   });
 
   it('instantiates NotificationsService from the real module graph', () => {

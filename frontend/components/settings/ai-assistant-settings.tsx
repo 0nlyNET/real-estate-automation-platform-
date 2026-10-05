@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { cloneElement, useCallback, useEffect, useId, useState, type ReactElement } from "react"
 import Link from "next/link"
 import { Bot, CheckCircle2, PauseCircle, ShieldCheck } from "lucide-react"
 import { apiFetch } from "@/lib/api"
@@ -392,7 +392,22 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
             <div className="rounded-lg border p-3 text-sm">
               <div className="font-medium">Allowed AI channels</div>
               <div className="mt-2 flex gap-4">
-                {(["sms", "email"] as const).map((channel) => <label key={channel} className="flex items-center gap-2"><input type="checkbox" checked={allowedChannels.includes(channel)} disabled={!canManage || (allowedChannels.length === 1 && allowedChannels.includes(channel))} onChange={(event) => setAllowedChannels((current) => event.target.checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel))} />{channel.toUpperCase()}</label>)}
+                {(["sms", "email"] as const).map((channel) => {
+                  const provisioned = configuration.readiness.communications[channel]
+                  const isLastSelected = allowedChannels.length === 1 && allowedChannels.includes(channel)
+                  return (
+                    <label key={channel} className="flex items-center gap-2" title={!provisioned ? `${channel.toUpperCase()} is not provisioned for this workspace` : undefined}>
+                      <input
+                        type="checkbox"
+                        checked={allowedChannels.includes(channel)}
+                        disabled={!canManage || isLastSelected || !provisioned}
+                        onChange={(event) => setAllowedChannels((current) => event.target.checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel))}
+                      />
+                      {channel.toUpperCase()}
+                      {!provisioned ? <span className="text-xs text-muted-foreground">(not provisioned)</span> : null}
+                    </label>
+                  )
+                })}
               </div>
             </div>
           </div>
@@ -666,12 +681,14 @@ function Field({
   children,
 }: {
   label: string
-  children: React.ReactNode
+  children: ReactElement<{ id?: string }>
 }) {
+  const generatedId = useId()
+  const id = children.props.id || generatedId
   return (
     <div className="space-y-2">
-      <Label>{label}</Label>
-      {children}
+      <Label htmlFor={id}>{label}</Label>
+      {cloneElement(children, { id })}
     </div>
   )
 }

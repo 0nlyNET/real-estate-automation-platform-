@@ -23,35 +23,63 @@ export function ClientAccessGuard({ children }: { children: ReactNode }) {
   const [error, setError] = useState("")
   const [checking, setChecking] = useState(true)
   const generation = useRef(0)
-  const inFlight = useRef(false)
-  const verify = useCallback(async () => {
-    if (inFlight.current) return
-    inFlight.current = true
+  const abortController = useRef<AbortController | null>(null)
+  const verify = useCallback(async (background = false) => {
+    // Request ownership: only one active check per generation. If a check is
+    // already in flight for the current generation, do not start a duplicate.
+    if (abortController.current) return
     const current = ++generation.current
-    setChecking(true)
-    setError("")
+    const controller = new AbortController()
+    abortController.current = controller
+    // A background re-verification (triggered by rta:workspace-access-changed
+    // after a data fetch was denied) must never tear down the UI. Unmounting
+    // children while they handle the denial unmounts their error state and
+    // remounts them into a refetch, which loops forever on a persistently
+    // denied tenant. Only the initial check gates rendering.
+    if (!background) {
+      setChecking(true)
+      setError("")
+    }
     try {
-      const next = await apiFetch<Access>("/me")
+      const next = await apiFetch<Access>("/me", { signal: controller.signal })
       if (!next?.serviceAccess || typeof next.serviceAccess.allowed !== "boolean") throw new Error("Invalid access response")
+      // Only the current request may update access state.
       if (current === generation.current) setAccess(next)
-    } catch {
-      if (current === generation.current) setError("Workspace access could not be checked. Your sign-in has been kept; please retry.")
+    } catch (err) {
+      // Aborted requests are expected on cleanup; do not show an error for them.
+      // Only the current request may set the error state.
+      if (controller.signal.aborted) return
+      // A background refresh must not wipe the UI with an access error; the
+      // page that triggered the refresh already surfaces its own denial.
+      if (current === generation.current && !background) setError("Workspace access could not be checked. Your sign-in has been kept; please retry.")
     } finally {
-      inFlight.current = false
-      if (current === generation.current) setChecking(false)
+      // Only the current request may clear the in-flight flag and loading state.
+      // A stale request finishing after cleanup must not touch state owned by
+      // a newer check (or by no check, if unmounted).
+      if (current === generation.current) {
+        abortController.current = null
+        setChecking(false)
+      }
     }
   }, [])
 
   useEffect(() => {
-    const initialCheck = window.setTimeout(() => void verify(), 0)
-    const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) void verify() }
+    const initialCheck = window.setTimeout(() => void verify(false), 0)
+    const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) void verify(false) }
+    // Denied data fetches refresh access in the background without unmounting
+    // the page; the page itself renders the denial state (see verify()).
+    const onAccessChanged = () => void verify(true)
     window.addEventListener("pageshow", onPageShow)
-    window.addEventListener("rta:workspace-access-changed", verify)
+    window.addEventListener("rta:workspace-access-changed", onAccessChanged)
     return () => {
       window.clearTimeout(initialCheck)
+      // Invalidate the old request: increment generation so a stale completion
+      // cannot update state, and abort the fetch so it does not hang.
       generation.current += 1
+      abortController.current?.abort()
+      abortController.current = null
       window.removeEventListener("pageshow", onPageShow)
-      window.removeEventListener("rta:workspace-access-changed", verify)
+      window.removeEventListener("rta:workspace-access-changed", onAccessChanged)
     }
   }, [verify])
 
