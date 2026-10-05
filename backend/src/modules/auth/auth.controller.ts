@@ -1,8 +1,9 @@
 import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
-import { Body, Controller, Get, HttpCode, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Logger, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { Throttle } from '@nestjs/throttler';
+import { requestIdOf } from '../../common/request-diagnostics';
 import { AcceptInvitationDto, ChangeTemporaryPasswordDto, ForgotPasswordDto, LoginDto, ResetPasswordDto, VerifyEmailDto } from './auth.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { OptionalJwtAuthGuard } from './optional-jwt-auth.guard';
@@ -19,6 +20,7 @@ import {
 @AllowSetupAccess()
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
   constructor(private readonly auth: AuthService) {}
 
   // Authentication must not depend on billing, provider health, or tenant setup.
@@ -26,13 +28,18 @@ export class AuthController {
   @Get('session')
   @UseGuards(JwtAuthGuard)
   session(@Req() req: any) {
+    // Diagnostic instrumentation (temporary): shared request ID with elapsed
+    // time + outcome, matching the /me path. Auth failures are logged by
+    // JwtAuthGuard before this handler runs.
+    const requestId = requestIdOf(req);
+    const start = Date.now();
     // Operator context must match the /me contract so OperatorModeBanner
     // renders correctly regardless of which endpoint the frontend prefers.
     // Only expose the already verified/signed context from req.user —
     // never accept tenant context from client-supplied query/body values.
     const isOperator = req.user.platformAdmin === true || req.user.platformOperator === true;
     const hasExplicitTenant = Boolean(req.user.impersonatedBy || req.user.operatorMode?.tenantId);
-    return {
+    const response = {
       userId: req.user.sub,
       tenantId: req.user.tenantId,
       role: req.user.role,
@@ -47,6 +54,10 @@ export class AuthController {
       operatorTenantRequired: isOperator && !hasExplicitTenant,
       sessionExpiresAt: req.user.sessionExpiresAt || null,
     };
+    this.logger.log(
+      `[diag][${requestId}] auth_session complete outcome=ok elapsedMs=${Date.now() - start} tenantId=${req.user.tenantId || 'none'}`,
+    );
+    return response;
   }
 
   @Post('login')

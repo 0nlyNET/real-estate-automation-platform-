@@ -44,15 +44,27 @@ describe('MessagingController client inbox boundaries', () => {
     await h.controller.markRead(request, leadId, {
       messageId: requestId, unreadVersion: 3, userId: 'victim', tenantId: 'foreign',
     } as any);
-    expect(h.conversationInbox.markRead).toHaveBeenCalledWith(tenantId, 'viewer', leadId, requestId, 3);
+    expect(h.conversationInbox.markRead).toHaveBeenCalledWith(tenantId, 'viewer', leadId, requestId, 3, undefined);
     await h.controller.markUnread(request, leadId);
-    expect(h.conversationInbox.markUnread).toHaveBeenCalledWith(tenantId, 'viewer', leadId);
+    expect(h.conversationInbox.markUnread).toHaveBeenCalledWith(tenantId, 'viewer', leadId, undefined);
   });
+
+  it.each(['verified', 'wrong tenant', 'client', 'impersonated'])(
+    'passes operator read scope only for a verified matching session: %s', async (scenario) => {
+      const h = harness();
+      const request = { user: { tenantId, sub: 'actor', platformAdmin: scenario !== 'client',
+        operatorMode: { tenantId: scenario === 'wrong tenant' ? 'foreign' : tenantId },
+        ...(scenario === 'impersonated' ? { impersonatedBy: { userId: 'operator' } } : {}) } };
+      await h.controller.listThreads(request);
+      expect(h.conversationInbox.readStates).toHaveBeenCalledWith(tenantId, 'actor', [],
+        scenario === 'verified' ? { operatorTenantId: tenantId } : undefined);
+    },
+  );
 
   it('defaults to a real email reply when a lead has both contact channels', async () => {
     const h = harness({ id: leadId, tenantId, email: 'lead@example.com', phone: '+15555550100' });
     await h.controller.send({ user: { tenantId, sub: 'owner', role: 'owner' } }, { leadId, body: 'Hello', requestId });
-    expect(h.inbox.queueEmailToLead).toHaveBeenCalledWith(tenantId, leadId, 'Hello', expect.any(Object), requestId);
+    expect(h.inbox.queueEmailToLead).toHaveBeenCalledWith(tenantId, leadId, 'Hello', expect.any(Object), requestId, undefined);
     expect(h.inbox.sendSmsToLead).not.toHaveBeenCalled();
   });
 
@@ -155,6 +167,7 @@ describe('MessagingController client inbox boundaries', () => {
         role: 'agent',
       },
       requestId,
+      undefined,
     );
     expect(item.inbox.sendSmsToLead).not.toHaveBeenCalled();
   });

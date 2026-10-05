@@ -12,6 +12,7 @@ import { Tenant, WorkspaceLifecycleStatus } from '../tenants/tenant.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 import { Credential } from '../settings/credential.entity';
 import { SequenceStep } from '../sequences/sequence-step.entity';
+import { OperatorTestGuard } from '../messaging/operator-test.guard';
 import { billingEligibility } from '../entitlements/entitlement.service';
 import { decryptIntegrationPayload } from '../integrations/integration-crypto';
 import {
@@ -164,6 +165,7 @@ export class OnboardingService {
     @Optional()
     @InjectRepository(WorkspaceAiSettings)
     private readonly workspaceAiSettings?: Repository<WorkspaceAiSettings>,
+    @Optional() private readonly operatorTests?: OperatorTestGuard,
   ) {}
 
   /**
@@ -1469,7 +1471,9 @@ export class OnboardingService {
       (Number.isFinite(restoreTestedAt.getTime()) &&
         restoreAge >= 0 &&
         restoreAge <= 90 * 24 * 60 * 60_000 &&
+        Number(process.env.BACKUP_RPO_MINUTES) > 0 &&
         Number(process.env.BACKUP_RPO_MINUTES) <= 60 &&
+        Number(process.env.BACKUP_RTO_MINUTES) > 0 &&
         Number(process.env.BACKUP_RTO_MINUTES) <= 240 &&
         Number(process.env.BACKUP_RETENTION_DAYS) >= 7 &&
         process.env.BACKUP_RESTORE_ISOLATED_VERIFIED === 'true' &&
@@ -1831,18 +1835,24 @@ export class OnboardingService {
           : record.activationStatus === 'blocked'
             ? 'blocked'
             : 'incomplete';
+    const testRecipient = String(record.contacts?.controlledTestEmail || record.contacts?.accountOwner || '').trim();
+    const operatorGrant = record.emailEnabled && !record.smsEnabled && !record.bookingEnabled && testRecipient
+      ? await this.operatorTests?.validateGrant({ tenantId, recipientEmail: testRecipient, channel: 'email' })
+      : null;
     const testingBlockers = blockers.filter(
       (item) =>
         item.category !== 'controlled_live_test' &&
         item.key !== 'client_approval' &&
         item.key !== 'operator_approval' &&
-        item.key !== 'global_pause',
+        item.key !== 'global_pause' &&
+        !(operatorGrant && item.category === 'billing'),
     );
     const result = {
       state: tenant.lifecycleStatus,
       activationStatus: computedActivationStatus,
       ready: blockers.length === 0,
       testingReady: testingBlockers.length === 0,
+      operatorTestGrantId: operatorGrant?.id || null,
       testingBlockers,
       blockers,
       required: items.filter((item) => item.required),
@@ -1939,18 +1949,28 @@ export class OnboardingService {
     }
   }
 
-  async beginTesting(tenantId: string, operatorId: string) {
-    const readiness = await this.readiness(tenantId);
-    if (!readiness.testingReady) {
-      throw new BadRequestException({
-        code: 'TESTING_BLOCKED',
-        message: 'Workspace is not ready for controlled testing',
-        blockers: readiness.testingBlockers,
-      });
-    }
+  async beginTesting(tenantId: string, operatorId: string, recipientEmail?: string) {
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException('Workspace not found');
+    if (['SUSPENDED', 'CANCELED'].includes(tenant.lifecycleStatus)) {
+      throw new BadRequestException('Suspended or canceled workspaces cannot begin testing');
+    }
     const record = await this.getOrCreate(tenantId);
+    const readiness = await this.readiness(tenantId);
+    const recipient = String(recipientEmail || record.contacts?.controlledTestEmail || record.contacts?.accountOwner || '').trim();
+    const grant = record.emailEnabled && !record.smsEnabled && !record.bookingEnabled && recipient
+      ? await this.operatorTests?.validateGrant({ tenantId, recipientEmail: recipient, channel: 'email' })
+      : null;
+    // Only the billing prerequisite is replaced by a recipient-bound operator
+    // authorization. Activation readiness and paid state remain unchanged.
+    const testingBlockers = readiness.blockers.filter(item =>
+      item.category !== 'controlled_live_test' && item.key !== 'client_approval' &&
+      item.key !== 'operator_approval' && item.key !== 'global_pause' &&
+      !(grant && item.category === 'billing'));
+    if (testingBlockers.length) {
+      throw new BadRequestException({ code: 'TESTING_BLOCKED',
+        message: 'Workspace is not ready for controlled testing', blockers: testingBlockers });
+    }
     let settings = await this.settings.findOne({ where: { tenantId } });
     if (!settings) settings = this.settings.create({ tenantId });
     const beforeState = {

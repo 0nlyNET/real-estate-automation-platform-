@@ -113,6 +113,18 @@ describePostgres("durable per-user conversation reads on PostgreSQL", () => {
     );
   });
 
+  it("allows the scoped operator's own read state while preserving tenant and lead isolation", async () => {
+    await expect(service.readStates(tenant, outsider, [lead])).rejects.toBeInstanceOf(ForbiddenException);
+    const access = { operatorTenantId: tenant };
+    expect((await service.readStates(tenant, outsider, [lead], access))[0].unreadCount).toBe(2);
+    expect(await service.markRead(tenant, outsider, lead, first, 0, access)).toMatchObject({ unreadCount: 1 });
+    expect(await service.markUnread(tenant, outsider, lead, access)).toMatchObject({ markedUnread: true });
+    expect((await service.readStates(tenant, user, [lead]))[0].lastReadMessageId).toBeNull();
+    await expect(service.markRead(tenant, outsider, otherLead, first, 0, access)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.readStates(tenant, outsider, [lead], { operatorTenantId: otherTenant })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(await service.readStates(tenant, outsider, [otherLead], access)).toEqual([]);
+  });
+
   it("leaves a message that arrives after the page snapshot unread", async () => {
     const displayed = second;
     const arriving = randomUUID();
