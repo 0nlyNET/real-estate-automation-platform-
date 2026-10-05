@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { isPlatformAdminEmail, requireJwtSecret, resolvePlatformRole } from '../../common/env';
@@ -26,6 +26,7 @@ type JwtPayload = {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
+  private readonly logger = new Logger(JwtStrategy.name);
   constructor(private readonly users: UsersService) {
     super({
       jwtFromRequest: ExtractJwt.fromExtractors([
@@ -39,9 +40,17 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   }
 
   async validate(payload: JwtPayload) {
+    const start = Date.now();
+    const requestId = Math.random().toString(36).substring(7);
+    this.logger.log(`[${requestId}] JWT validate start - sub: ${payload?.sub}`);
+    
     if (!payload?.sub) throw new UnauthorizedException('Invalid session');
 
+    const userStart = Date.now();
     const user = await this.users.findById(payload.sub);
+    const userDuration = Date.now() - userStart;
+    this.logger.log(`[${requestId}] users.findById took ${userDuration}ms`);
+    
     if (!user || !user.isActive || !user.isEmailVerified || !user.tenantId) {
       throw new UnauthorizedException('Account is inactive or session is invalid');
     }
@@ -105,6 +114,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         startedAt: String(payload.operatorMode.startedAt || ''),
       };
     }
+
+    const total = Date.now() - start;
+    this.logger.log(`[${requestId}] JWT validate complete - total ${total}ms`);
 
     return {
       sub: user.id,

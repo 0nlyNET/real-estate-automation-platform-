@@ -5,6 +5,12 @@ type VerifiedSession = {
   platformRole: "super_admin" | "staff" | null
 }
 
+class SessionVerificationUnavailable extends Error {
+  constructor(readonly reason: string, readonly upstreamStatus: number | null = null) {
+    super(reason)
+  }
+}
+
 async function readVerifiedSession(req: NextRequest): Promise<VerifiedSession | null> {
   const cookie = req.headers.get("cookie")
   if (!cookie || !/(?:^|;\s*)rtai_session=[^;]+/.test(cookie)) return null
@@ -22,9 +28,9 @@ async function readVerifiedSession(req: NextRequest): Promise<VerifiedSession | 
   // Only a rejected session is a reason to sign in again. 403, 429, 5xx,
   // malformed responses and timeouts must never masquerade as logged out.
   if (response.status === 401) return null
-  if (!response.ok) throw new Error("Session verification unavailable")
+  if (!response.ok) throw new SessionVerificationUnavailable("upstream_response", response.status)
   const session = (await response.json()) as Partial<VerifiedSession>
-  if (!session.userId || typeof session.userId !== "string") throw new Error("Invalid session response")
+  if (!session.userId || typeof session.userId !== "string") throw new SessionVerificationUnavailable("invalid_response")
   return {
     userId: session.userId,
     platformRole: session.platformRole === "super_admin" || session.platformRole === "staff" ? session.platformRole : null,
@@ -35,7 +41,13 @@ export async function proxy(req: NextRequest) {
   let session: VerifiedSession | null
   try {
     session = await readVerifiedSession(req)
-  } catch {
+  } catch (cause) {
+    console.error(JSON.stringify({
+      event: "session_verification_unavailable",
+      reason: cause instanceof SessionVerificationUnavailable ? cause.reason
+        : cause instanceof Error && cause.name === "TimeoutError" ? "timeout" : "dependency_unavailable",
+      upstreamStatus: cause instanceof SessionVerificationUnavailable ? cause.upstreamStatus : null,
+    }))
     // Fail closed without discarding the cookie or sending the user to login.
     return NextResponse.rewrite(new URL("/session-unavailable", req.url), {
       status: 503,

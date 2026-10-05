@@ -23,22 +23,34 @@ export function ClientAccessGuard({ children }: { children: ReactNode }) {
   const [error, setError] = useState("")
   const [checking, setChecking] = useState(true)
   const generation = useRef(0)
-  const inFlight = useRef(false)
+  const abortController = useRef<AbortController | null>(null)
   const verify = useCallback(async () => {
-    if (inFlight.current) return
-    inFlight.current = true
+    // Request ownership: only one active check per generation. If a check is
+    // already in flight for the current generation, do not start a duplicate.
+    if (abortController.current) return
     const current = ++generation.current
+    const controller = new AbortController()
+    abortController.current = controller
     setChecking(true)
     setError("")
     try {
-      const next = await apiFetch<Access>("/me")
+      const next = await apiFetch<Access>("/me", { signal: controller.signal })
       if (!next?.serviceAccess || typeof next.serviceAccess.allowed !== "boolean") throw new Error("Invalid access response")
+      // Only the current request may update access state.
       if (current === generation.current) setAccess(next)
-    } catch {
+    } catch (err) {
+      // Aborted requests are expected on cleanup; do not show an error for them.
+      // Only the current request may set the error state.
+      if (controller.signal.aborted) return
       if (current === generation.current) setError("Workspace access could not be checked. Your sign-in has been kept; please retry.")
     } finally {
-      inFlight.current = false
-      if (current === generation.current) setChecking(false)
+      // Only the current request may clear the in-flight flag and loading state.
+      // A stale request finishing after cleanup must not touch state owned by
+      // a newer check (or by no check, if unmounted).
+      if (current === generation.current) {
+        abortController.current = null
+        setChecking(false)
+      }
     }
   }, [])
 
@@ -49,7 +61,11 @@ export function ClientAccessGuard({ children }: { children: ReactNode }) {
     window.addEventListener("rta:workspace-access-changed", verify)
     return () => {
       window.clearTimeout(initialCheck)
+      // Invalidate the old request: increment generation so a stale completion
+      // cannot update state, and abort the fetch so it does not hang.
       generation.current += 1
+      abortController.current?.abort()
+      abortController.current = null
       window.removeEventListener("pageshow", onPageShow)
       window.removeEventListener("rta:workspace-access-changed", verify)
     }

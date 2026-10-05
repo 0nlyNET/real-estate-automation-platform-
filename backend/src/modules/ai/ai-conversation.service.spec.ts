@@ -706,7 +706,7 @@ describe('ai worker tick serialization', () => {
 describe('ai worker incident regression (2026-09-27)', () => {
   function pausedFixture() {
     const item = fixture('controlled_autopilot');
-    const query = jest.fn(async () => []);
+    const query = jest.fn(async (_sql: string) => []);
     item.dependencies.dataSource.transaction.mockImplementation(
       async (callback) => callback({ query }),
     );
@@ -714,21 +714,28 @@ describe('ai worker incident regression (2026-09-27)', () => {
     return { item, query };
   }
 
-  it('platform emergency pause stops recovery, claims, and processing', async () => {
+  it('platform emergency pause stops recovery and broad claims; narrow operator-test claim still runs', async () => {
     const { item, query } = pausedFixture();
     const result = await item.service.processPendingRuns(10);
     expect(result).toEqual({ claimed: 0, recovered: 0, paused: true });
-    // No worker SQL ran at all: no recoverExhaustedRuns, no claimRuns.
-    expect(query).not.toHaveBeenCalled();
+    // Exactly one narrow claim query ran: it may only claim runs backed by a
+    // currently-valid operator-test grant. Recovery and the broad claim path
+    // stayed dormant: no tasks, no handoffs, no other SQL.
+    expect(query).toHaveBeenCalledTimes(1);
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain('operator_test_authorizations');
+    expect(sql).toContain('is_revoked = false');
+    expect(sql).toContain('expires_at > now()');
+    expect(sql).not.toContain('AI_RUN_ATTEMPTS_EXHAUSTED');
     expect(item.dependencies.operations.createTask).not.toHaveBeenCalled();
     expect(
       item.dependencies.control.markWaitingForHuman,
     ).not.toHaveBeenCalled();
   });
 
-  it('GLOBAL_AUTOMATIONS_DISABLED stops all worker activity', async () => {
+  it('GLOBAL_AUTOMATIONS_DISABLED runs only the narrow operator-test claim', async () => {
     const item = fixture('controlled_autopilot');
-    const query = jest.fn(async () => []);
+    const query = jest.fn(async (_sql: string) => []);
     item.dependencies.dataSource.transaction.mockImplementation(
       async (callback) => callback({ query }),
     );
@@ -737,10 +744,46 @@ describe('ai worker incident regression (2026-09-27)', () => {
     try {
       const result = await item.service.processPendingRuns(10);
       expect(result).toEqual({ claimed: 0, recovered: 0, paused: true });
-      expect(query).not.toHaveBeenCalled();
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(String(query.mock.calls[0][0])).toContain(
+        'operator_test_authorizations',
+      );
     } finally {
       if (previous === undefined) delete process.env.GLOBAL_AUTOMATIONS_DISABLED;
       else process.env.GLOBAL_AUTOMATIONS_DISABLED = previous;
+    }
+  });
+
+  it('paused worker claims a valid-grant operator-test run and leaves everything else queued', async () => {
+    const item = fixture('controlled_autopilot');
+    const query = jest.fn(async (sql: string) =>
+      String(sql).includes('operator_test_authorizations')
+        ? [{ id: 'test-run-1' }]
+        : [],
+    );
+    item.dependencies.dataSource.transaction.mockImplementation(
+      async (callback) => callback({ query }),
+    );
+    item.dependencies.platform.findOne.mockResolvedValue({ paused: true });
+    const processRun = jest
+      .spyOn(item.service as any, 'processRun')
+      .mockResolvedValue('completed');
+    try {
+      const result = await item.service.processPendingRuns(10);
+      expect(result).toEqual({
+        claimed: 1,
+        recovered: 0,
+        paused: true,
+        operatorTestOnly: true,
+      });
+      expect(processRun).toHaveBeenCalledTimes(1);
+      expect(processRun).toHaveBeenCalledWith('test-run-1');
+      // The narrow claim ran; the broad claim and recovery never did.
+      const statements = query.mock.calls.map((call) => String(call[0]));
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toContain('operator_test_authorizations');
+    } finally {
+      processRun.mockRestore();
     }
   });
 
@@ -1199,5 +1242,51 @@ describe('HARDENING: claim→process handoff never silently drops runs (2026-09-
       expect(item.dependencies.clientOperations.createHandoff).not.toHaveBeenCalled();
       expect(item.log).not.toHaveBeenCalledWith(expect.stringContaining('PROCESS_RUN_COMPLETED'));
     });
+  });
+});
+
+
+describe('operator grant identity survives the AI worker', () => {
+  it('does not mark an empty initial response completed or create a message', async () => {
+    const item = fixture('controlled_autopilot');
+    item.run.triggerType = 'first_response';
+    (item.run as AiRun).triggeringMessageId = null;
+    item.run.promptMetadata = { channel: 'email', operatorTestGrantId: 'grant-1' };
+    item.lead.email = 'owned@example.test';
+    (item.service as any).preflight.mockResolvedValue({ allowed: true, settings: item.settings,
+      knowledge: item.knowledge, state: item.state, lead: item.lead, triggeringMessage: null });
+    (item.service as any).contextMessages.mockResolvedValue([]);
+    item.dependencies.provider.generate.mockResolvedValue({
+      ...(await item.dependencies.provider.generate()), reply: null, classification: 'no_reply',
+    });
+    item.dependencies.provider.generate.mockClear();
+    await (item.service as any).processRun(item.run.id);
+    expect(item.dependencies.provider.generate).toHaveBeenCalledWith(expect.objectContaining({ triggerType: 'first_response', triggeringMessage: null }));
+    expect(item.run).toMatchObject({ status: 'blocked', errorCode: 'AI_FIRST_RESPONSE_MISSING' });
+    expect(item.savedMessages).toEqual([]);
+    expect(item.state.ownershipStatus).toBe('waiting_for_human');
+    expect(item.dependencies.clientOperations.createHandoff).toHaveBeenCalled();
+  });
+
+  it('preserves legitimate no-reply completion for an ordinary inbound', async () => {
+    const item = fixture('controlled_autopilot');
+    item.run.triggerType = 'inbound';
+    item.trigger.body = 'Thanks.';
+    item.dependencies.provider.generate.mockResolvedValue({
+      ...(await item.dependencies.provider.generate()), reply: null, classification: 'no_reply',
+    });
+    await (item.service as any).processRun(item.run.id);
+    expect(item.run.status).toBe('completed');
+    expect(item.savedMessages).toEqual([]);
+  });
+
+  it('persists the pinned grant through prompt rebuilding and outbound queueing', async () => {
+    const item = fixture('controlled_autopilot');
+    item.trigger.channel = 'email'; item.lead.email = 'owned@example.test';
+    item.run.promptMetadata = { channel: 'email', operatorTestGrantId: 'grant-1' };
+    await (item.service as any).processRun(item.run.id);
+    expect(item.run.promptMetadata).toMatchObject({ operatorTestGrantId: 'grant-1' });
+    expect(item.savedMessages).toEqual(expect.arrayContaining([expect.objectContaining({
+      isOperatorTest: true, operatorTestGrantId: 'grant-1', channel: 'email' })]));
   });
 });

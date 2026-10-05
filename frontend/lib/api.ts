@@ -128,7 +128,9 @@ export async function apiFetch<T = any>(
     if (res.status === 401 && typeof window !== "undefined" && !path.startsWith("/auth/")) {
       window.dispatchEvent(new Event("rta:session-expired"))
     }
-    if (res.status === 403 && typeof window !== "undefined" && ["PAYMENT_REQUIRED", "WORKSPACE_SUSPENDED"].includes(extractErrorCode(payload) || "")) {
+    // The access guard's own /me verification must not trigger re-verification.
+    // Only dispatch for operational API calls, not the guard's health check.
+    if (res.status === 403 && typeof window !== "undefined" && path !== "/me" && ["PAYMENT_REQUIRED", "WORKSPACE_SUSPENDED"].includes(extractErrorCode(payload) || "")) {
       window.dispatchEvent(new Event("rta:workspace-access-changed"))
     }
     const msg = extractErrorMessage(payload)

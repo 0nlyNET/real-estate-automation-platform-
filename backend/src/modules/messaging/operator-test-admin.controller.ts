@@ -1,4 +1,4 @@
-import { Controller, Post, Delete, Get, Body, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, Delete, Get, Body, Param, UseGuards, Req, ForbiddenException } from '@nestjs/common';
 import { OperatorTestAdminService } from './operator-test-admin.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PlatformOperatorGuard } from '../../common/guards/platform-operator.guard';
@@ -17,6 +17,12 @@ import { PlatformOperatorGuard } from '../../common/guards/platform-operator.gua
 export class OperatorTestAdminController {
   constructor(private readonly adminService: OperatorTestAdminService) {}
 
+  private requireSuperAdmin(req: any) {
+    if (req.user?.platformRole !== 'super_admin' || req.user?.impersonatedBy) {
+      throw new ForbiddenException('Unimpersonated platform super administrator required');
+    }
+  }
+
   @Post()
   async createGrant(
     @Body() body: {
@@ -29,25 +35,28 @@ export class OperatorTestAdminController {
     },
     @Req() req: any,
   ) {
+    this.requireSuperAdmin(req);
     return this.adminService.createGrant({
       tenantId: body.tenantId,
       recipientAllowlist: body.recipientAllowlist,
       expiresAt: new Date(body.expiresAt),
       dailyLimit: body.dailyLimit,
       totalLimit: body.totalLimit,
-      createdBy: req.user?.id || req.user?.email || 'unknown',
+      createdBy: req.user?.sub || req.user?.id || '',
       purpose: body.purpose,
     });
   }
 
   @Delete(':id')
   async revokeGrant(@Param('id') id: string, @Req() req: any) {
-    await this.adminService.revokeGrant(id, req.user?.id || req.user?.email || 'unknown');
+    this.requireSuperAdmin(req);
+    await this.adminService.revokeGrant(id, req.user?.sub || req.user?.id || '');
     return { revoked: true, grantId: id };
   }
 
   @Get(':tenantId')
-  async listGrants(@Param('tenantId') tenantId: string) {
+  async listGrants(@Param('tenantId') tenantId: string, @Req() req: any) {
+    this.requireSuperAdmin(req);
     return this.adminService.listGrants(tenantId);
   }
 }

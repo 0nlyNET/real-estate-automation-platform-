@@ -1,6 +1,6 @@
 import { EntitlementService } from '../entitlements/entitlement.service';
 import { AllowSetupAccess } from '../entitlements/workspace-access.interceptor';
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Req, UseGuards, Logger } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TenantsService } from '../tenants/tenants.service';
 import { describeServiceState } from '../service-control/service-control.service';
@@ -8,15 +8,29 @@ import { describeServiceState } from '../service-control/service-control.service
 @AllowSetupAccess()
 @Controller('me')
 export class MeController {
+  private readonly logger = new Logger(MeController.name);
   constructor(private readonly tenants: TenantsService, private readonly entitlements: EntitlementService) {}
 
   @UseGuards(JwtAuthGuard)
   @Get()
   async me(@Req() req: any) {
+    const start = Date.now();
+    const requestId = Math.random().toString(36).substring(7);
+    this.logger.log(`[${requestId}] /me start - user: ${req.user?.email}, tenantId: ${req.user?.tenantId}`);
+    
     const isOperator = req.user?.platformAdmin === true || req.user?.platformOperator === true;
     const hasExplicitTenant = Boolean(req.user?.impersonatedBy || req.user?.operatorMode?.tenantId);
+    
+    const wsStart = Date.now();
+    const serviceAccess = await this.entitlements.workspaceAccess(req.user?.tenantId);
+    const wsDuration = Date.now() - wsStart;
+    this.logger.log(`[${requestId}] workspaceAccess took ${wsDuration}ms`);
+    
+    const total = Date.now() - start;
+    this.logger.log(`[${requestId}] /me complete - total ${total}ms`);
+    
     return {
-      serviceAccess: await this.entitlements.workspaceAccess(req.user?.tenantId),
+      serviceAccess,
       userId: req.user?.sub || null,
       tenantId: req.user?.tenantId || null,
       role: req.user?.role || null,

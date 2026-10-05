@@ -1,6 +1,7 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, Optional, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { OperatorTestGuard } from '../messaging/operator-test.guard';
 import { Tenant } from '../tenants/tenant.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
 
@@ -19,6 +20,11 @@ export type ProtectedServiceAction =
   | 'enable_automation'
   | 'add_team_member';
 
+export type EntitlementOptions = {
+  controlledTest?: boolean;
+  operatorTest?: { grantId?: string; recipientEmail: string; channel: 'email' | 'sms' };
+};
+
 export type EntitlementDecision = {
   allowed: boolean;
   reasons: string[];
@@ -27,6 +33,7 @@ export type EntitlementDecision = {
   automationEnabled: boolean;
   globalAutomationPaused: boolean;
   graceEndsAt: string | null;
+  operatorTestGrantId?: string | null;
 };
 
 export function configuredBillingGraceDays() {
@@ -72,15 +79,25 @@ export function billingEligibility(
 
 @Injectable()
 export class EntitlementService {
+  private readonly logger = new Logger(EntitlementService.name);
   constructor(
     @InjectRepository(Tenant)
     private readonly tenants: Repository<Tenant>,
     @InjectRepository(TenantSettings)
     private readonly settings: Repository<TenantSettings>,
+    @Optional() private readonly operatorTests?: OperatorTestGuard,
   ) {}
 
   async workspaceAccess(tenantId: string) {
+    const start = Date.now();
+    const requestId = Math.random().toString(36).substring(7);
+    this.logger.log(`[${requestId}] workspaceAccess start - tenantId: ${tenantId}`);
+    
+    const tenantStart = Date.now();
     const tenant = tenantId ? await this.tenants.findOne({ where: { id: tenantId } }) : null;
+    const tenantDuration = Date.now() - tenantStart;
+    this.logger.log(`[${requestId}] tenants.findOne took ${tenantDuration}ms`);
+    
     const billing = tenant ? billingEligibility(tenant) : { allowed: false, reason: 'Workspace not found' };
     const suspended = !tenant || ['SUSPENDED', 'CANCELED'].includes(tenant.lifecycleStatus);
     // P8: a billing-source suspension keeps server-enforced READ-ONLY access
@@ -104,7 +121,7 @@ export class EntitlementService {
     tenantId: string,
     action: ProtectedServiceAction,
     now = new Date(),
-    options?: { controlledTest?: boolean },
+    options?: EntitlementOptions,
   ): Promise<EntitlementDecision> {
     const tenant = await this.tenants.findOne({ where: { id: tenantId } });
     if (!tenant) {
@@ -122,13 +139,8 @@ export class EntitlementService {
     const workspaceSettings = await this.settings.findOne({ where: { tenantId } });
     const billing = billingEligibility(tenant, now);
     const manualReplyAction = ['send_manual_sms', 'send_manual_email'].includes(action);
-    const controlledTesting =
+    let controlledTesting =
       tenant.lifecycleStatus === 'TESTING' && options?.controlledTest === true;
-    const lifecycleEligible = manualReplyAction
-      ? ['ACTIVE', 'PAUSED', 'ONBOARDING'].includes(
-          String(tenant.lifecycleStatus || 'ONBOARDING'),
-        ) || controlledTesting
-      : tenant.lifecycleStatus === 'ACTIVE' || controlledTesting;
     const automationEnabled = workspaceSettings?.automationsEnabled === true;
     const globalAutomationPaused =
       process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true';
@@ -140,11 +152,54 @@ export class EntitlementService {
       'send_manual_sms',
       'send_manual_email',
     ].includes(action);
+    // Only email sends may use a server-side grant. It never changes billing
+    // eligibility, lifecycle, automation controls, or any other service action.
+    const emailAction = ['send_manual_email', 'send_automated_email'].includes(action);
+    let operatorTestGrantId: string | null = null;
+    if (emailAction && options?.operatorTest?.channel === 'email' && this.operatorTests) {
+      const grant = await this.operatorTests.validateGrant({
+        tenantId,
+        recipientEmail: options.operatorTest.recipientEmail,
+        channel: 'email',
+        grantId: options.operatorTest.grantId,
+      });
+      operatorTestGrantId = grant?.id || null;
+    }
+    // NARROW OPERATOR-TEST EXCEPTION: a currently-valid operator-test grant
+    // (exact tenant match, recipient allowlisted, email-only, unexpired,
+    // unrevoked — all verified by validateGrant above) authorizes this single
+    // email evaluation as a controlled operator test. It waives ONLY the
+    // global-pause reason for this evaluation, plus the workspace-lifecycle
+    // and workspace-automation-disabled reasons for workspaces that are not
+    // yet active (ONBOARDING/TESTING). Suspended, canceled, or paused
+    // workspaces remain fail-closed even with a grant. Billing eligibility,
+    // consent/opt-out, AI configuration, provider readiness, usage limits,
+    // recipient allowlist, channel restriction, quota, expiry, and revocation
+    // are still enforced; no other action, tenant, or run is affected.
+    // Without a valid grant this changes nothing, and pre-existing
+    // controlled-test (TESTING lifecycle) behavior is unchanged.
+    const operatorTestBypass = operatorTestGrantId !== null && emailAction;
+    const operatorTestLifecycleWaiver =
+      operatorTestBypass &&
+      ['ONBOARDING', 'TESTING'].includes(
+        String(tenant.lifecycleStatus || 'ONBOARDING'),
+      );
+    if (operatorTestLifecycleWaiver) {
+      controlledTesting = true;
+    }
+    const lifecycleEligible = manualReplyAction
+      ? ['ACTIVE', 'PAUSED', 'ONBOARDING'].includes(
+          String(tenant.lifecycleStatus || 'ONBOARDING'),
+        ) || controlledTesting
+      : tenant.lifecycleStatus === 'ACTIVE' || controlledTesting;
     const reasons: string[] = [];
-    if (!billing.allowed && billing.reason) reasons.push(billing.reason);
+    if (options?.operatorTest?.grantId && !operatorTestGrantId) {
+      reasons.push('Operator test grant is invalid, expired, or revoked');
+    }
+    if (!billing.allowed && !operatorTestGrantId && billing.reason) reasons.push(billing.reason);
     if (!lifecycleEligible)
       reasons.push(`Workspace lifecycle is ${tenant.lifecycleStatus || 'ONBOARDING'}`);
-    if (automationAction && globalAutomationPaused)
+    if (automationAction && globalAutomationPaused && !operatorTestBypass)
       reasons.push('Platform automation is globally paused');
     if (automationAction && !automationEnabled && !controlledTesting)
       reasons.push('Workspace automation is disabled');
@@ -157,13 +212,14 @@ export class EntitlementService {
       automationEnabled,
       globalAutomationPaused,
       graceEndsAt: billing.graceEndsAt?.toISOString() || null,
+      operatorTestGrantId,
     };
   }
 
   async assertAllowed(
     tenantId: string,
     action: ProtectedServiceAction,
-    options?: { controlledTest?: boolean },
+    options?: EntitlementOptions,
   ) {
     const decision = await this.evaluate(tenantId, action, new Date(), options);
     if (!decision.allowed) {
