@@ -2,7 +2,9 @@ import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { isPlatformAdminEmail, requireJwtSecret, resolvePlatformRole } from '../../common/env';
+import { requestIdOf } from '../../common/request-diagnostics';
 import { UsersService } from '../users/users.service';
+import type { User } from '../users/user.entity';
 import type { Request } from 'express';
 import { readCookie, SESSION_COOKIE } from './session-cookie';
 import { JWT_VERIFY_OPTIONS } from './auth-token';
@@ -35,26 +37,55 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       ]),
       ignoreExpiration: false,
       secretOrKey: requireJwtSecret(),
+      // Pass the HTTP request through so every timing log shares the one
+      // request ID assigned by the HTTP middleware (req.correlationId).
+      passReqToCallback: true,
       ...JWT_VERIFY_OPTIONS,
     });
   }
 
-  async validate(payload: JwtPayload) {
+  // Diagnostic instrumentation (temporary): one shared request ID across
+  // auth -> user lookup -> /me -> tenant lookup, with elapsed time and
+  // outcome recorded on success, denial, and error paths. Logs user id and
+  // tenant id only — never user email.
+  //
+  // The first parameter accepts either the express request (passport-jwt with
+  // passReqToCallback) or the payload directly (existing unit tests).
+  async validate(requestOrPayload: any, maybePayload?: JwtPayload) {
+    const payload: JwtPayload =
+      maybePayload !== undefined ? maybePayload : (requestOrPayload as unknown as JwtPayload);
+    const requestId = maybePayload !== undefined ? requestIdOf(requestOrPayload) : 'no-request-id';
     const start = Date.now();
-    const requestId = Math.random().toString(36).substring(7);
-    this.logger.log(`[${requestId}] JWT validate start - sub: ${payload?.sub}`);
-    
-    if (!payload?.sub) throw new UnauthorizedException('Invalid session');
+    const sub = payload?.sub;
+    this.logger.log(`[diag][${requestId}] jwt validate start sub=${sub || 'none'}`);
 
-    const userStart = Date.now();
-    const user = await this.users.findById(payload.sub);
-    const userDuration = Date.now() - userStart;
-    this.logger.log(`[${requestId}] users.findById took ${userDuration}ms`);
-    
+    if (!sub) {
+      this.logger.warn(
+        `[diag][${requestId}] jwt validate outcome=denied reason=Invalid session elapsedMs=${Date.now() - start}`,
+      );
+      throw new UnauthorizedException('Invalid session');
+    }
+
+    let user: User | null;
+    try {
+      user = await this.users.findById(sub as string, requestId);
+    } catch (error) {
+      this.logger.error(
+        `[diag][${requestId}] jwt validate outcome=error step=users.findById elapsedMs=${Date.now() - start} error=${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
+
     if (!user || !user.isActive || !user.isEmailVerified || !user.tenantId) {
+      this.logger.warn(
+        `[diag][${requestId}] jwt validate outcome=denied reason=Account is inactive or session is invalid elapsedMs=${Date.now() - start}`,
+      );
       throw new UnauthorizedException('Account is inactive or session is invalid');
     }
     if (payload.sessionVersion !== user.sessionVersion || user.mustChangePassword) {
+      this.logger.warn(
+        `[diag][${requestId}] jwt validate outcome=denied reason=Session has been revoked elapsedMs=${Date.now() - start}`,
+      );
       throw new UnauthorizedException('Session has been revoked');
     }
 
@@ -63,15 +94,26 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       | undefined;
     if (payload.impersonatedBy) {
       const actorId = String(payload.impersonatedBy.userId || '').trim();
-      const actor = actorId ? await this.users.findById(actorId) : null;
+      let actor: User | null = null;
+      try {
+        actor = actorId ? await this.users.findById(actorId, requestId) : null;
+      } catch (error) {
+        this.logger.error(
+          `[diag][${requestId}] jwt validate outcome=error step=actor.findById elapsedMs=${Date.now() - start} error=${error instanceof Error ? error.message : String(error)}`,
+        );
+        throw error;
+      }
       if (
         !actor ||
         !actor.isActive ||
         !actor.isEmailVerified ||
         !isPlatformAdminEmail(actor.email)
       ) {
-        throw new UnauthorizedException('Support session is no longer authorized');
-      }
+      this.logger.warn(
+        `[diag][${requestId}] jwt validate outcome=denied reason=Support session is no longer authorized elapsedMs=${Date.now() - start}`,
+      );
+      throw new UnauthorizedException('Support session is no longer authorized');
+    }
       impersonatedBy = { userId: actor.id, email: actor.email };
     }
 
@@ -99,12 +141,18 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     let effectiveTenantId = user.tenantId;
     if (payload.operatorMode?.tenantId) {
       if (!isPlatformAdminEmail(user.email)) {
-        throw new UnauthorizedException('Operator session is no longer authorized');
-      }
+      this.logger.warn(
+        `[diag][${requestId}] jwt validate outcome=denied reason=Operator session is no longer authorized elapsedMs=${Date.now() - start}`,
+      );
+      throw new UnauthorizedException('Operator session is no longer authorized');
+    }
       const operatorTenantId = String(payload.operatorMode.tenantId).trim();
       if (!operatorTenantId) {
-        throw new UnauthorizedException('Operator session has no tenant context');
-      }
+      this.logger.warn(
+        `[diag][${requestId}] jwt validate outcome=denied reason=Operator session has no tenant context elapsedMs=${Date.now() - start}`,
+      );
+      throw new UnauthorizedException('Operator session has no tenant context');
+    }
       effectiveTenantId = operatorTenantId;
       operatorMode = {
         tenantId: operatorTenantId,
@@ -116,7 +164,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     }
 
     const total = Date.now() - start;
-    this.logger.log(`[${requestId}] JWT validate complete - total ${total}ms`);
+    this.logger.log(
+      `[diag][${requestId}] jwt validate complete outcome=authenticated elapsedMs=${total} userId=${user.id} tenantId=${effectiveTenantId}`,
+    );
 
     return {
       sub: user.id,

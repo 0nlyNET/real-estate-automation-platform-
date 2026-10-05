@@ -6,7 +6,7 @@ describe('operator email authorization retains other entitlements', () => {
   const grant = { id: 'grant-1' };
   const guard = { validateGrant: jest.fn().mockResolvedValue(grant) };
   const service = new EntitlementService({ findOne: async () => tenant } as any,
-    { findOne: async () => ({ automationsEnabled: true }) } as any, guard as any);
+    { findOne: async () => ({ automationsEnabled: true }) } as any, undefined, guard as any);
   const options = { operatorTest: { grantId: 'grant-1', recipientEmail: 'owned@example.test', channel: 'email' as const } };
   afterEach(() => {
     tenant.lifecycleStatus = 'ACTIVE'; guard.validateGrant.mockResolvedValue(grant);
@@ -53,7 +53,7 @@ describe('operator email authorization retains other entitlements', () => {
     process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
     tenant.lifecycleStatus = 'ONBOARDING';
     const disabled = new EntitlementService({ findOne: async () => tenant } as any,
-      { findOne: async () => ({ automationsEnabled: false }) } as any, guard as any);
+      { findOne: async () => ({ automationsEnabled: false }) } as any, undefined, guard as any);
     await expect(disabled.evaluate('tenant', 'send_automated_email', new Date(), options)).resolves.toMatchObject({
       allowed: true, operatorTestGrantId: 'grant-1',
       reasons: expect.not.arrayContaining([

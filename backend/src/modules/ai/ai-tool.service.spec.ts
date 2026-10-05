@@ -369,6 +369,7 @@ describe('operator test grants at the AI tool boundary', () => {
     const entitlements = new EntitlementService(
       { findOne: jest.fn().mockResolvedValue(tenant) } as any,
       { findOne: jest.fn().mockResolvedValue({ automationsEnabled: true }) } as any,
+      undefined,
       guard,
     );
     item.dependencies.entitlements.evaluate.mockImplementation((...args: any[]) =>

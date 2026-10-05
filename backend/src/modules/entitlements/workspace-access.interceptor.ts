@@ -2,6 +2,7 @@ import { CallHandler, ExecutionContext, ForbiddenException, Injectable, NestInte
 import { Reflector } from '@nestjs/core';
 import { OperatorTestGuard } from '../messaging/operator-test.guard';
 import { EntitlementService } from './entitlement.service';
+import { requestIdOf } from '../../common/request-diagnostics';
 
 const OPERATOR_EMAIL_ACCESS = 'operator_test_email_access';
 export const AllowOperatorTestEmailAccess = () => SetMetadata(OPERATOR_EMAIL_ACCESS, true);
@@ -30,7 +31,7 @@ export class WorkspaceAccessInterceptor implements NestInterceptor {
         this.reflector.getAllAndOverride<boolean>(SETUP_ACCESS, [context.getHandler(), context.getClass()])) {
       return next.handle();
     }
-    const access = await this.entitlements.workspaceAccess(user.tenantId);
+    const access = await this.entitlements.workspaceAccess(user.tenantId, requestIdOf(request));
     if (!access.allowed) {
       if (emailAccess && request.body?.channel !== 'sms' &&
           ['ACTIVE', 'TESTING', 'ONBOARDING'].includes(access.lifecycleStatus || '')) {

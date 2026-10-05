@@ -1,9 +1,10 @@
 import { ForbiddenException, Injectable, Optional, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { OperatorTestGuard } from '../messaging/operator-test.guard';
 import { Tenant } from '../tenants/tenant.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
+import { pgPoolStats } from '../../common/request-diagnostics';
 
 export type ProtectedServiceAction =
   | 'start_automation'
@@ -85,36 +86,83 @@ export class EntitlementService {
     private readonly tenants: Repository<Tenant>,
     @InjectRepository(TenantSettings)
     private readonly settings: Repository<TenantSettings>,
+    // Optional so unit tests can construct the service without a DataSource;
+    // NestJS always injects the real DataSource in the running app, which
+    // enables the separate connection-acquire timing below.
+    @Optional() private readonly dataSource?: DataSource,
     @Optional() private readonly operatorTests?: OperatorTestGuard,
   ) {}
 
-  async workspaceAccess(tenantId: string) {
+  // Diagnostic instrumentation (temporary): one shared request ID across the
+  // /me path, with DB connection acquisition timed separately from query
+  // execution, safe pool counters, and elapsed time + outcome recorded on
+  // success, denial, and error paths. Logs tenant id only — never emails.
+  async workspaceAccess(tenantId: string, requestId?: string) {
+    const rid = requestId || 'no-request-id';
     const start = Date.now();
-    const requestId = Math.random().toString(36).substring(7);
-    this.logger.log(`[${requestId}] workspaceAccess start - tenantId: ${tenantId}`);
-    
-    const tenantStart = Date.now();
-    const tenant = tenantId ? await this.tenants.findOne({ where: { id: tenantId } }) : null;
-    const tenantDuration = Date.now() - tenantStart;
-    this.logger.log(`[${requestId}] tenants.findOne took ${tenantDuration}ms`);
-    
-    const billing = tenant ? billingEligibility(tenant) : { allowed: false, reason: 'Workspace not found' };
-    const suspended = !tenant || ['SUSPENDED', 'CANCELED'].includes(tenant.lifecycleStatus);
-    // P8: a billing-source suspension keeps server-enforced READ-ONLY access
-    // (the interceptor allows GET while blocking mutations). Manual, safety,
-    // compliance and offboarding suspensions stay fully strict.
-    const billingSuspended =
-      !!tenant &&
-      tenant.lifecycleStatus === 'SUSPENDED' &&
-      tenant.serviceSuspensionSource === 'billing';
-    return {
-      allowed: billing.allowed && !suspended,
-      billingEligible: billing.allowed,
-      reason: billing.reason || (suspended ? 'Workspace services are suspended' : null),
-      suspensionSource: tenant?.serviceSuspensionSource || null,
-      lifecycleStatus: tenant?.lifecycleStatus || null,
-      billingSuspended,
-    };
+    this.logger.log(
+      `[diag][${rid}] entitlement workspaceAccess start tenantId=${tenantId || 'none'} pool=${JSON.stringify(pgPoolStats(this.dataSource))}`,
+    );
+
+    try {
+      // Acquire a connection explicitly so pool-wait time is measured
+      // separately from the tenant query itself. Without an injected
+      // DataSource (unit tests), fall back to the repository query.
+      let tenant: Tenant | null = null;
+      if (this.dataSource) {
+        const runner = this.dataSource.createQueryRunner();
+        try {
+          const acquireStart = Date.now();
+          await runner.connect();
+          const acquireMs = Date.now() - acquireStart;
+          this.logger.log(
+            `[diag][${rid}] entitlement db_acquire elapsedMs=${acquireMs} pool=${JSON.stringify(pgPoolStats(this.dataSource))}`,
+          );
+
+          const queryStart = Date.now();
+          tenant = tenantId ? await runner.manager.findOne(Tenant, { where: { id: tenantId } }) : null;
+          const queryMs = Date.now() - queryStart;
+          this.logger.log(
+            `[diag][${rid}] entitlement tenant_query elapsedMs=${queryMs} found=${tenant !== null}`,
+          );
+        } finally {
+          await runner.release();
+        }
+      } else {
+        const queryStart = Date.now();
+        tenant = tenantId ? await this.tenants.findOne({ where: { id: tenantId } }) : null;
+        this.logger.log(
+          `[diag][${rid}] entitlement tenant_query elapsedMs=${Date.now() - queryStart} found=${tenant !== null} pool=unavailable`,
+        );
+      }
+
+      const billing = tenant ? billingEligibility(tenant) : { allowed: false, reason: 'Workspace not found' };
+      const suspended = !tenant || ['SUSPENDED', 'CANCELED'].includes(tenant.lifecycleStatus);
+      // P8: a billing-source suspension keeps server-enforced READ-ONLY access
+      // (the interceptor allows GET while blocking mutations). Manual, safety,
+      // compliance and offboarding suspensions stay fully strict.
+      const billingSuspended =
+        !!tenant &&
+        tenant.lifecycleStatus === 'SUSPENDED' &&
+        tenant.serviceSuspensionSource === 'billing';
+      const result = {
+        allowed: billing.allowed && !suspended,
+        billingEligible: billing.allowed,
+        reason: billing.reason || (suspended ? 'Workspace services are suspended' : null),
+        suspensionSource: tenant?.serviceSuspensionSource || null,
+        lifecycleStatus: tenant?.lifecycleStatus || null,
+        billingSuspended,
+      };
+      this.logger.log(
+        `[diag][${rid}] entitlement workspaceAccess complete outcome=${result.allowed ? 'allowed' : 'denied'} elapsedMs=${Date.now() - start} reason=${result.reason || 'none'}`,
+      );
+      return result;
+    } catch (error) {
+      this.logger.error(
+        `[diag][${rid}] entitlement workspaceAccess outcome=error elapsedMs=${Date.now() - start} error=${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
   }
 
   async evaluate(
