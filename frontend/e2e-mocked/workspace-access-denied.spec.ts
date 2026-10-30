@@ -43,6 +43,7 @@ test.afterAll(async () => {
 
 type MockPlan = {
   me: unknown
+  meFails?: boolean
   session: unknown
   aiSettings: { status: number; body: unknown; delayMs?: number } | null
   today: { status: number; body: unknown; delayMs?: number } | null
@@ -151,6 +152,10 @@ async function mockBackend(page: Page, plan: MockPlan) {
     const url = route.request().url()
     if (url.includes("/api/backend/me")) {
       counts.me += 1
+      if (plan.meFails) {
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "Access verification unavailable" }) })
+        return
+      }
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(plan.me) })
     } else if (url.includes("/api/backend/auth/session")) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(plan.session) })
@@ -245,4 +250,40 @@ test("aborted in-flight fetch on navigation does not surface an error", async ({
   await page.waitForTimeout(2000)
   // No error banner from the abandoned request, and no runaway refetching.
   expect(counts.aiSettings).toBeLessThanOrEqual(1)
+})
+
+test("allowed workspace hides content when background access becomes denied", async ({ page }) => {
+  const plan: MockPlan = {
+    me: ALLOWED_ME,
+    session: { ...SESSION_OWNER, impersonated: false, serviceAccess: ALLOWED_ME.serviceAccess },
+    aiSettings: { status: 200, body: AI_SETTINGS_OK },
+    today: null,
+  }
+  await mockBackend(page, plan)
+  await page.goto("/app/assistant/settings")
+  await expect(page.getByText("Assistant preferences")).toBeVisible()
+  plan.me = { ...ALLOWED_ME, serviceAccess: DENIED_ME.serviceAccess }
+  await page.evaluate(() => window.dispatchEvent(new Event("rta:workspace-access-changed")))
+  await expect(page.getByRole("heading", { name: "Payment confirmation required" })).toBeVisible()
+  await expect(page.getByText("Assistant preferences")).toBeHidden()
+})
+
+test("failed background access hides content and allows a successful retry", async ({ page }) => {
+  const plan: MockPlan = {
+    me: ALLOWED_ME,
+    session: { ...SESSION_OWNER, impersonated: false, serviceAccess: ALLOWED_ME.serviceAccess },
+    aiSettings: { status: 200, body: AI_SETTINGS_OK },
+    today: null,
+  }
+  await mockBackend(page, plan)
+  await page.goto("/app/assistant/settings")
+  await expect(page.getByText("Assistant preferences")).toBeVisible()
+  plan.meFails = true
+  await page.evaluate(() => window.dispatchEvent(new Event("rta:workspace-access-changed")))
+  await expect(page.getByRole("alert").filter({ hasText: "Workspace access could not be checked" })).toBeVisible()
+  await expect(page.getByText("Assistant preferences")).toBeHidden()
+  plan.meFails = false
+  await page.getByRole("button", { name: "Try again", exact: true }).click()
+  await expect(page.getByText("Assistant preferences")).toBeVisible()
+  await expect(page.getByText("Workspace access could not be checked.", { exact: false })).toBeHidden()
 })

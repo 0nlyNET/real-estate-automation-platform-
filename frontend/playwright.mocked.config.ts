@@ -9,6 +9,13 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 15_000 },
   reporter: "list",
+  webServer: {
+    command: "npm run start -- --hostname 127.0.0.1 --port 3400",
+    url: "http://127.0.0.1:3400/login",
+    reuseExistingServer: !process.env.CI,
+    timeout: 60_000,
+    env: { BACKEND_API_URL: "http://127.0.0.1:4000" },
+  },
   use: {
     baseURL: "http://127.0.0.1:3400",
     trace: "retain-on-failure",

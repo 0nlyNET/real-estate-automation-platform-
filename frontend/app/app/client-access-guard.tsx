@@ -49,9 +49,9 @@ export function ClientAccessGuard({ children }: { children: ReactNode }) {
       // Aborted requests are expected on cleanup; do not show an error for them.
       // Only the current request may set the error state.
       if (controller.signal.aborted) return
-      // A background refresh must not wipe the UI with an access error; the
-      // page that triggered the refresh already surfaces its own denial.
-      if (current === generation.current && !background) setError("Workspace access could not be checked. Your sign-in has been kept; please retry.")
+      // Refreshes keep the page mounted while pending, but a failed check
+      // must hide previously authorized content until verification succeeds.
+      if (current === generation.current) setError("Workspace access could not be checked. Your sign-in has been kept; please retry.")
     } finally {
       // Only the current request may clear the in-flight flag and loading state.
       // A stale request finishing after cleanup must not touch state owned by
