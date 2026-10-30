@@ -76,23 +76,8 @@ export class UsersService {
     }
   }
 
-  // Diagnostic instrumentation (temporary): timed user lookup with outcome,
-  // correlated by the shared request ID. Logs user id presence only.
-  async findById(id: string, requestId?: string): Promise<User | null> {
-    const rid = requestId || 'no-request-id';
-    const start = Date.now();
-    try {
-      const user = await this.repo.findOne({ where: { id } });
-      this.logger.log(
-        `[diag][${rid}] users findById outcome=${user ? 'found' : 'not_found'} elapsedMs=${Date.now() - start}`,
-      );
-      return user;
-    } catch (error) {
-      this.logger.error(
-        `[diag][${rid}] users findById outcome=error elapsedMs=${Date.now() - start} error=${error instanceof Error ? error.message : String(error)}`,
-      );
-      throw error;
-    }
+  async findById(id: string): Promise<User | null> {
+    return await this.repo.findOne({ where: { id } });
   }
 
   async save(user: User): Promise<User> {
