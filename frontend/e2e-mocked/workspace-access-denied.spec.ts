@@ -287,3 +287,35 @@ test("failed background access hides content and allows a successful retry", asy
   await expect(page.getByText("Assistant preferences")).toBeVisible()
   await expect(page.getByText("Workspace access could not be checked.", { exact: false })).toBeHidden()
 })
+
+test("legacy SMS selection can be removed for an email-only workspace", async ({ page }) => {
+  const legacyConfiguration = {
+    ...AI_SETTINGS_OK,
+    settings: { ...AI_SETTINGS_OK.settings, allowedChannels: ["sms", "email"] },
+  }
+  const plan: MockPlan = {
+    me: ALLOWED_ME,
+    session: { ...SESSION_OWNER, impersonated: false, serviceAccess: ALLOWED_ME.serviceAccess },
+    aiSettings: { status: 200, body: legacyConfiguration },
+    today: null,
+  }
+  await mockBackend(page, plan)
+  let savedChannels: unknown
+  await page.route("**/api/backend/ai/settings", async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback()
+    savedChannels = route.request().postDataJSON().allowedChannels
+    plan.aiSettings = { status: 200, body: AI_SETTINGS_OK }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(AI_SETTINGS_OK) })
+  })
+  await page.goto("/app/assistant/settings")
+  const sms = page.getByRole("checkbox", { name: "SMS (not provisioned)", exact: true })
+  await expect(sms).toBeChecked()
+  await expect(sms).toBeEnabled()
+  await sms.uncheck()
+  await expect(sms).toBeDisabled()
+  await page.getByRole("button", { name: "Save preferences", exact: true }).click()
+  await expect(page.getByText("Assistant preferences saved. Approval is required before enabling AI.")).toBeVisible()
+  expect(savedChannels).toEqual(["email"])
+  await expect(sms).not.toBeChecked()
+  await expect(sms).toBeDisabled()
+})

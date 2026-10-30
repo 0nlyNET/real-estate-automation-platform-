@@ -394,13 +394,14 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
               <div className="mt-2 flex gap-4">
                 {(["sms", "email"] as const).map((channel) => {
                   const provisioned = configuration.readiness.communications[channel]
-                  const isLastSelected = allowedChannels.length === 1 && allowedChannels.includes(channel)
+                  const selected = allowedChannels.includes(channel)
+                  const isLastSelected = allowedChannels.length === 1 && selected
                   return (
                     <label key={channel} className="flex items-center gap-2" title={!provisioned ? `${channel.toUpperCase()} is not provisioned for this workspace` : undefined}>
                       <input
                         type="checkbox"
-                        checked={allowedChannels.includes(channel)}
-                        disabled={!canManage || isLastSelected || !provisioned}
+                        checked={selected}
+                        disabled={!canManage || isLastSelected || (!provisioned && !selected)}
                         onChange={(event) => setAllowedChannels((current) => event.target.checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel))}
                       />
                       {channel.toUpperCase()}
