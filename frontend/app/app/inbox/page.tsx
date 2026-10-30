@@ -172,6 +172,8 @@ export default function InboxPage() {
   const [sendFailures, setSendFailures] = useState<Record<string, SendFailure>>({})
   const [scope, setScope] = useState<"shared" | "mine">("shared")
   const [me, setMe] = useState<Me | null>(null)
+  const [includeTest, setIncludeTest] = useState(false)
+  const showTestConversations = Boolean(me?.operatorMode && !me.impersonated && includeTest)
   const messageViewportRef = useRef<HTMLDivElement | null>(null)
   const messageBottomRef = useRef<HTMLDivElement | null>(null)
   const activeLeadIdRef = useRef<string | null>(null)
@@ -196,13 +198,13 @@ export default function InboxPage() {
   )
 
   const loadThreads = useCallback(async () => {
-    const requestKey = `${scope}:${threadTake}`
+    const requestKey = `${scope}:${threadTake}:${showTestConversations}`
     if (threadRefreshInFlight.current === requestKey) return
     threadRefreshInFlight.current = requestKey
     const requestVersion = ++threadRequestVersion.current
     try {
       const page = await apiFetch<ThreadPage>(
-        `/messaging/threads?scope=${scope}&take=${threadTake}&skip=0&includeMeta=1`,
+        `/messaging/threads?scope=${scope}&take=${threadTake}&skip=0&includeMeta=1${showTestConversations ? "&includeTest=true" : ""}`,
       )
       if (requestVersion !== threadRequestVersion.current) return
       const items = Array.isArray(page?.items) ? page.items : []
@@ -212,7 +214,7 @@ export default function InboxPage() {
       const requested = requestedLeadIdConsumed.current
         ? null
         : new URLSearchParams(window.location.search).get("leadId")
-      requestedLeadIdConsumed.current = true
+      requestedLeadIdConsumed.current = !requested || items.some((item) => item.leadId === requested)
       setActiveLeadId((current) => {
         const next =
           requested && items.some((item) => item.leadId === requested)
@@ -233,7 +235,7 @@ export default function InboxPage() {
       }
       if (requestVersion === threadRequestVersion.current) setLoading(false)
     }
-  }, [scope, threadTake])
+  }, [scope, threadTake, showTestConversations])
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadThreads(), 0)
@@ -242,7 +244,13 @@ export default function InboxPage() {
 
   useEffect(() => {
     void fetchMe()
-      .then(setMe)
+      .then((session) => {
+        setMe(session)
+        if (session?.operatorMode && !session.impersonated && new URLSearchParams(window.location.search).get("includeTest") === "true") {
+          requestedLeadIdConsumed.current = false
+          setIncludeTest(true)
+        }
+      })
       .catch(() => setThreadError("Your conversation permissions could not be checked. Refresh and try again."))
   }, [])
 
@@ -494,6 +502,8 @@ export default function InboxPage() {
     <PageShell title="Conversations" subtitle="Read the full history, reply, and know what to say next.">
       {threadError || conversationError || actionError || readError ? <div role="alert" className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-300">{threadError || conversationError || actionError || readError}</div> : null}
       {notice ? <div role="status" className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-300">{notice}</div> : null}
+      {me?.operatorMode && !me.impersonated ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeTest} onChange={(event) => { requestedLeadIdConsumed.current = false; setThreadTake(50); setIncludeTest(event.target.checked) }} />Include controlled test conversations</label> : null}
+      {showTestConversations ? <p className="text-sm text-muted-foreground">Test view is enabled. Test messages remain excluded from normal reporting.</p> : null}
       <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
         <Card className="min-w-0">
           <CardHeader><CardTitle>People</CardTitle><div className="flex gap-2"><Button size="sm" variant={scope === "shared" ? "default" : "outline"} onClick={() => { setThreadTake(50); setScope("shared") }}>Shared</Button><Button size="sm" variant={scope === "mine" ? "default" : "outline"} onClick={() => { setThreadTake(50); setScope("mine") }}>Assigned to me</Button></div></CardHeader>

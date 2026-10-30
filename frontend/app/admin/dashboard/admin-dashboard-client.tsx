@@ -21,6 +21,9 @@ import { launchProgress, nextReadinessStep, unmappedReadinessChecks } from "@/li
 import { cn } from "@/lib/utils"
 import { useAdminSession } from "@/app/admin/admin-access-guard"
 import { NotificationCenter } from "@/components/admin/notification-center"
+import { OperatorEmailTest } from "@/components/admin/operator-email-test"
+import { ConsentAcknowledgmentCard } from "@/components/admin/consent-acknowledgment-card"
+import { ControlledTestDiagnostics } from "@/components/admin/controlled-test-diagnostics"
 import { ServiceControlDialog } from "@/components/admin/service-control-dialog"
 import { OperationsAssistantView } from "@/components/ai/operations-assistant-view"
 import { secondaryAdminNavigation, type AdminView } from "@/components/admin/admin-navigation"
@@ -496,13 +499,13 @@ const clientTabs: Array<{ id: ClientTab; label: string; ownerOnly?: boolean }> =
 ]
 
 type LaunchStepStatus = "Complete" | "Action Required" | "Waiting on Client" | "Waiting on Admin" | "Failed" | "Blocked"
-type LaunchStep = { id: string; label: string; owner: "Admin" | "Client" | "System"; keys: string[]; status: LaunchStepStatus; action: string; cta: string; disabledReason?: string; view?: AdminView; tab?: ClientTab; special?: "invite" | "copy-client-link" | "test" | "activate" }
+type LaunchStep = { id: string; label: string; owner: "Admin" | "Client" | "System"; keys: string[]; status: LaunchStepStatus; action: string; cta: string; disabledReason?: string; view?: AdminView; tab?: ClientTab; special?: "invite" | "copy-client-link" | "intake" | "test" | "activate" }
 const launchStepDefinitions: Array<Omit<LaunchStep, "status" | "action"> & { keys: string[] }> = [
   { id: "account", label: "Client/account created", owner: "System", keys: [], cta: "Open client", view: "clients", tab: "overview" },
   { id: "invitation", label: "Invitation accepted", owner: "Client", keys: [], cta: "Resend invite", special: "invite" },
   { id: "email_verified", label: "Email verified", owner: "Client", keys: [], cta: "Copy client link", special: "copy-client-link" },
   { id: "billing", label: "Payment / Stripe active", owner: "Client", keys: ["billing", "billing_evidence"], cta: "Open billing", view: "clients", tab: "billing" },
-  { id: "intake", label: "Intake and business information complete", owner: "Client", keys: ["business_identity", "contacts", "controlled_test_destinations", "service_scope", "lead_handling", "target_launch_date", "provider_owner", "timezone", "quiet_hours", "brand", "consent_policy"], cta: "Open intake", view: "clients", tab: "setup" },
+  { id: "intake", label: "Intake and business information complete", owner: "Client", keys: ["business_identity", "contacts", "controlled_test_destinations", "service_scope", "lead_handling", "target_launch_date", "provider_owner", "timezone", "quiet_hours", "brand", "consent_policy"], cta: "Open intake", special: "intake" },
   { id: "ai", label: "AI configuration approved", owner: "Admin", keys: [], cta: "Review AI", view: "settings" },
   { id: "lead_source", label: "Lead source connected", owner: "Admin", keys: ["intake_api", "meta", "intake_api_test"], cta: "Configure source", view: "clients", tab: "setup" },
   { id: "email", label: "Email configured and tested", owner: "Admin", keys: ["sendgrid", "sendgrid_provider_approval", "email_template"], cta: "Configure / test", view: "clients", tab: "setup" },
@@ -565,6 +568,7 @@ function onboardingStatus(tenant: Tenant) {
   if (tenant.lifecycleStatus === "ACTIVE") return "Complete"
   if (["SUSPENDED", "UAT_FAILED"].includes(tenant.lifecycleStatus)) return "Blocked"
   if (["READY_FOR_UAT", "READY_FOR_ACTIVATION"].includes(tenant.lifecycleStatus)) return "Ready for review"
+  if (tenant.lifecycleStatus === "TESTING") return "Testing"
   if (["DRAFT", "ONBOARDING"].includes(tenant.lifecycleStatus)) return "In progress"
   return "Not started"
 }
@@ -1095,7 +1099,7 @@ export function AdminDashboardClient({
     } catch { setError("The onboarding link could not be copied. Open the client workspace and copy /app/onboarding.") }
   }
 
-  async function openClientWorkspace() {
+  async function openClientWorkspace(destination: "/app/dashboard" | "/app/onboarding" | `/app/inbox?includeTest=true&leadId=${string}` = "/app/dashboard") {
     if (!selectedTenant) return
     setError("")
     setNotice("Entering operator mode…")
@@ -1105,7 +1109,7 @@ export function AdminDashboardClient({
       setNotice("")
       return
     }
-    window.location.assign("/app/dashboard")
+    window.location.assign(destination)
   }
 
   function runLaunchStep(step: LaunchStep) {
@@ -1113,6 +1117,7 @@ export function AdminDashboardClient({
     if (step.disabledReason) { setNotice(step.disabledReason); return }
     if (step.special === "invite") return void resendSelectedInvitation()
     if (step.special === "copy-client-link") return void copyClientOnboardingLink()
+    if (step.special === "intake") return void openClientWorkspace("/app/onboarding")
     if (step.special === "test") return void startTesting()
     if (step.special === "activate") return readiness?.ready && isOwner ? void changeService("activate") : switchView("clients", selectedTenant.id, "setup")
     switchView(step.view || "clients", selectedTenant.id, step.tab)
@@ -1584,7 +1589,7 @@ export function AdminDashboardClient({
     (item) => item.readinessLevel === "urgent" || item.temperature === "hot",
   )
   const onboardingClients = tenants.filter((item) =>
-    ["DRAFT", "ONBOARDING", "READY_FOR_UAT", "UAT_FAILED", "READY_FOR_ACTIVATION"].includes(item.lifecycleStatus),
+    ["DRAFT", "ONBOARDING", "TESTING", "READY_FOR_UAT", "UAT_FAILED", "READY_FOR_ACTIVATION"].includes(item.lifecycleStatus),
   )
   const clientsNeedingAttention = tenants.filter(clientNeedsAttention)
 
@@ -1953,7 +1958,7 @@ export function AdminDashboardClient({
 
       {view === "clients" ? (
         selectedTenant ? (
-          <div className="space-y-5">
+          <div className="min-w-0 space-y-5 [overflow-wrap:anywhere]">
             <Button variant="ghost" className="-ml-3" onClick={() => switchView("clients")}>
               ← Back to clients
             </Button>
@@ -2049,7 +2054,7 @@ export function AdminDashboardClient({
               <InlineNotice tone="error" text={clientDetailsError} onDismiss={() => setClientDetailsError("")} />
             ) : null}
 
-            <Tabs value={clientTab} onValueChange={switchClientTab}>
+            <Tabs className="min-w-0" value={clientTab} onValueChange={switchClientTab}>
               <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-none border-b bg-transparent p-0">
                 {clientTabs
                   .filter((tab) => !tab.ownerOnly || isOwner)
@@ -2064,11 +2069,11 @@ export function AdminDashboardClient({
                   ))}
               </TabsList>
 
-              <TabsContent value="overview" className="mt-5 space-y-5">
+              <TabsContent value="overview" className="mt-5 min-w-0 space-y-5">
                 {clientDetailsLoading ? (
                   <ClientWorkspaceSkeleton />
                 ) : (
-                  <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+                  <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[1.2fr_0.8fr]">
                     <Section title="Current state" subtitle="What is working, what is blocked, and what to do next.">
                       <DefinitionRow
                         label="Service"
@@ -2136,6 +2141,14 @@ export function AdminDashboardClient({
                     </Section>
                   </div>
                 )}
+                {isOwner && !me.impersonatedBy ? (
+                  <OperatorEmailTest
+                    key={selectedTenant.id}
+                    tenantId={selectedTenant.id}
+                    tenantName={selectedTenant.name}
+                    lifecycleStatus={selectedTenant.lifecycleStatus}
+                  />
+                ) : null}
               </TabsContent>
 
               <TabsContent value="leads" className="mt-5 space-y-5">
@@ -2270,6 +2283,7 @@ export function AdminDashboardClient({
               </TabsContent>
 
               <TabsContent value="setup" className="mt-5 space-y-5">
+                {isOwner ? <ConsentAcknowledgmentCard key={selectedTenant.id} tenantId={selectedTenant.id} /> : null}
                 <Section
                   title="Setup checklist"
                   subtitle="Required launch checks from the existing onboarding service."
@@ -2379,6 +2393,13 @@ export function AdminDashboardClient({
                       </p>
                     ) : null}
                   </Section>
+                ) : null}
+                {isOwner ? (
+                  <ControlledTestDiagnostics
+                    key={selectedTenant.id}
+                    tenantId={selectedTenant.id}
+                    onOpenConversation={(leadId) => void openClientWorkspace(`/app/inbox?includeTest=true&leadId=${encodeURIComponent(leadId)}`)}
+                  />
                 ) : null}
                 <Section
                   title="Launch review"
@@ -4238,7 +4259,7 @@ function OwnerSelect({
     <label className="space-y-1.5 text-xs font-medium">
       Assigned staff
       <select
-        className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+        className="h-10 w-full min-w-0 rounded-md border bg-background px-3 text-sm"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >

@@ -24,7 +24,7 @@ import { CreateAppointmentDto, UpdateAppointmentDto, UpdateHandoffDto } from './
 import { CrmEventsService } from '../crm-events/crm-events.service';
 import { AppointmentBookingService } from './appointment-booking.service';
 
-type AccessContext = { userId?: string; role?: UserRole };
+type AccessContext = { userId?: string; role?: UserRole; operatorTenantId?: string };
 
 type ClientLead = {
   id: string;
@@ -127,14 +127,14 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     return ctx?.role ? hasAtLeastRole(ctx.role, 'admin') : true;
   }
 
-  private addLeadScope(query: any, ctx?: AccessContext, leadAlias = 'lead') {
+  private addLeadScope(query: any, ctx?: AccessContext, leadAlias = 'lead', includeTests = false) {
     if (!this.canSeeAll(ctx)) {
       query.andWhere(`${leadAlias}.assignedToUserId = :scopeUserId`, {
         scopeUserId: ctx?.userId || '00000000-0000-0000-0000-000000000000',
       });
     }
     // Phase 3: exclude test/UAT leads from Today/appointments/handoffs.
-    query.andWhere(`${leadAlias}.testRunId IS NULL`);
+    if (!includeTests) query.andWhere(`${leadAlias}.testRunId IS NULL`);
     return query;
   }
 
@@ -464,7 +464,9 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
       .leftJoinAndSelect('handoff.lead', 'lead')
       .where('handoff.id = :id', { id });
     if (tenantId) query.andWhere('handoff.tenantId = :tenantId', { tenantId });
-    this.addLeadScope(query, ctx);
+    // Only the server-verified operator context for this selected tenant may
+    // act on a controlled-test handoff. Normal client/report exclusions remain.
+    this.addLeadScope(query, ctx, 'lead', Boolean(tenantId && ctx?.operatorTenantId === tenantId));
     const handoff = await query.getOne();
     if (!handoff) throw new NotFoundException('Handoff not found');
     const now = new Date();

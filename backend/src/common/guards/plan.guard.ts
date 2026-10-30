@@ -56,7 +56,8 @@ export class ServiceAccessGuard implements CanActivate {
     // Per-recipient allowlist is enforced at message send time.
     // billingEligible remains false; we record a distinct authorization.
     const path = String(req.originalUrl || req.url || '').split('?')[0];
-    const isMessagingPath = /^\/messaging(\/|$)/.test(path) || /^\/api\/messaging(\/|$)/.test(path);
+    const isMessagingPath = /^\/(?:api\/)?messaging\/send$/.test(path) &&
+      req.method === 'POST' && req.body?.channel !== 'sms';
     
     if (isMessagingPath) {
       const operatorTestAuth = await this.operatorTestGuard.checkTenantAuthorization(tenantId);

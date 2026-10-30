@@ -4,7 +4,7 @@ import { ServiceAccessGuard } from './plan.guard';
 const context = {
   getHandler: () => function handler() {},
   getClass: () => class Controller {},
-  switchToHttp: () => ({ getRequest: () => ({ user: { tenantId: 'tenant-1' } }) }),
+  switchToHttp: () => ({ getRequest: () => ({ originalUrl: '/messaging/send', method: 'POST', body: { channel: 'email' }, user: { tenantId: 'tenant-1' } }) }),
 } as any;
 
 describe('ServiceAccessGuard', () => {
@@ -41,7 +41,7 @@ describe('ServiceAccessGuard', () => {
     const ctx = {
       getHandler: () => function handler() {},
       getClass: () => class Controller {},
-      switchToHttp: () => ({ getRequest: () => ({ user: { tenantId: 'tenant-1' } }) }),
+      switchToHttp: () => ({ getRequest: () => ({ originalUrl: '/messaging/send', method: 'POST', body: { channel: 'email' }, user: { tenantId: 'tenant-1' } }) }),
     } as any;
     await expect(new ServiceAccessGuard(reflector, repo, allowGuard).canActivate(ctx)).resolves.toBe(true);
   });

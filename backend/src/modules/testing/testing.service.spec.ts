@@ -56,6 +56,7 @@ describe('TestingService production-pipeline UAT', () => {
     expect(onboarding.beginTesting).toHaveBeenCalledWith(
       'tenant-1',
       'operator-1',
+      'owner@example.com',
     );
     expect(leads.intake).toHaveBeenCalledWith(
       'tenant-1',
@@ -64,6 +65,7 @@ describe('TestingService production-pipeline UAT', () => {
         email: 'owner@example.com',
         leadType: 'seller',
         temperature: 'hot',
+        message: 'I am interested in selling a home. What information do you need from me?',
       }),
       {
         source: 'controlled_uat',
@@ -667,6 +669,22 @@ describe('TestingService production-pipeline UAT', () => {
 });
 
 describe('TestingService diagnostics', () => {
+  it('shows the persisted sanitized AI failure with a tenant-scoped lookup', async () => {
+    const aiRun = { id: 'ai-1', status: 'blocked', errorCode: 'SERVICE_NOT_ENTITLED',
+      sanitizedError: 'Payment has not been confirmed by Stripe' };
+    const aiRuns = { findOne: jest.fn().mockResolvedValue(aiRun) };
+    const service = new TestingService(
+      { findOne: jest.fn().mockResolvedValue({ id: 'run-1', tenantId: 'tenant-1', status: 'running', testLeadId: 'lead-1' }) } as any,
+      {} as any, aiRuns as any, { find: jest.fn().mockResolvedValue([]) } as any,
+      {} as any, {} as any, {} as any,
+    );
+    await expect(service.getTestDiagnostics('tenant-1')).resolves.toMatchObject({
+      aiRun: { id: 'ai-1', status: 'blocked', errorCode: 'SERVICE_NOT_ENTITLED',
+        errorMessage: aiRun.sanitizedError },
+    });
+    expect(aiRuns.findOne).toHaveBeenCalledWith({ where: { id: 'ai-1', tenantId: 'tenant-1' } });
+  });
+
   it('returns the active run diagnostics without querying Message by tenantId', async () => {
     const messageWhere: any[] = [];
     const runs = {

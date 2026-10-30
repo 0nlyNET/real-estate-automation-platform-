@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { OperatorTestModule } from '../messaging/operator-test.module';
 import { OnboardingRecord } from './onboarding-record.entity';
 import { OnboardingController } from './onboarding.controller';
 import { OnboardingService } from './onboarding.service';
@@ -34,6 +35,7 @@ import { WorkspaceAiSettings } from '../ai/workspace-ai-settings.entity';
       WorkspaceAiSettings,
     ]),
     OperationsModule,
+    OperatorTestModule,
     CommonModule,
     LimitsModule,
     AuditModule,

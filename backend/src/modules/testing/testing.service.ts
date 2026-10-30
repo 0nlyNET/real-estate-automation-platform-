@@ -167,7 +167,7 @@ export class TestingService implements OnModuleInit {
         'An active approved automation covering every enabled channel is required for controlled testing',
       );
     }
-    await this.onboarding.beginTesting(tenantId, operatorId || 'system');
+    await this.onboarding.beginTesting(tenantId, operatorId || 'system', email || undefined);
     const run = await this.runs.save(
       this.runs.create({
         tenantId,
@@ -232,7 +232,7 @@ export class TestingService implements OnModuleInit {
         source: 'controlled_uat',
         leadType: asControlledLeadType(sequence.leadType),
         temperature: asControlledTemperature(sequence.temperature),
-        message: `Controlled test run ${run.id}`,
+        message: `I am interested in ${sequence.leadType === 'seller' ? 'selling a home' : sequence.leadType === 'renter' ? 'renting a home' : sequence.leadType === 'investor' ? 'real estate investment services' : 'buying a home'}. What information do you need from me?`,
         consent,
       };
       const lead = await this.leads.intake(
@@ -491,9 +491,9 @@ export class TestingService implements OnModuleInit {
       if (run) {
         aiRun = {
           id: run.id,
-          status: (run as any).status || null,
-          errorCode: (run as any).errorCode || null,
-          errorMessage: (run as any).errorMessage || null,
+          status: run.status || null,
+          errorCode: run.errorCode || null,
+          errorMessage: run.sanitizedError || null,
         };
       }
     }

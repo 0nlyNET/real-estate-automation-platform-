@@ -884,6 +884,51 @@ describe('onboarding operational event wiring (P1)', () => {
     });
   }
 
+  it.each<[string | undefined, string | undefined, boolean]>([
+    ['60', '240', true],
+    ['0.5', '0.6667', true],
+    [undefined, '40', false],
+    ['', '40', false],
+    [' ', '40', false],
+    ['0', '40', false],
+    ['-1', '40', false],
+    ['60.01', '40', false],
+    ['NaN', '40', false],
+    ['Infinity', '40', false],
+    ['30', undefined, false],
+    ['30', '', false],
+    ['30', ' ', false],
+    ['30', '0', false],
+    ['30', '-1', false],
+    ['30', '240.01', false],
+    ['30', 'NaN', false],
+    ['30', 'Infinity', false],
+  ])('production recovery readiness with RPO=%s RTO=%s passes=%s', async (rpo, rto, passed) => {
+    const originalEnvironment = process.env;
+    process.env = {
+      ...originalEnvironment,
+      NODE_ENV: 'production',
+      BACKUP_RESTORE_TESTED_AT: new Date().toISOString(),
+      BACKUP_RETENTION_DAYS: '7',
+      BACKUP_RESTORE_ISOLATED_VERIFIED: 'true',
+      BACKUP_RESTORE_CREDENTIALS_PROTECTED: 'true',
+    };
+    if (rpo === undefined) delete process.env.BACKUP_RPO_MINUTES;
+    else process.env.BACKUP_RPO_MINUTES = rpo;
+    if (rto === undefined) delete process.env.BACKUP_RTO_MINUTES;
+    else process.env.BACKUP_RTO_MINUTES = rto;
+    try {
+      const { service } = harnessWithEvents(blockedRecord());
+      const readiness = await service.readiness('tenant-1');
+      expect(readiness.required.find((item) => item.key === 'disaster_recovery'))
+        .toMatchObject({ passed, required: true });
+      expect(readiness.blockers.some((item) => item.key === 'disaster_recovery'))
+        .toBe(!passed);
+    } finally {
+      process.env = originalEnvironment;
+    }
+  });
+
   it('blocked activate fires onboardingBlocked before throwing ACTIVATION_BLOCKED', async () => {
     const { service, operationalEvents } = harnessWithEvents(blockedRecord());
     await expect(service.activate('tenant-1', 'operator-1')).rejects.toMatchObject({
@@ -1629,5 +1674,43 @@ describe('P1 shared controlled-test completion invariant', () => {
     });
     expect(run.status).toBe('running');
     expect(record.testLeadCompletedAt).toBeNull();
+  });
+});
+
+describe('unpaid operator email testing retains activation prerequisites', () => {
+  function fixture(blockers: any[], lifecycleStatus = 'ONBOARDING', email = 'owned@example.test') {
+    const tenant = { id: 'fixture', status: 'incomplete', lifecycleStatus };
+    const record = { emailEnabled: true, smsEnabled: false, bookingEnabled: false,
+      contacts: { controlledTestEmail: email }, activationStatus: 'incomplete' };
+    const manager = { save: jest.fn() };
+    const transaction = jest.fn(async (callback) => callback(manager));
+    const service = new OnboardingService({} as any,
+      { findOne: async () => tenant, manager: { transaction } } as any,
+      { findOne: async () => ({ automationsEnabled: false }) } as any, {} as any, {} as any, {} as any);
+    jest.spyOn(service, 'getOrCreate').mockResolvedValue(record as any);
+    jest.spyOn(service, 'readiness').mockResolvedValue({ blockers } as any);
+    (service as any).operatorTests = { validateGrant: jest.fn(async ({ recipientEmail }) =>
+      recipientEmail === 'owned@example.test' ? { id: 'grant' } : null) };
+    return { service, tenant, transaction };
+  }
+  it('allows only billing blockers to be satisfied by the grant and preserves incomplete billing', async () => {
+    const item = fixture([{ category: 'billing', key: 'billing_evidence' }]);
+    await item.service.beginTesting('fixture', 'operator', 'owned@example.test');
+    expect(item.tenant.lifecycleStatus).toBe('TESTING');
+    expect(item.tenant.status).toBe('incomplete');
+    expect(item.transaction).toHaveBeenCalled();
+  });
+  it('retains consent/configuration prerequisites and recipient binding', async () => {
+    const item = fixture([{ category: 'client_information', key: 'consent_policy' }]);
+    await expect(item.service.beginTesting('fixture', 'operator')).rejects.toBeInstanceOf(BadRequestException);
+    expect(item.transaction).not.toHaveBeenCalled();
+    const mismatch = fixture([{ category: 'billing', key: 'billing_evidence' }]);
+    await expect(mismatch.service.beginTesting('fixture', 'operator', 'stranger@example.test')).rejects.toBeInstanceOf(BadRequestException);
+    expect(mismatch.transaction).not.toHaveBeenCalled();
+  });
+  it.each(['SUSPENDED', 'CANCELED'])('never revives an offboarded or %s fixture', async (lifecycle) => {
+    const item = fixture([], lifecycle);
+    await expect(item.service.beginTesting('fixture', 'operator')).rejects.toBeInstanceOf(BadRequestException);
+    expect(item.transaction).not.toHaveBeenCalled();
   });
 });

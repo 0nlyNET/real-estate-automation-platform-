@@ -1,5 +1,4 @@
 import { AdminDashboardClient } from "./admin-dashboard-client"
-import { ConsentAcknowledgmentCard } from "@/components/admin/consent-acknowledgment-card"
 import { normalizeAdminView } from "@/components/admin/admin-navigation"
 
 const clientTabs = new Set(["overview", "leads", "conversations", "appointments", "setup", "billing", "activity"])
@@ -19,14 +18,8 @@ export default async function AdminDashboardPage({ searchParams }: AdminDashboar
   const requestedClientTab = Array.isArray(params.clientTab) ? params.clientTab[0] : params.clientTab
   const initialClientTab = clientTabs.has(requestedClientTab || "") ? requestedClientTab! : "overview"
   const initialView = normalizeAdminView(requestedView)
-  const showConsentAcknowledgment =
-    initialView === "clients" && Boolean(requestedTenantId) && initialClientTab === "setup"
-
   return (
     <div className="space-y-6">
-      {showConsentAcknowledgment && requestedTenantId ? (
-        <ConsentAcknowledgmentCard tenantId={requestedTenantId} />
-      ) : null}
       <AdminDashboardClient
         initialView={initialView}
         initialTenantId={requestedTenantId}

@@ -1,9 +1,11 @@
 "use client"
 
-import { ShieldCheck } from "lucide-react"
+import { Settings2, ShieldCheck } from "lucide-react"
+import Link from "next/link"
 import { PageShell } from "@/app/app/_components/PageShell"
 import { RestrictedAssistantChat } from "@/components/ai/restricted-assistant-chat"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 
 export default function ClientAssistantPage() {
   return (
@@ -11,6 +13,13 @@ export default function ClientAssistantPage() {
       title="AI assistant"
       subtitle="Understand your setup, usage, and performance or request a safe configuration change."
     >
+      <div className="flex justify-end">
+        <Button asChild variant="outline" size="sm">
+          <Link href="/app/assistant/settings">
+            <Settings2 className="h-4 w-4" /> Assistant settings
+          </Link>
+        </Button>
+      </div>
       <Alert>
         <ShieldCheck />
         <AlertTitle>Restricted to this workspace</AlertTitle>

@@ -37,6 +37,8 @@ import { NotificationSystemV11790365760000 } from './migrations/202609260002-not
 import { WorkerHeartbeat1790448000001 } from './migrations/202609270001-worker-heartbeat';
 import { MessageRenderedBody1790448000002 } from './migrations/202609290001-message-rendered-body';
 
+import { OperatorTestMessagingSchema1790985600000 } from "./migrations/202610030002-operator-test-messaging-schema";
+
 const databaseMigrations = [
   LegacyAuthCompatibility1784332800001,
   TenantSettingsIntakeKeys1784332800002,
@@ -72,6 +74,7 @@ const databaseMigrations = [
   NotificationSystemV11790365760000,
   WorkerHeartbeat1790448000001,
   MessageRenderedBody1790448000002,
+  OperatorTestMessagingSchema1790985600000,
 ];
 
 function migrationOptions() {

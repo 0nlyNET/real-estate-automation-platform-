@@ -121,6 +121,24 @@ describe("authoritative inbox AI status", () => {
     delete process.env.OPENAI_API_KEY;
     expect(await status(service)).toBe("Needs Attention");
   });
+
+  it("uses the pinned grant and current recipient for the displayed AI status", async () => {
+    lead.email = 'owned@example.test';
+    lead.testRunId = 'test-run-1';
+    run = { leadId: 'lead', promptMetadata: { operatorTestGrantId: 'grant-1' } };
+    evaluate.mockImplementation(async (_tenant, _action, _now, options) => ({
+      allowed: options?.operatorTest?.grantId === 'grant-1' && options.operatorTest.recipientEmail === 'owned@example.test',
+      reasons: ['Payment has not been confirmed by Stripe'],
+    }));
+    expect(await status(service)).toBe('AI Active');
+    expect(evaluate).toHaveBeenLastCalledWith('tenant', 'send_automated_email', expect.any(Date), {
+      controlledTest: true, operatorTest: { grantId: 'grant-1', recipientEmail: 'owned@example.test', channel: 'email' },
+    });
+    lead.email = 'stranger@example.test';
+    expect(await status(service)).toBe('AI Paused');
+    await service.aiSummaries('tenant', [{ leadId: 'lead', channel: 'sms' }]);
+    expect(evaluate).toHaveBeenLastCalledWith('tenant', 'send_automated_sms', expect.any(Date), { controlledTest: true });
+  });
   it.each([
     "global",
     "platform",

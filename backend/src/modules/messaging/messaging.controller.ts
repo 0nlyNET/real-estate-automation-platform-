@@ -14,6 +14,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AllowOperatorTestEmailAccess } from '../entitlements/workspace-access.interceptor';
 import { MessagingService } from './messaging.service';
 import { InboxSendService } from './inbox-send.service';
 import { ComplianceService } from '../compliance/compliance.service';
@@ -24,6 +25,13 @@ import { MarkConversationReadDto, SendBookingLinkDto, SendMessageDto } from './m
 import { ConversationInboxService } from './conversation-inbox.service';
 import { SettingsService } from '../settings/settings.service';
 import { isSafeBookingUrl } from '../../common/booking-link';
+
+function operatorReadAccess(req: any) {
+  const user = req.user;
+  return user?.platformAdmin === true && !user.impersonatedBy &&
+    user.operatorMode?.tenantId === user.tenantId
+    ? { operatorTenantId: String(user.tenantId) } : undefined;
+}
 
 @UseGuards(JwtAuthGuard)
 @Controller('messaging')
@@ -38,6 +46,7 @@ export class MessagingController {
     private readonly conversationInbox: ConversationInboxService,
   ) {}
 
+  @AllowOperatorTestEmailAccess()
   @Get('threads')
   async listThreads(
     @Req() req: any,
@@ -65,7 +74,7 @@ export class MessagingController {
     const items = Array.isArray(page) ? page : page.items;
     const leadIds = items.flatMap((item) => item.leadId ? [item.leadId] : []);
     const [reads, ai] = await Promise.all([
-      this.conversationInbox.readStates(tenantId, req.user?.sub, leadIds),
+      this.conversationInbox.readStates(tenantId, req.user?.sub, leadIds, operatorReadAccess(req)),
       this.conversationInbox.aiSummaries(tenantId, items.flatMap((item) =>
         item.leadId ? [{ leadId: item.leadId, channel: item.channel }] : [])),
     ]);
@@ -76,6 +85,7 @@ export class MessagingController {
     return Array.isArray(page) ? enriched : { ...page, items: enriched };
   }
 
+  @AllowOperatorTestEmailAccess()
   @Get('threads/:leadId')
   async getThreadMessages(
     @Req() req: any,
@@ -104,20 +114,21 @@ export class MessagingController {
       },
     );
     if (Array.isArray(page)) return page;
-    const [readState] = await this.conversationInbox.readStates(tenantId, req.user?.sub, [leadId.trim()]);
+    const [readState] = await this.conversationInbox.readStates(tenantId, req.user?.sub, [leadId.trim()], operatorReadAccess(req));
     return { ...page, readState };
   }
 
   @Post('threads/:leadId/read')
   async markRead(@Req() req: any, @Param('leadId') leadId: string, @Body() body: MarkConversationReadDto) {
-    return this.conversationInbox.markRead(req.user?.tenantId, req.user?.sub, leadId, body?.messageId, body?.unreadVersion);
+    return this.conversationInbox.markRead(req.user?.tenantId, req.user?.sub, leadId, body?.messageId, body?.unreadVersion, operatorReadAccess(req));
   }
 
   @Post('threads/:leadId/unread')
   async markUnread(@Req() req: any, @Param('leadId') leadId: string) {
-    return this.conversationInbox.markUnread(req.user?.tenantId, req.user?.sub, leadId);
+    return this.conversationInbox.markUnread(req.user?.tenantId, req.user?.sub, leadId, operatorReadAccess(req));
   }
 
+  @AllowOperatorTestEmailAccess()
   @Post('send')
   @UseGuards(RolesGuard)
   @RequireRole('tc')

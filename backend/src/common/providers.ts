@@ -46,6 +46,13 @@ export async function sendSendGridEmail(
         { type: 'text/plain', value: message.text },
         ...(message.html ? [{ type: 'text/html', value: message.html }] : []),
       ],
+      // Disable SendGrid click tracking: rewritten tracking URLs for
+      // compliance-critical links (unsubscribe) have returned "Wrong Link"
+      // 400s from SendGrid's tracking server, breaking opt-out. Direct URLs
+      // ensure the frontend unsubscribe page is reached reliably.
+      tracking_settings: {
+        click_tracking: { enable: false, enable_text: false },
+      },
     }),
     signal: AbortSignal.timeout(20_000),
   });

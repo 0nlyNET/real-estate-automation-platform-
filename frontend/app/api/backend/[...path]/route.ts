@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
+import { randomUUID } from "crypto"
 
 export const dynamic = "force-dynamic"
 const MAX_PROXY_BODY_BYTES = 2_000_000
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,100}$/
 
 async function boundedRequestBody(request: NextRequest) {
   if (["GET", "HEAD"].includes(request.method) || !request.body) return undefined
@@ -48,6 +50,12 @@ async function forward(
   }
   headers.set("x-forwarded-host", request.nextUrl.host)
   headers.set("x-forwarded-proto", request.nextUrl.protocol.replace(":", ""))
+  // Propagate one shared request ID to the backend so its diagnostic timing
+  // logs can be correlated across auth, /me, and tenant lookup. The backend
+  // middleware echoes it back; generate one when the client did not supply a
+  // well-formed value.
+  const incomingId = request.headers.get("x-request-id") || ""
+  headers.set("x-request-id", REQUEST_ID_PATTERN.test(incomingId) ? incomingId : randomUUID())
 
   let body: Uint8Array<ArrayBuffer> | undefined
   try {

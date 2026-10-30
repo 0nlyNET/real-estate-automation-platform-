@@ -75,6 +75,7 @@ export class StatsService {
       .where('lead.tenantId = :tenantId', params)
       .andWhere(scope('lead'), params)
       .andWhere('message.createdAt >= :from AND message.createdAt < :to', params)
+      .andWhere('message.isOperatorTest = false')
       .getRawOne();
     const number = (value: unknown) => Number(value || 0);
     const messageMetrics = {

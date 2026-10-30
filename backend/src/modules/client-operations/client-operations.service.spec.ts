@@ -145,12 +145,28 @@ describe('ClientOperationsService', () => {
 
     const saved = await service.updateHandoff(handoff.id, handoff.tenantId, { action: 'completed', note: 'Called the lead' } as any);
     expect(saved.status).toBe('completed');
+    expect(builder.andWhere).toHaveBeenCalledWith('lead.testRunId IS NULL');
     expect(operationalEvents.handoffResolved).toHaveBeenCalledTimes(1);
     expect(operationalEvents.handoffResolved).toHaveBeenCalledWith({
       tenantId: handoff.tenantId,
       handoffId: handoff.id,
       leadId: handoff.leadId,
     });
+  });
+
+  it.each([true, false])('keeps handoff scope pinned to the selected operator tenant (matching=%s)', async (matching) => {
+    const { service, handoffs } = workflowHarness();
+    const tenantId = '20000000-0000-4000-8000-000000000001';
+    const builder = queryBuilder([]);
+    handoffs.createQueryBuilder.mockReturnValue(builder);
+    await expect(service.updateHandoff('missing-handoff', tenantId, { action: 'completed' } as any, {
+      userId: 'operator-user', role: 'admin',
+      operatorTenantId: matching ? tenantId : 'different-tenant',
+    })).rejects.toThrow('Handoff not found');
+    expect(builder.andWhere).toHaveBeenCalledWith('handoff.tenantId = :tenantId', { tenantId });
+    if (matching) expect(builder.andWhere).not.toHaveBeenCalledWith('lead.testRunId IS NULL');
+    else expect(builder.andWhere).toHaveBeenCalledWith('lead.testRunId IS NULL');
+    expect(handoffs.save).not.toHaveBeenCalled();
   });
 
   it('keeps a buyer with a credit blocker warm and schedules a future follow-up without an urgent handoff', async () => {

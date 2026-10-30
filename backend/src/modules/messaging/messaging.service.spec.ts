@@ -1308,3 +1308,52 @@ describe('template safety invariant (hardening)', () => {
     expect(send).not.toHaveBeenCalled();
   });
 });
+
+
+describe('operator test grant at the email provider boundary', () => {
+  const originalUrl = process.env.FRONTEND_URL;
+  beforeEach(() => { process.env.FRONTEND_URL = 'https://fixture.example.test'; });
+  afterEach(() => { jest.restoreAllMocks();
+    if (originalUrl === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = originalUrl;
+  });
+  function setup(allowed: boolean) {
+    const service = buildService();
+    const reserve = jest.fn().mockResolvedValue(allowed ? { id: 'grant-1' } : null);
+    (service as any).operatorTestGuard = { reserveQuota: reserve };
+    (service as any).getProviderConfig = jest.fn().mockResolvedValue({ sendgrid: {
+      apiKey: 'fixture-key', fromEmail: 'from@example.test', fromName: 'Fixture Realty',
+      inboundAddress: 'reply@example.test', routingKey: 'reply@example.test',
+    } });
+    (service as any).complianceService = { createUnsubscribeToken: jest.fn().mockReturnValue('fixture') };
+    const mark = jest.fn(); (service as any).markProviderSubmissionStarted = mark;
+    const send = jest.spyOn(providers, 'sendSendGridEmail').mockResolvedValue({ messageId: 'fixture', status: 'accepted' });
+    const message: Message = Object.assign(new Message(), { id: 'message-1', body: 'Hello\nUnsubscribe: {{unsubscribeUrl}}',
+      isOperatorTest: true, operatorTestGrantId: 'grant-1',
+      lead: { tenantId: 'tenant-1', email: 'owned@example.test', fullName: 'Owned Recipient' } });
+    return { service, reserve, mark, send, message };
+  }
+  it('reserves the persisted grant and message before submitting only its recipient', async () => {
+    const item = setup(true); await (item.service as any).sendEmail(item.message);
+    expect(item.reserve).toHaveBeenCalledWith({ tenantId: 'tenant-1', recipientEmail: 'owned@example.test',
+      channel: 'email', messageId: 'message-1', grantId: 'grant-1' });
+    expect(item.reserve.mock.invocationCallOrder[0]).toBeLessThan(item.mark.mock.invocationCallOrder[0]);
+    expect(item.mark.mock.invocationCallOrder[0]).toBeLessThan(item.send.mock.invocationCallOrder[0]);
+    expect(item.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'owned@example.test', categories: ['operator_test'] }));
+  });
+  it('blocks quota exhaustion or revocation before marking provider submission', async () => {
+    const item = setup(false);
+    await expect((item.service as any).sendEmail(item.message)).rejects.toThrow('grant invalid or quota exhausted');
+    expect(item.mark).not.toHaveBeenCalled(); expect(item.send).not.toHaveBeenCalled();
+  });
+  it('does not discover a replacement grant for a message with missing identity', async () => {
+    const item = setup(true); item.message.operatorTestGrantId = null;
+    await expect((item.service as any).sendEmail(item.message)).rejects.toThrow('identity unavailable');
+    expect(item.reserve).not.toHaveBeenCalled(); expect(item.send).not.toHaveBeenCalled();
+  });
+  it('never submits an operator test through SMS', async () => {
+    const item = setup(true);
+    await expect((item.service as any).sendSms(item.message)).rejects.toThrow('never authorize SMS');
+    expect(item.reserve).not.toHaveBeenCalled();
+  });
+});

@@ -7,6 +7,10 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 type AiDraft = {
   id: string
@@ -29,6 +33,7 @@ export type ConversationAiView = {
   aiGeneratedSummary?: string | null
   informationCollected?: Record<string, unknown>
   recommendedNextAction?: string | null
+  activeHandoff?: { id: string; status: "open" | "opened" | "snoozed"; reason: string } | null
   latestAiRun?: {
     id: string
     triggeringMessageId: string
@@ -72,6 +77,7 @@ export function AiConversationControls({
   const [editedDrafts, setEditedDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState("")
+  const [returnConfirmationLeadId, setReturnConfirmationLeadId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -93,7 +99,10 @@ export function AiConversationControls({
   }, [leadId])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0)
+    const timer = window.setTimeout(() => {
+      setReturnConfirmationLeadId(null)
+      void load()
+    }, 0)
     return () => window.clearTimeout(timer)
   }, [load])
 
@@ -106,11 +115,12 @@ export function AiConversationControls({
     key: string,
     path: string,
     body?: Record<string, unknown>,
+    method: "POST" | "PATCH" = "POST",
   ) {
     setBusy(key)
     setError("")
     try {
-      await apiFetch(path, { method: "POST", body })
+      await apiFetch(path, { method, body })
       await load()
       await onChanged?.()
     } catch (cause) {
@@ -121,13 +131,9 @@ export function AiConversationControls({
   }
 
   function returnToAi() {
-    if (
-      !window.confirm(
-        "Return this conversation to the approved AI assistant? It may respond only after all consent, service, policy, and confidence checks pass.",
-      )
-    ) {
-      return
-    }
+    const confirmedLeadId = returnConfirmationLeadId
+    setReturnConfirmationLeadId(null)
+    if (confirmedLeadId !== leadId) return
     void act(
       "return",
       `/ai/conversations/${leadId}/return-to-ai`,
@@ -191,6 +197,21 @@ export function AiConversationControls({
               </div>
             ) : null}
             <div className="flex flex-wrap gap-2">
+              {conversation.activeHandoff ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={Boolean(busy)}
+                  onClick={() => void act(
+                    "handoff",
+                    `/client/handoffs/${conversation.activeHandoff!.id}`,
+                    { action: "completed", note: "Completed from Conversations" },
+                    "PATCH",
+                  )}
+                >
+                  {busy === "handoff" ? "Completing handoff…" : "Complete human handoff"}
+                </Button>
+              ) : null}
               {conversation.ownershipStatus === "ai_handling" ? (
                 <Button
                   type="button"
@@ -214,7 +235,7 @@ export function AiConversationControls({
                   type="button"
                   variant="outline"
                   disabled={Boolean(busy)}
-                  onClick={returnToAi}
+                  onClick={() => setReturnConfirmationLeadId(leadId)}
                 >
                   <Play /> {busy === "return" ? "Returning…" : "Resume AI"}
                 </Button>
@@ -347,6 +368,23 @@ export function AiConversationControls({
           </>
         ) : null}
       </CardContent>
+      <AlertDialog open={returnConfirmationLeadId === leadId} onOpenChange={(open) => {
+        if (!open) setReturnConfirmationLeadId(null)
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Return this conversation to AI?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The approved assistant may respond after consent, service, policy, and confidence checks pass.
+              Human control stays in place until you confirm.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep human control</AlertDialogCancel>
+            <AlertDialogAction onClick={returnToAi} disabled={Boolean(busy)}>Confirm return to AI</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   )
 }

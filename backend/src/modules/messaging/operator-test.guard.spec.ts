@@ -120,23 +120,29 @@ describe('OperatorTestGuard', () => {
         recipientEmail: 'jayden+smoketest@realtytechai.app',
         channel: 'email',
         messageId: 'msg-123',
+        grantId: validAuth.id,
       });
       
       expect(result).toEqual(validAuth);
       expect(manager.insert).toHaveBeenCalled();
+      expect(manager.findOne).toHaveBeenCalledWith(OperatorTestAuthorization, expect.objectContaining({
+        where: { id: validAuth.id, tenantId: validAuth.tenantId, isRevoked: false },
+        lock: { mode: 'pessimistic_write' },
+      }));
     });
 
     it('is idempotent for retries (same message_id)', async () => {
       const manager = (mockDataSource as any).__manager;
       manager.findOne
         .mockResolvedValueOnce(validAuth) // grant lookup
-        .mockResolvedValueOnce({ id: 'usage-1' }); // existing reservation
+        .mockResolvedValueOnce({ id: 'usage-1', grantId: validAuth.id, tenantId: validAuth.tenantId, recipientEmail: validAuth.recipientAllowlist[0] }); // existing reservation
       
       const result = await guard.reserveQuota({
         tenantId: 'tenant-abc',
         recipientEmail: 'jayden+smoketest@realtytechai.app',
         channel: 'email',
         messageId: 'msg-123',
+        grantId: validAuth.id,
       });
       
       expect(result).toEqual(validAuth);
@@ -157,6 +163,7 @@ describe('OperatorTestGuard', () => {
         recipientEmail: 'jayden+smoketest@realtytechai.app',
         channel: 'email',
         messageId: 'msg-456',
+        grantId: validAuth.id,
       });
       
       expect(result).toBeNull();

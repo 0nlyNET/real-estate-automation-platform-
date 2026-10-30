@@ -264,7 +264,12 @@ export class InboxSendService {
     });
     if (existing) return existingManualResponse(existing, text);
     if (!lead.email) throw new ForbiddenException('Lead email is missing');
-    await this.entitlements.assertAllowed(tenantId, 'send_manual_email');
+    const authorization = await this.entitlements.assertAllowed(tenantId, 'send_manual_email', {
+      controlledTest: Boolean(lead.testRunId),
+      ...(operatorTest?.isOperatorTest && operatorTest.grantId ? {
+        operatorTest: { grantId: operatorTest.grantId, recipientEmail: lead.email, channel: 'email' as const },
+      } : {}),
+    });
     const consent = await this.compliance.communicationEligibility(
       tenantId,
       lead,
@@ -329,8 +334,8 @@ export class InboxSendService {
             idempotencyKey,
             authorship: 'human',
             // Server-derived operator test classification (from guard, not client)
-            isOperatorTest: operatorTest?.isOperatorTest ?? false,
-            operatorTestGrantId: operatorTest?.grantId ?? null,
+            isOperatorTest: Boolean(authorization?.operatorTestGrantId),
+            operatorTestGrantId: authorization?.operatorTestGrantId || null,
           }),
         );
         return {

@@ -50,7 +50,13 @@ export class ClientOperationsController {
       id,
       req.user?.tenantId,
       body,
-      { userId: req.user?.sub, role: req.user?.role as UserRole },
+      {
+        userId: req.user?.sub,
+        role: req.user?.role as UserRole,
+        operatorTenantId: req.user?.platformAdmin === true && !req.user.impersonatedBy &&
+          req.user.operatorMode?.tenantId === req.user.tenantId
+          ? req.user.tenantId : undefined,
+      },
     );
   }
 

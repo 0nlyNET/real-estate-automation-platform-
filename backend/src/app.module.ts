@@ -48,7 +48,7 @@ import { CrmIntegrationsModule } from './modules/crm-integrations/crm-integratio
 import { CalendarModule } from './modules/calendar/calendar.module';
 import {
   accountSecurityThrottleTracker,
-  directIpThrottleTracker,
+  sessionSecurityThrottleTracker,
 } from './common/security-throttle';
 
 @Module({
@@ -62,7 +62,7 @@ import {
         name: 'default',
         ttl: 60_000,
         limit: 120,
-        getTracker: directIpThrottleTracker,
+        getTracker: sessionSecurityThrottleTracker,
       },
       {
         // Account-authentication routes override this high ceiling to apply a

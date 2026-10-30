@@ -118,7 +118,7 @@ export class AiConversationControlService {
         ? 'ai_handling'
         : 'human_handling',
     );
-    const [drafts, latestRun] = await Promise.all([
+    const [drafts, latestRun, activeHandoff] = await Promise.all([
       this.messages.find({
         where: {
           leadId,
@@ -131,6 +131,9 @@ export class AiConversationControlService {
       this.runs.findOne({
         where: { tenantId, leadId },
         order: { createdAt: 'DESC' },
+      }),
+      this.handoffs.findOne({
+        where: { tenantId, leadId, status: In(['open', 'opened', 'snoozed']) },
       }),
     ]);
     return {
@@ -145,6 +148,11 @@ export class AiConversationControlService {
       aiGeneratedSummary: lead.conversationSummary || null,
       informationCollected: lead.qualificationData || {},
       recommendedNextAction: lead.recommendedNextAction || null,
+      activeHandoff: activeHandoff ? {
+        id: activeHandoff.id,
+        status: activeHandoff.status,
+        reason: activeHandoff.reason,
+      } : null,
       latestAiRun: latestRun
         ? {
             id: latestRun.id,
@@ -232,7 +240,7 @@ export class AiConversationControlService {
     }
     const lead = await this.requireLeadAccess(tenantId, leadId, actor);
     return this.locks.withLock(tenantId, leadId, async () => {
-      const [settings, knowledge, state, openHandoff, control, lastInbound] =
+      const [settings, knowledge, state, openHandoff, control, lastInbound, latestRun] =
         await Promise.all([
           this.getOrCreateSettings(tenantId),
           this.knowledge.findOne({ where: { tenantId } }),
@@ -249,6 +257,7 @@ export class AiConversationControlService {
             where: { leadId, direction: 'inbound' },
             order: { createdAt: 'DESC' },
           }),
+          this.runs.findOne({ where: { tenantId, leadId }, order: { createdAt: 'DESC' } }),
         ]);
       if (control.paused) {
         throw new ConflictException('Platform AI is paused.');
@@ -287,7 +296,12 @@ export class AiConversationControlService {
         tenantId,
         channel === 'sms' ? 'send_automated_sms' : 'send_automated_email',
         new Date(),
-        { controlledTest: Boolean((lead as any)?.testRunId) },
+        {
+          controlledTest: Boolean(lead.testRunId),
+          ...(channel === 'email' && typeof latestRun?.promptMetadata?.operatorTestGrantId === 'string' && latestRun.promptMetadata.operatorTestGrantId
+            ? { operatorTest: { grantId: latestRun.promptMetadata.operatorTestGrantId, recipientEmail: lead.email || '', channel: 'email' as const } }
+            : {}),
+        },
       );
       if (!entitlement.allowed) {
         throw new ConflictException(entitlement.reasons.join('; '));
