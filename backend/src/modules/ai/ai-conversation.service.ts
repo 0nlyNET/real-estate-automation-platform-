@@ -626,35 +626,42 @@ export class AiConversationService
   private async claimOperatorTestRuns(limit: number): Promise<string[]> {
     // Same driver-shape note as claimRuns: UPDATE returns [rows, rowCount];
     // updateReturningRows normalizes this.
+    // This queued-only path has no lease parameter. Keep bindings contiguous:
+    // PostgreSQL cannot infer the type of an unused $1 slot. Guard the UUID
+    // cast with CASE because WHERE predicates need not execute in order.
     const raw: unknown = await this.dataSource.transaction(async (manager) =>
       manager.query(
         `WITH candidates AS (
            SELECT r.id
            FROM ai_runs r
            WHERE r.status = 'queued'
-             AND r.attempt_count < $4
+             AND r.attempt_count < $3
              AND (r.prompt_metadata ->> 'operatorTestGrantId') IS NOT NULL
-             AND (r.prompt_metadata ->> 'operatorTestGrantId') ~ '^[0-9a-fA-F-]{36}$'
              AND EXISTS (
                SELECT 1
                FROM operator_test_authorizations g
-               WHERE g.id = (r.prompt_metadata ->> 'operatorTestGrantId')::uuid
+               WHERE g.id = CASE
+                   WHEN (r.prompt_metadata ->> 'operatorTestGrantId') ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                   THEN (r.prompt_metadata ->> 'operatorTestGrantId')::uuid
+                   ELSE NULL
+                 END
+                 AND g.tenant_id = r.tenant_id
                  AND g.is_revoked = false
                  AND g.expires_at > now()
              )
            ORDER BY r.created_at ASC
            FOR UPDATE SKIP LOCKED
-           LIMIT $2
+           LIMIT $1
          )
          UPDATE ai_runs AS run
          SET status = 'processing',
              locked_at = now(),
-             locked_by = $3,
+             locked_by = $2,
              attempt_count = run.attempt_count + 1
          FROM candidates
          WHERE run.id = candidates.id
          RETURNING run.id`,
-        [AI_RUN_LEASE_SECONDS, limit, this.workerId, MAX_AI_RUN_ATTEMPTS],
+        [limit, this.workerId, MAX_AI_RUN_ATTEMPTS],
       ),
     );
     return updateReturningRows<{ id: string }>(raw)
