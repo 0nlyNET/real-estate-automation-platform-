@@ -34,6 +34,8 @@ postgres('PostgreSQL pool connection recovery', () => {
     if (!['localhost', '127.0.0.1', '[::1]'].includes(target.hostname)) {
       throw new Error('Connection recovery tests require local disposable PostgreSQL');
     }
+    const upstreamHost = target.hostname.replace(/^\[|\]$/g, '');
+    const upstreamPort = Number(target.port || 5432);
     blackhole = false;
     proxy = createServer(client => {
       track(client);
@@ -41,7 +43,7 @@ postgres('PostgreSQL pool connection recovery', () => {
       // old-address socket remaining ESTABLISHED without a database session.
       if (blackhole) return;
       const upstream = track(new Socket());
-      upstream.connect(Number(target.port || 5432), target.hostname);
+      upstream.connect(upstreamPort, upstreamHost);
       client.pipe(upstream).pipe(client);
       client.on('close', () => upstream.destroy());
       upstream.on('close', () => client.destroy());
