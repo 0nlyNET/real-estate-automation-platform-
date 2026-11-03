@@ -91,6 +91,11 @@ function migrationOptions() {
 }
 export function buildDatabaseOptions(databaseUrl = process.env.DATABASE_URL): DataSourceOptions {
   const url = databaseUrl;
+  // A stale database address must not occupy every pool slot indefinitely.
+  const connectionRecovery = {
+    connectTimeoutMS: 5_000,
+    extra: { keepAlive: true, keepAliveInitialDelayMillis: 10_000 },
+  };
 
   if (url) {
     const isLocal = url.includes("localhost") || url.includes("127.0.0.1");
@@ -102,6 +107,7 @@ export function buildDatabaseOptions(databaseUrl = process.env.DATABASE_URL): Da
       entities: [...databaseEntities],
       synchronize: allowSync,
       ssl: buildDatabaseSslConfig(!isLocal),
+      ...connectionRecovery,
       ...migrationOptions(),
     };
   }
@@ -120,6 +126,7 @@ export function buildDatabaseOptions(databaseUrl = process.env.DATABASE_URL): Da
     entities: [...databaseEntities],
     synchronize: process.env.TYPEORM_SYNC === "true",
     ssl: buildDatabaseSslConfig(false),
+    ...connectionRecovery,
     ...migrationOptions(),
   };
 }
