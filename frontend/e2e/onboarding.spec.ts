@@ -177,6 +177,55 @@ test("guided intake opens the selected tenant's editable onboarding form", async
   await expect(page).toHaveURL(/\/admin\/dashboard/)
 })
 
+test("an inactive sequence counts after approval and shows validation failures in the dialog", async ({ page }) => {
+  const { tenantId } = accounts()
+  const db = new Client({ connectionString: process.env.DATABASE_URL })
+  const name = `Approval rehearsal ${randomUUID()}`
+  const headers = { origin: "http://127.0.0.1:3400" }
+  const readinessPath = `/api/backend/admin/tenants/${tenantId}/readiness`
+  await login(page, "browser-owner@example.test")
+  await openOnboarding(page)
+  await db.connect()
+  const original = await db.query("SELECT email_enabled FROM onboarding_records WHERE tenant_id = $1", [tenantId])
+  try {
+    await db.query("UPDATE onboarding_records SET email_enabled = true WHERE tenant_id = $1", [tenantId])
+    expect((await page.request.post("/api/backend/admin/operator-mode", {
+      headers, data: { tenantId },
+    })).status()).toBe(201)
+    const created = await page.request.post("/api/backend/sequences", {
+      headers, data: { name, active: false, leadType: "buyer", temperature: "warm" },
+    })
+    expect(created.ok()).toBe(true)
+    const { id } = await created.json()
+    expect((await page.request.post(`/api/backend/sequences/${id}/steps`, {
+      headers, data: { channel: "email", template: "Test Realty: Hello {{leadName}}. {{unsubscribeUrl}}", identityLabel: "Wrong Realty", offsetMinutes: 0 },
+    })).ok()).toBe(true)
+    const templatePassed = async () => {
+      const result = await page.request.get(readinessPath)
+      expect(result.ok()).toBe(true)
+      return (await result.json()).required.find((item: { key: string }) => item.key === "email_template")?.passed
+    }
+    expect(await templatePassed()).toBe(false)
+    await page.goto("/app/automations")
+    await page.getByRole("button", { name: new RegExp(name) }).click()
+    await page.getByRole("button", { name: "Approve", exact: true }).click()
+    const dialog = page.getByRole("dialog", { name: "Approve template" })
+    await dialog.getByRole("button", { name: "Confirm approval" }).click()
+    await expect(dialog.getByRole("alert")).toContainText("Template body must identify the sender")
+    await dialog.getByRole("textbox", { name: "Sender identity" }).fill("Test Realty")
+    await dialog.getByRole("button", { name: "Confirm approval" }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(page.getByText("EMAIL after 0 minutes · approved · v1")).toBeVisible()
+    await expect(page.getByRole("button", { name: new RegExp(`${name}.*inactive`) })).toBeVisible()
+    expect(await templatePassed()).toBe(true)
+  } finally {
+    await db.query('DELETE FROM sequence_steps WHERE "sequenceId" IN (SELECT id FROM sequences WHERE tenant_id = $1 AND name = $2)', [tenantId, name])
+    await db.query("DELETE FROM sequences WHERE tenant_id = $1 AND name = $2", [tenantId, name])
+    await db.query("UPDATE onboarding_records SET email_enabled = $2 WHERE tenant_id = $1", [tenantId, original.rows[0].email_enabled])
+    await db.end()
+  }
+})
+
 test("consent review follows client navigation and testing workspaces remain discoverable", async ({ page, isMobile }) => {
   const { tenantId } = accounts()
   await page.route("**/api/backend/admin/tenants", async (route) => {

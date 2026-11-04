@@ -208,7 +208,6 @@ export class AiConfigurationService {
     settings.configurationApprovalStatus = 'approved';
     settings.configurationApprovedAt = new Date();
     settings.configurationApprovedById = actor.userId;
-    settings.aiEnabled = true;
     await this.settings.save(settings);
     await this.audit.recordHuman({
       tenantId,

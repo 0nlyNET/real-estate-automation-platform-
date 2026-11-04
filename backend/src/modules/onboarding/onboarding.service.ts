@@ -959,7 +959,7 @@ export class OnboardingService {
       .createQueryBuilder('step')
       .innerJoin('step.sequence', 'sequence')
       .where('sequence.tenant_id = :tenantId', { tenantId })
-      .andWhere('sequence.active = true')
+      // Approval is setup evidence even when the sequence is kept disabled.
       .andWhere('step.approval_status = :approved', { approved: 'approved' })
       .andWhere('step.active = true')
       .select('step.channel', 'channel')

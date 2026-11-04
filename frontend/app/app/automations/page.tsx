@@ -74,6 +74,8 @@ export default function AutomationsPage() {
 
   const [approvingStepId, setApprovingStepId] = useState<string | null>(null)
   const [approveIdentity, setApproveIdentity] = useState("")
+  const [approvalError, setApprovalError] = useState("")
+  const [approvalBusy, setApprovalBusy] = useState(false)
 
   async function approveStep(stepId: string, currentIdentity?: string | null) {
     if (!selected) return
@@ -81,22 +83,35 @@ export default function AutomationsPage() {
     // auto-dismissed in automated browsers and provides poor UX)
     setApprovingStepId(stepId)
     setApproveIdentity(currentIdentity || identityLabel || "")
+    setApprovalError("")
   }
 
   async function confirmApproveStep() {
-    if (!selected || !approvingStepId) return
+    if (!selected || !approvingStepId || approvalBusy) return
     const identity = approveIdentity.trim()
     if (!identity) return
+    setApprovalError("")
+    setApprovalBusy(true)
     try {
-      await apiFetch(`/sequences/${selected.id}/steps/${approvingStepId}/approve`, {
+      const result = await apiFetch<{ ok: boolean; message?: string }>(`/sequences/${selected.id}/steps/${approvingStepId}/approve`, {
         method: "POST",
         body: { identityLabel: identity },
       })
-      setApprovingStepId(null)
-      setApproveIdentity("")
+      if (!result.ok) throw new Error(result.message || "Template approval failed")
+    } catch (cause) {
+      setApprovalError(cause instanceof Error ? cause.message : "Template approval failed")
+      return
+    } finally {
+      setApprovalBusy(false)
+    }
+    setApprovingStepId(null)
+    setApproveIdentity("")
+    try {
       await open(selected.id)
       await refresh()
-    } catch (e: any) { setError(e?.message || "Template approval failed") }
+    } catch {
+      setError("Template approved. Reload to refresh the sequence.")
+    }
   }
 
   async function removeStep(stepId: string) {
@@ -179,9 +194,9 @@ export default function AutomationsPage() {
         </Card>
       </div>
       {approvingStepId ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div role="dialog" aria-modal="true" aria-labelledby="template-approval-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <Card className="w-full max-w-md">
-            <CardHeader><CardTitle>Approve template</CardTitle></CardHeader>
+            <CardHeader><CardTitle id="template-approval-title">Approve template</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground">Confirm the sender identity exactly as it appears in this template.</p>
               <Input
@@ -189,10 +204,12 @@ export default function AutomationsPage() {
                 onChange={(e) => setApproveIdentity(e.target.value)}
                 placeholder="Sender identity"
                 aria-label="Sender identity"
+                disabled={approvalBusy}
               />
+              {approvalError ? <p role="alert" className="text-sm text-red-500">{approvalError}</p> : null}
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => { setApprovingStepId(null); setApproveIdentity("") }}>Cancel</Button>
-                <Button disabled={!approveIdentity.trim()} onClick={confirmApproveStep}>Confirm approval</Button>
+                <Button variant="outline" disabled={approvalBusy} onClick={() => { setApprovingStepId(null); setApproveIdentity(""); setApprovalError("") }}>Cancel</Button>
+                <Button disabled={approvalBusy || !approveIdentity.trim()} onClick={confirmApproveStep}>Confirm approval</Button>
               </div>
             </CardContent>
           </Card>

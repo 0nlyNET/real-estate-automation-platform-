@@ -154,6 +154,31 @@ describe('workspace AI configuration approval', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it.each([false, true])('preserves the enabled state (%s) during approval', async (aiEnabled) => {
+    const tenantId = '00000000-0000-4000-8000-000000000001';
+    settingsRepo.row = Object.assign(new WorkspaceAiSettings(), {
+      tenantId,
+      aiEnabled,
+      responseMode: 'draft',
+      identityLabel: 'Lakeview virtual assistant',
+      configurationApprovalStatus: 'draft',
+    });
+    knowledgeRepo.row = Object.assign(new BrokerageKnowledge(), {
+      tenantId,
+      approvalStatus: 'approved',
+      publicName: 'Lakeview Realty',
+      serviceAreas: ['Austin'],
+    });
+    credentials.find.mockResolvedValue([
+      { provider: 'twilio', encryptedValue: JSON.stringify({
+        connected: true, lastSync: new Date().toISOString(), error: null,
+      }) },
+    ]);
+
+    const result = await service.approveSettings(tenantId, actor);
+    expect(result.settings).toMatchObject({ configurationApprovalStatus: 'approved', aiEnabled });
+  });
+
   it('enables only a separately approved configuration with a tested provider', async () => {
     const tenantId = '00000000-0000-4000-8000-000000000001';
     settingsRepo.row = Object.assign(new WorkspaceAiSettings(), {
