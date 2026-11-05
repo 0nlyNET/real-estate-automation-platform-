@@ -29,6 +29,7 @@ import { AiAuditService } from './ai-audit.service';
 import { AiConversationControlService } from './ai-conversation-control.service';
 import { AiPolicyService } from './ai-policy.service';
 import { AiToolService, AiToolResult } from './ai-tool.service';
+import { QUALIFICATION_FIELD_NAMES } from './ai-tool.contracts';
 import {
   AI_PROVIDER,
   AiProvider,
@@ -2032,6 +2033,14 @@ export class AiConversationService
       }
     }
     const merged: Record<string, string | null> = {};
+    // Extraction fills gaps; it must not discard supported details the model
+    // supplied, such as timeline or preapproval. The tool still validates
+    // these values before persistence. Unsupported fields stay excluded.
+    for (const key of QUALIFICATION_FIELD_NAMES) {
+      if (key === 'intent' || key === 'location' || key === 'budget') continue;
+      const value = modelQual[key];
+      if (value === null || typeof value === 'string') merged[key] = value;
+    }
     const pick = (key: 'intent' | 'location' | 'budget'): string | null => {
       const modelVal = modelQual[key];
       if (typeof modelVal === 'string' && modelVal.trim()) {
