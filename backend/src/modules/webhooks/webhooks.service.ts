@@ -558,9 +558,16 @@ export class WebhooksService {
         }
       }
     }
+    // Replies commonly quote our own unsubscribe footer. It is not a new
+    // opt-out request. Keep unquoted text both before and after the history
+    // so an authored opt-out in an inline/bottom-posted reply still applies.
+    // Persist the complete original message below for history and auditing.
+    const authoredText = text.split(/\r?\n/)
+      .filter((line) => !/^\s*>/.test(line))
+      .join('\n').trim();
     const stopKeyword =
-      this.compliance.isStopKeyword(text) ||
-      /^\s*(?:unsubscribe|remove me|opt out)\s*[.!]?\s*$/i.test(text);
+      this.compliance.isStopKeyword(authoredText) ||
+      /^\s*(?:unsubscribe|remove me|opt out)\s*[.!]?\s*$/i.test(authoredText);
     // RFC Message-ID is sender-supplied and can be delivered to several clients.
     // Scope inbound deduplication to the routed workspace, preserving the RFC ID
     // for outbound threading. Outbound SendGrid IDs retain their existing format.

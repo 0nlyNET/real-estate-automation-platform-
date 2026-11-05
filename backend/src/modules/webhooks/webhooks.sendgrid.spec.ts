@@ -2,6 +2,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { Message } from '../messaging/message.entity';
+import { isOptOutMessage } from '../../common/opt-out';
 import { WebhooksService } from './webhooks.service';
 
 describe('SendGrid inbound email webhook', () => {
@@ -251,6 +252,45 @@ describe('SendGrid inbound email webhook', () => {
     expect(
       item.compliance.addOptOut.mock.invocationCallOrder[0],
     ).toBeDefined();
+    expect(item.ai.acceptInbound).not.toHaveBeenCalled();
+  });
+
+  it('does not treat the quoted unsubscribe footer in a buyer reply as an opt-out', async () => {
+    const item = build();
+    item.compliance.isStopKeyword.mockImplementation(isOptOutMessage);
+    const text = [
+      'I am looking for a 3-bedroom home in Elmwood Village, up to 450k in the next 3 months.',
+      'Can you send listings?',
+      'On Wed, Nov 4, 2026 at 6:45 PM Client 1 Dress Rehearsal wrote:',
+      '> What area are you looking in?',
+      '> Unsubscribe:',
+      '> https://example.com/unsubscribe?token=test-only',
+    ].join('\r\n');
+
+    await item.service.handleSendGridInbound({ ...body, text }, authorization());
+
+    expect(item.compliance.addOptOut).not.toHaveBeenCalled();
+    expect(item.ai.acceptInbound).toHaveBeenCalledTimes(1);
+    expect(item.sequences.stopForLead).toHaveBeenCalledWith(
+      item.lead.tenantId, item.lead.id, 'reply',
+    );
+    // Keep the full provider message for the conversation and audit trail.
+    expect(item.messageRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining(text) }),
+    );
+  });
+
+  it.each([
+    'Please stop messaging me\n\n> Original message\n> Unsubscribe: https://example.com/unsubscribe',
+    '> Original message\n> Unsubscribe: https://example.com/unsubscribe\n\nUNSUBSCRIBE',
+    'Please remove me from your list',
+  ])('still suppresses an authored email opt-out around quoted history: %p', async (text) => {
+    const item = build();
+    item.compliance.isStopKeyword.mockImplementation(isOptOutMessage);
+
+    await item.service.handleSendGridInbound({ ...body, text }, authorization());
+
+    expect(item.compliance.addOptOut).toHaveBeenCalled();
     expect(item.ai.acceptInbound).not.toHaveBeenCalled();
   });
 
