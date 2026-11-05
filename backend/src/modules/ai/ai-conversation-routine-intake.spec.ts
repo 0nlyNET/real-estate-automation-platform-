@@ -424,6 +424,33 @@ describe('withRequiredOperationalUpdates', () => {
     });
   });
 
+  it('retains supported model details when adding mandatory qualification facts', () => {
+    const result = call<any[]>(
+      svc,
+      'withRequiredOperationalUpdates',
+      output([{
+        name: 'update_lead_qualification',
+        arguments: JSON.stringify({ qualification: {
+          timeline: 'within 3 months',
+          preapproval: 'yes',
+          preferredContact: 'email',
+          preferredTimes: null,
+          bedrooms: '3', // Not a supported qualification field.
+        } }),
+      }]),
+      'I am looking for a 3-bedroom home in Elmwood Village, budget $450,000.',
+    );
+    const qualification = JSON.parse(result.find(
+      (action) => action.name === 'update_lead_qualification',
+    ).arguments).qualification;
+
+    expect(qualification).toEqual({
+      intent: 'buyer', location: 'Elmwood Village', budget: '$450,000',
+      timeline: 'within 3 months', preapproval: 'yes',
+      preferredContact: 'email', preferredTimes: null,
+    });
+  });
+
   it('preserves bedroom count in the summary, not the qualification', () => {
     const result = call<any[]>(
       svc,
