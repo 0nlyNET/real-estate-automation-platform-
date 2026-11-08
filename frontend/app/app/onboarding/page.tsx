@@ -347,7 +347,7 @@ export default function OnboardingPage() {
                   </div>
                   <Card className="border-primary/30 bg-primary/5">
                     <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">Connect your lead sources and appointment provider</div><p className="mt-1 text-sm text-muted-foreground">Connect a supported lead source (Realtor.com, Zapier, or manual entry), then connect, choose, test, and activate Google Calendar. RealtyTechAI manages email delivery for you.</p></div></div>
+                      <div className="flex gap-3"><Plug className="mt-0.5 h-5 w-5 text-primary" /><div><div className="font-medium">{data.bookingEnabled ? "Connect your lead sources and appointment provider" : "Connect your lead sources"}</div><p className="mt-1 text-sm text-muted-foreground">Connect a supported lead source through Realtor.com, Zapier, or your authorized lead intake endpoint. {data.bookingEnabled ? "Then connect, choose, and test your selected appointment provider. " : ""}RealtyTechAI manages email delivery for you.</p></div></div>
                       <Button asChild type="button"><Link href="/app/integrations">Open connections</Link></Button>
                     </CardContent>
                   </Card>
@@ -355,7 +355,7 @@ export default function OnboardingPage() {
                     <div className="font-medium">What happens after you finish</div>
                     <ol className="mt-3 space-y-3 text-sm text-muted-foreground">
                       <li className="flex gap-3"><span className="font-semibold text-foreground">1.</span> RealtyTechAI reviews your information and connected accounts.</li>
-                      <li className="flex gap-3"><span className="font-semibold text-foreground">2.</span> We run a controlled test lead, message delivery, opt-out, and booking test.</li>
+                      <li className="flex gap-3"><span className="font-semibold text-foreground">2.</span> {data.bookingEnabled ? "We run a controlled test lead, message delivery, opt-out, and booking test." : "We run a controlled test lead, message delivery, and opt-out test."}</li>
                       <li className="flex gap-3"><span className="font-semibold text-foreground">3.</span> You approve the final setup in writing; we activate service only when every required check passes.</li>
                     </ol>
                   </div>
