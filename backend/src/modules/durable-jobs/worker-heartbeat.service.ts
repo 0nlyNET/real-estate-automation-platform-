@@ -3,6 +3,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { sanitizeOperationalText } from '../../common/operational-log';
 import { WorkerHeartbeat } from './worker-heartbeat.entity';
+import { isAutomationTaskType } from './automation-task-policy';
 
 export type HeartbeatSource = 'direct' | 'durable_job' | 'observed';
 
@@ -40,25 +41,24 @@ export const WORKER_INVENTORY: WorkerDefinition[] = [
     displayName: 'AI conversation worker (3s poll)',
     expectedIntervalSeconds: 3,
     critical: true,
-    source: 'observed',
-    observedQuery: 'SELECT MAX(updated_at) AS last_activity FROM ai_runs',
+    source: 'direct',
+    alertWhenMissing: true,
   },
   {
     key: 'message_sender',
     displayName: 'Outbound message sender (5s poll)',
     expectedIntervalSeconds: 5,
     critical: true,
-    source: 'observed',
-    observedQuery: 'SELECT MAX(updated_at) AS last_activity FROM messages',
+    source: 'direct',
+    alertWhenMissing: true,
   },
   {
     key: 'sequence_worker',
     displayName: 'Sequence worker (10s poll)',
     expectedIntervalSeconds: 10,
     critical: true,
-    source: 'observed',
-    observedQuery:
-      'SELECT MAX(updated_at) AS last_activity FROM sequence_enrollments',
+    source: 'direct',
+    alertWhenMissing: true,
   },
   {
     key: 'billing_grace_monitor',
@@ -150,7 +150,7 @@ export interface WorkerHealthSnapshot {
   expectedIntervalSeconds: number;
   critical: boolean;
   source: HeartbeatSource;
-  status: 'ok' | 'stale' | 'failing' | 'unknown';
+  status: 'ok' | 'stale' | 'failing' | 'unknown' | 'paused';
   lastSuccessAt: Date | null;
   lastError: string | null;
   consecutiveFailures: number;
@@ -343,6 +343,12 @@ export class WorkerHeartbeatService {
       let status: WorkerHealthSnapshot['status'] = 'unknown';
       if ((row.consecutiveFailures ?? 0) >= FAILING_THRESHOLD) {
         status = 'failing';
+      } else if (
+        process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true' &&
+        source === 'durable_job' && def?.durableTaskTypes?.length &&
+        def.durableTaskTypes.every(isAutomationTaskType)
+      ) {
+        status = 'paused';
       } else if (lastSuccess) {
         const staleAfter =
           source === 'observed'

@@ -12,6 +12,7 @@ import { sanitizeOperationalText } from "../../common/operational-log";
 import { DurableJob } from "./durable-job.entity";
 import { OperationsService } from "../operations/operations.service";
 import { WorkerHeartbeatService } from "./worker-heartbeat.service";
+import { AUTOMATION_TASK_PREFIXES, isAutomationTaskType } from './automation-task-policy';
 
 export type DurableJobHandler = (
   job: DurableJob,
@@ -23,14 +24,6 @@ export type DurableJobCancellationHandler = (
 
 const RESUME_BATCH_LIMIT = 5;
 const DEFAULT_AUTOMATION_MAX_AGE_MS = 15 * 60_000;
-const AUTOMATION_TASK_PREFIXES = [
-  "appointment.",
-  "calendar.",
-  "integration.webhook_",
-  "tenant.provision",
-  "testing.start",
-  "twilio.a2p_",
-];
 // These handlers reconcile current provider state and schedule their next poll.
 // Cancelling them permanently after downtime would lose calendar/approval sync.
 const MAINTENANCE_TASKS = new Set([
@@ -275,9 +268,7 @@ export class DurableJobsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isAutomationTask(taskType: string) {
-    return AUTOMATION_TASK_PREFIXES.some((prefix) =>
-      taskType.startsWith(prefix),
-    );
+    return isAutomationTaskType(taskType);
   }
 
   private automationMaxAgeMs() {

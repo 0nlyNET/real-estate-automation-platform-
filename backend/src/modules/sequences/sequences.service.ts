@@ -5,6 +5,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
@@ -21,6 +22,7 @@ import {
   updateReturningRows,
 } from '../../common/db/raw-query-rows';
 import { Tenant } from '../tenants/tenant.entity';
+import { WorkerHeartbeatService } from '../durable-jobs/worker-heartbeat.service';
 import { formatHHMM, isWithinQuietHours, nextAllowedSendTime } from '../../common/time';
 import { ComplianceService } from '../compliance/compliance.service';
 import { hasAtLeastRole, UserRole } from '../../common/rbac';
@@ -76,18 +78,22 @@ export class SequencesService implements OnModuleInit, OnModuleDestroy {
     private readonly complianceService: ComplianceService,
     private readonly entitlements: EntitlementService,
     private readonly operations: OperationsService,
+    @Optional() private readonly heartbeats?: WorkerHeartbeatService,
   ) {}
 
   onModuleInit(): void {
     this.interval = setInterval(() => {
-      this.processDueEnrollments().catch((error) =>
-        this.logger.error(
-          operationalEvent('sequence_worker_failed', {
-            workerId: this.workerId,
-            error: error?.message ?? error,
-          }),
-        ),
-      );
+      this.processDueEnrollments()
+        .then(() => this.heartbeats?.recordTick('sequence_worker'))
+        .catch(async (error) => {
+          await this.heartbeats?.recordFailure('sequence_worker', error);
+          this.logger.error(
+            operationalEvent('sequence_worker_failed', {
+              workerId: this.workerId,
+              error: error?.message ?? error,
+            }),
+          );
+        });
     }, 10_000);
   }
 

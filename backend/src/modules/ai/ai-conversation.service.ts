@@ -43,6 +43,7 @@ import { PlatformAiControl } from './platform-ai-control.entity';
 import { WorkspaceAiSettings } from './workspace-ai-settings.entity';
 import { LimitsService } from '../limits/limits.service';
 import { ProviderConfigService } from '../integrations/provider-config.service';
+import { WorkerHeartbeatService } from '../durable-jobs/worker-heartbeat.service';
 
 type AiConversationEvent = {
   tenantId: string;
@@ -124,6 +125,7 @@ export class AiConversationService
     private readonly operations: OperationsService,
     @Optional() private readonly limits?: LimitsService,
     @Optional() private readonly providerConfig?: ProviderConfigService,
+    @Optional() private readonly heartbeats?: WorkerHeartbeatService,
   ) {}
 
   onModuleInit() {
@@ -156,7 +158,9 @@ export class AiConversationService
     this.workerRunning = true;
     try {
       await this.processPendingRuns(10);
+      await this.heartbeats?.recordTick('ai_worker');
     } catch (error: unknown) {
+      await this.heartbeats?.recordFailure('ai_worker', error);
       this.logger.error(
         operationalEvent('ai_worker_failed', {
           error: error instanceof Error ? error.message : String(error),
