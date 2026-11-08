@@ -639,6 +639,7 @@ export function AdminDashboardClient({
   const [technicalEvidence, setTechnicalEvidence] = useState<Record<string, Record<string, string>>>({})
   const [testSmsRecipient, setTestSmsRecipient] = useState("")
   const [testEmailRecipient, setTestEmailRecipient] = useState("")
+  const [clientEvidenceRevision, setClientEvidenceRevision] = useState(0)
   const [testingBusy, setTestingBusy] = useState(false)
   const [activeTestRunId, setActiveTestRunId] = useState<string | null>(null)
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null)
@@ -858,7 +859,7 @@ export function AdminDashboardClient({
     if (!tenant) return
     setSelectedTenant(tenant)
     void loadClientCore(tenant)
-  }, [initialTenantId, loadClientCore, tenants])
+  }, [initialTenantId, loadClientCore, tenants, clientEvidenceRevision])
 
   useEffect(() => {
     if (!selectedTenant || clientTab !== "setup") {
@@ -2147,6 +2148,7 @@ export function AdminDashboardClient({
                     tenantId={selectedTenant.id}
                     tenantName={selectedTenant.name}
                     lifecycleStatus={selectedTenant.lifecycleStatus}
+                    onAuthorizationChanged={() => setClientEvidenceRevision((current) => current + 1)}
                   />
                 ) : null}
               </TabsContent>
@@ -2458,7 +2460,7 @@ export function AdminDashboardClient({
                     {readiness?.externalProviderApprovals.sendgrid.required ? (
                       <div className="space-y-2 rounded-md border p-3">
                         <div className="text-sm font-medium">SendGrid external verification</div>
-                        <p className="text-xs text-muted-foreground">Current status: {readiness.externalProviderApprovals.sendgrid.status.replaceAll("_", " ")}. The platform-authenticated sending and reply domains are reused securely; tenant credentials are never required.</p>
+                        <p className="text-xs text-muted-foreground">Current status: {readiness.externalProviderApprovals.sendgrid.recorded ? "approved" : readiness.externalProviderApprovals.sendgrid.status.replaceAll("_", " ")}. The platform-authenticated sending and reply domains are reused securely; tenant credentials are never required.</p>
                       </div>
                     ) : null}
                   </div>
