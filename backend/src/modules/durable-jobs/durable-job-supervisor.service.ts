@@ -6,6 +6,7 @@ import { OperationalEventsService } from '../notifications/operational-events.se
 import { DurableJob } from './durable-job.entity';
 import { DurableJobsService } from './durable-jobs.service';
 import { WorkerHeartbeatService } from './worker-heartbeat.service';
+import { isAutomationTaskType } from './automation-task-policy';
 
 export interface SupervisorFinding {
   kind:
@@ -320,6 +321,8 @@ export class DurableJobSupervisorService implements OnModuleInit {
     }
 
     for (const { cadence, total, last_activity, overdue } of cadenceRows) {
+      if (process.env.GLOBAL_AUTOMATIONS_DISABLED === 'true' &&
+          cadence.taskTypes.every(isAutomationTaskType)) continue;
       const totalJobs = Number(total || 0);
       const overdueCount = Number(overdue || 0);
       const lastActivity = last_activity ? new Date(last_activity).getTime() : 0;

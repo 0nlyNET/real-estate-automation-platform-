@@ -35,6 +35,7 @@ import { LimitsService } from '../limits/limits.service';
 import { ProviderConfigService } from '../integrations/provider-config.service';
 import { SendDecisionService } from './send-decision.service';
 import { OperatorTestGuard } from './operator-test.guard';
+import { WorkerHeartbeatService } from '../durable-jobs/worker-heartbeat.service';
 
 type ProviderConfig = {
   sendgrid?: {
@@ -86,18 +87,22 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly sendDecisions?: SendDecisionService,
     @Optional() private readonly operationalEvents?: OperationalEventsService,
     @Optional() private readonly operatorTestGuard?: OperatorTestGuard,
+    @Optional() private readonly heartbeats?: WorkerHeartbeatService,
   ) {}
 
   onModuleInit(): void {
     this.senderTimer = setInterval(() => {
-      this.processPendingOutbound({ limit: 25 }).catch((error) =>
-        this.logger.error(
-          operationalEvent('message_worker_failed', {
-            workerId: this.workerId,
-            error: error?.message ?? error,
-          }),
-        ),
-      );
+      this.processPendingOutbound({ limit: 25 })
+        .then(() => this.heartbeats?.recordTick('message_sender'))
+        .catch(async (error) => {
+          await this.heartbeats?.recordFailure('message_sender', error);
+          this.logger.error(
+            operationalEvent('message_worker_failed', {
+              workerId: this.workerId,
+              error: error?.message ?? error,
+            }),
+          );
+        });
     }, 5_000);
   }
 

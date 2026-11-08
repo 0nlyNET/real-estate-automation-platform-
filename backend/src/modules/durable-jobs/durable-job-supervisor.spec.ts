@@ -18,6 +18,8 @@ function recentActivity(minutesAgo = 1) {
 }
 
 describe('DurableJobSupervisorService', () => {
+  const original = { ...process.env };
+  afterEach(() => { process.env = { ...original }; });
   const OLD_TICK = new Date(Date.now() - 5 * 60_000).toISOString();
 
   function setup(queryImpl: (sql: string, params?: unknown[]) => unknown) {
@@ -62,6 +64,24 @@ describe('DurableJobSupervisorService', () => {
     }
     return [];
   }
+
+  it('suppresses paused automation cadence alarms without hiding real failures or platform scans', async () => {
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
+    const { supervisor } = setup((sql, params) => {
+      if (sql.includes("status = 'failed'")) return [failedJob('calendar.google.renew_watch')];
+      if (sql.includes('task_type = ANY($1)')) {
+        return [{ total: '1', last_activity: recentActivity(10000), overdue: '1' }];
+      }
+      return healthyQuery(sql, params);
+    });
+    const findings = await supervisor.runScan();
+    const cadenceTypes = findings.filter(f => f.kind === 'cadence_missed')
+      .flatMap(f => f.details.taskTypes as string[]);
+    expect(cadenceTypes).toContain('health.critical_scan');
+    expect(cadenceTypes).not.toContain('calendar.google.renew_watch');
+    expect(cadenceTypes).not.toContain('tenant.provisioning_scan');
+    expect(findings.some(f => f.kind === 'failed_jobs' && f.alertable)).toBe(true);
+  });
 
   it('alerts on failed durable jobs via OperationalEventsService', async () => {
     const { supervisor, operationalEvents } = setup((sql, params) => {

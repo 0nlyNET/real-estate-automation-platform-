@@ -19,6 +19,8 @@ function heartbeatRow(overrides: Record<string, unknown> = {}) {
 }
 
 describe('WorkerHeartbeatService', () => {
+  const original = { ...process.env };
+  afterEach(() => { process.env = { ...original }; });
   function setup(rows: unknown[] = []) {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const dataSource = {
@@ -137,4 +139,45 @@ describe('WorkerHeartbeatService', () => {
     );
     expect(updates.length).toBeGreaterThan(0);
   });
+
+  it('reports intentionally paused calendar and provisioning work separately from stale workers', async () => {
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
+    const { service } = setup(['calendar_watch_renewals', 'tenant_provisioning_scan'].map(workerKey =>
+      heartbeatRow({ workerKey, lastSuccessAt: new Date('2026-01-01T00:00:00Z') }),
+    ));
+    expect((await service.snapshot()).map(worker => worker.status)).toEqual(['paused', 'paused']);
+  });
+
+  it('does not hide repeated failures during a global automation pause', async () => {
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
+    const { service } = setup([heartbeatRow({
+      workerKey: 'calendar_watch_renewals', consecutiveFailures: 3,
+      lastSuccessAt: new Date('2026-01-01T00:00:00Z'),
+    })]);
+    expect((await service.snapshot())[0].status).toBe('failing');
+  });
+
+  it('requires fresh activity again when the automation pause is cleared', async () => {
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'false';
+    const { service } = setup([heartbeatRow({
+      workerKey: 'calendar_watch_renewals', lastSuccessAt: new Date('2026-01-01T00:00:00Z'),
+    })]);
+    expect((await service.snapshot())[0].status).toBe('stale');
+  });
+
+  it('detects a stopped sender scheduler even when the platform is paused', async () => {
+    process.env.GLOBAL_AUTOMATIONS_DISABLED = 'true';
+    const { service } = setup([heartbeatRow({
+      workerKey: 'message_sender', lastSuccessAt: new Date(Date.now() - 10 * 60_000),
+    })]);
+    expect((await service.snapshot())[0].status).toBe('stale');
+  });
+
+  it.each(['message_sender', 'ai_worker', 'sequence_worker'])(
+    'uses actual poller liveness for %s rather than domain-table activity', async (key) => {
+      const { service, queries } = setup();
+      await service.recordTick(key);
+      expect(queries[0].params?.[4]).toBe('direct');
+    },
+  );
 });
