@@ -47,3 +47,18 @@ describe('Actual worker poller liveness', () => {
     } finally { worker.onModuleDestroy(); }
   });
 });
+
+
+it('performs the first actual billing-grace check within five seconds of boot', async () => {
+  const original = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production'; jest.useFakeTimers();
+  const heartbeats = {recordTick: jest.fn(async () => undefined), recordFailure: jest.fn(async () => undefined)};
+  const worker = new ServiceControlService({} as any, {} as any, {} as any, {} as any, undefined, heartbeats as any);
+  const check = jest.spyOn(worker, 'suspendExpiredBillingGrace').mockResolvedValue({checked:0,suspended:0});
+  try {
+    worker.onModuleInit(); expect(heartbeats.recordTick).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(heartbeats.recordTick).toHaveBeenCalledWith('billing_grace_monitor');
+  } finally {worker.onModuleDestroy(); jest.useRealTimers(); process.env.NODE_ENV = original;}
+});

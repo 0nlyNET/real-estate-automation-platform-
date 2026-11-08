@@ -108,6 +108,7 @@ export function describeServiceState(tenant: Tenant, now = new Date()) {
 export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ServiceControlService.name);
   private monitor?: NodeJS.Timeout;
+  private initialMonitor?: NodeJS.Timeout;
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -120,7 +121,7 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
-    this.monitor = setInterval(() => {
+    const poll = () => {
       this.suspendExpiredBillingGrace()
         .then(() => this.heartbeats?.recordTick('billing_grace_monitor'))
         .catch(async (error: unknown) => {
@@ -131,11 +132,17 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
           }),
         );
       });
-    }, 5 * 60_000);
+    };
+    // Perform a real check soon after boot; do not advertise a healthy
+    // heartbeat before the grace query has actually completed.
+    this.initialMonitor = setTimeout(poll, 5_000);
+    this.monitor = setInterval(poll, 5 * 60_000);
+    this.initialMonitor.unref?.();
     this.monitor.unref?.();
   }
 
   onModuleDestroy() {
+    if (this.initialMonitor) clearTimeout(this.initialMonitor);
     if (this.monitor) clearInterval(this.monitor);
   }
 
