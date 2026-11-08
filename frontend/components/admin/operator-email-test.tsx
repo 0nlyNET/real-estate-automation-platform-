@@ -16,10 +16,11 @@ type Grant = {
   isRevoked: boolean
 }
 
-export function OperatorEmailTest({ tenantId, tenantName, lifecycleStatus }: {
+export function OperatorEmailTest({ tenantId, tenantName, lifecycleStatus, onAuthorizationChanged }: {
   tenantId: string
   tenantName: string
   lifecycleStatus: string
+  onAuthorizationChanged?: () => void
 }) {
   const [grants, setGrants] = useState<Grant[]>([])
   const [recipient, setRecipient] = useState("")
@@ -75,6 +76,7 @@ export function OperatorEmailTest({ tenantId, tenantName, lifecycleStatus }: {
       setGrants((current) => [grant, ...current])
       setConsent(false)
       setNotice("Email test grant created. Billing remains unchanged. Complete the normal controlled test in Setup.")
+      onAuthorizationChanged?.()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Test grant could not be created.")
     } finally {
@@ -91,6 +93,7 @@ export function OperatorEmailTest({ tenantId, tenantName, lifecycleStatus }: {
       await apiFetch(`/admin/operator-test/grants/${encodeURIComponent(id)}`, { method: "DELETE" })
       setGrants((current) => current.map((grant) => grant.id === id ? { ...grant, isRevoked: true } : grant))
       setNotice("Grant revoked. New and queued emails using this grant are blocked.")
+      onAuthorizationChanged?.()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Test grant could not be revoked.")
     } finally {
