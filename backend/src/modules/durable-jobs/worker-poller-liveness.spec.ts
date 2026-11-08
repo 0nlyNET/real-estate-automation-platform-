@@ -1,3 +1,6 @@
+import { ServiceControlService } from '../service-control/service-control.service';
+import { ClientOperationsService } from '../client-operations/client-operations.service';
+import { OperationalRemindersService } from '../notifications/operational-reminders.service';
 import { AiConversationService } from '../ai/ai-conversation.service';
 import { MessagingService } from '../messaging/messaging.service';
 import { SequencesService } from '../sequences/sequences.service';
@@ -14,6 +17,9 @@ describe('Actual worker poller liveness', () => {
   it.each([
     ['message_sender', MessagingService, 18, 'processPendingOutbound', 5000],
     ['ai_worker', AiConversationService, 23, 'processPendingRuns', 3000],
+    ['billing_grace_monitor', ServiceControlService, 5, 'suspendExpiredBillingGrace', 300000],
+    ['handoff_escalation', ClientOperationsService, 9, 'runOperationalChecks', 60000],
+    ['operational_reminders', OperationalRemindersService, 3, 'run', 3600000],
     ['sequence_worker', SequencesService, 12, 'processDueEnrollments', 10000],
   ] as const)('%s reports idle polls and failures independently of sent messages', async (key, Type, count, method, interval) => {
     const heartbeats = {

@@ -1,7 +1,8 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, LessThan, LessThanOrEqual, Repository } from 'typeorm';
 import { operationalEvent } from '../../common/operational-log';
+import { WorkerHeartbeatService } from '../durable-jobs/worker-heartbeat.service';
 import { OperationsTask } from '../operations/operations-task.entity';
 import { ProspectApplication } from '../public/prospect-application.entity';
 import { NotificationsService } from './notifications.service';
@@ -18,14 +19,27 @@ export class OperationalRemindersService implements OnModuleInit, OnModuleDestro
     @InjectRepository(ProspectApplication)
     private readonly applications: Repository<ProspectApplication>,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly heartbeats?: WorkerHeartbeatService,
   ) {}
 
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
-    this.initialTimer = setTimeout(() => void this.run().catch(() => undefined), 30_000);
-    this.interval = setInterval(() => void this.run().catch(() => undefined), 60 * 60 * 1000);
+    this.initialTimer = setTimeout(() => void this.poll(), 30_000);
+    this.interval = setInterval(() => void this.poll(), 60 * 60 * 1000);
     this.initialTimer.unref();
     this.interval.unref();
+  }
+
+  private async poll() {
+    try {
+      await this.run();
+      await this.heartbeats?.recordTick('operational_reminders');
+    } catch (error) {
+      await this.heartbeats?.recordFailure('operational_reminders', error);
+      this.logger.error(operationalEvent('operational_reminders_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
   }
 
   onModuleDestroy() {

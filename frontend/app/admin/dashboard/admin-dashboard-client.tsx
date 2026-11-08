@@ -379,7 +379,7 @@ type AiOverview = {
     mode: string
     configurationApprovalStatus: string
     usage: number
-    estimatedCostUsd: number
+    estimatedCostUsd: number | null
     monthlyUsageLimit: number
   }>
 }
@@ -3849,7 +3849,9 @@ export function AdminDashboardClient({
                       />
                       <div className="text-sm text-muted-foreground md:text-right">
                         {percent}% of limit
-                        {client.estimatedCostUsd
+                        {client.estimatedCostUsd === null
+                          ? " · AI cost unavailable"
+                          : client.estimatedCostUsd
                           ? ` · ${client.estimatedCostUsd.toLocaleString(undefined, { style: "currency", currency: "USD" })}`
                           : ""}
                       </div>

@@ -40,7 +40,7 @@ interface Harness {
   createTask: jest.Mock;
 }
 
-function buildService(aiImpl: (event: any) => Promise<any>): Harness {
+function buildService(aiImpl: (event: any) => Promise<any>, options: { tenant?: any; limits?: any } = {}): Harness {
   const persisted: Lead[] = [];
   const leadEvents: any[] = [];
   const aiCalls: string[] = [];
@@ -85,13 +85,13 @@ function buildService(aiImpl: (event: any) => Promise<any>): Harness {
     { findOne: jest.fn() } as any, // users
     { findOne: jest.fn() } as any, // tenant settings
     { findOne: jest.fn() } as any, // teams
-    { findById: jest.fn(async (id: string) => ({ id, lifecycleStatus: 'ACTIVE' })) } as any,
+    { findById: jest.fn(async (id: string) => ({ id, lifecycleStatus: 'ACTIVE', ...options.tenant })) } as any,
     { queueInstantResponses, createMessage } as any, // messaging
     { startForLead } as any, // sequences
     { routeLead: jest.fn(async () => null) } as any, // routing
     { recordLeadConsent: jest.fn(async () => undefined) } as any, // compliance
     undefined, // notifications (@Optional)
-    undefined, // limits (@Optional)
+    options.limits, // limits (@Optional)
     undefined, // dataSource (@Optional) -> withDedupLock runs inline
     { publish: jest.fn(async () => undefined) } as any, // crmEvents (@Optional)
     aiConversation, // aiConversation (@Optional) — provided, must be used
@@ -207,5 +207,24 @@ describe('AI first-response boundary', () => {
     expect(h.startForLead).toHaveBeenCalledWith(expect.anything(), {
       minimumDelayMinutes: 0,
     });
+  });
+});
+
+
+describe('retained intake suppresses automation', () => {
+  it.each(['PAUSED', 'SUSPENDED'])('saves launched %s leads without starting AI/templates/sequences', async lifecycleStatus => {
+    const h = buildService(async () => ({status: 'queued'}), {tenant: {lifecycleStatus, serviceActivatedAt: new Date()}});
+    const saved = await h.service.intake('tenant-1', {fullName: 'Email only', email: 'test@example.invalid'});
+    expect(saved.smsEligible).toBe(false);
+    expect(h.persisted).toHaveLength(1);
+    expect(h.acceptLead).not.toHaveBeenCalled(); expect(h.queueInstantResponses).not.toHaveBeenCalled();
+    expect(h.startForLead).not.toHaveBeenCalled();
+    expect(h.leadEvents).toEqual(expect.arrayContaining([expect.objectContaining({eventType: 'intake_retained_automation_blocked'})]));
+  });
+  it('retains authenticated external leads at the cap without granting outbound usage', async () => {
+    const h = buildService(async () => ({status: 'queued'}), {limits: {reserveUsage: jest.fn(async () => ({ok: false, code: 'LIMIT_LEADS'}))}});
+    await h.service.intake('tenant-1', intakePayload);
+    expect(h.persisted).toHaveLength(1); expect(h.acceptLead).not.toHaveBeenCalled();
+    expect(h.queueInstantResponses).not.toHaveBeenCalled(); expect(h.startForLead).not.toHaveBeenCalled();
   });
 });

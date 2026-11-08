@@ -22,6 +22,7 @@ import { Message } from '../messaging/message.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { CreateAppointmentDto, UpdateAppointmentDto, UpdateHandoffDto } from './client-operations.dto';
 import { CrmEventsService } from '../crm-events/crm-events.service';
+import { WorkerHeartbeatService } from '../durable-jobs/worker-heartbeat.service';
 import { AppointmentBookingService } from './appointment-booking.service';
 
 type AccessContext = { userId?: string; role?: UserRole; operatorTenantId?: string };
@@ -103,11 +104,15 @@ export class ClientOperationsService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly crmEvents?: CrmEventsService,
     @Optional() private readonly appointmentBooking?: AppointmentBookingService,
     @Optional() private readonly operationalEvents?: OperationalEventsService,
+    @Optional() private readonly heartbeats?: WorkerHeartbeatService,
   ) {}
 
   onModuleInit() {
     this.escalationTimer = setInterval(
-      () => void this.runOperationalChecks().catch((error: unknown) => {
+      () => void this.runOperationalChecks()
+        .then(() => this.heartbeats?.recordTick('handoff_escalation'))
+        .catch(async (error: unknown) => {
+        await this.heartbeats?.recordFailure('handoff_escalation', error);
         this.logger.error(
           operationalEvent('client_operations_check_failed', {
             error: error instanceof Error ? error.message : String(error),

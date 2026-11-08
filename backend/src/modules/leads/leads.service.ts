@@ -31,7 +31,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { normalizePhoneE164 } from '../../common/phone';
 import { createHash } from 'crypto';
 import { LimitsService } from '../limits/limits.service';
-import { assertLeadAcceptance, LeadAcceptanceContext } from './lead-acceptance';
+import { assertLeadAcceptance, acceptsRetainedIntake, LeadAcceptanceContext } from './lead-acceptance';
 import { CrmEventsService } from '../crm-events/crm-events.service';
 import { AiConversationService } from '../ai/ai-conversation.service';
 import { OperationsService } from '../operations/operations.service';
@@ -418,14 +418,12 @@ export class LeadsService {
 
   async intake(
     tenantId: string,
-    // Phone is optional at the service layer (email-only intake); the HTTP
-    // DTO requires it via validation, but programmatic callers (controlled
-    // UAT, CRM sync) may omit it.
+    // Email-only intake may omit a phone; no SMS eligibility or consent is inferred.
     payload: Omit<IntakeLeadDto, 'phone'> & { phone?: string },
     acceptance: LeadAcceptanceContext = { source: 'external' },
   ): Promise<Lead> {
     const tenant = await this.requireTenant(tenantId);
-    assertLeadAcceptance(tenant, acceptance);
+    assertLeadAcceptance(tenant, { ...acceptance, retainDuringPause: true });
 
     const fullName = this.normalizeName(payload.fullName ?? undefined);
     if (!fullName) throw new Error('fullName is required');
@@ -452,12 +450,7 @@ export class LeadsService {
         .update(`${tenant.id}:${testRunId || 'live'}:${email || ''}:${phone || ''}:${fullName}`)
         .digest('hex')}`,
     });
-    if (usage && !usage.ok) {
-      throw new HttpException(
-        { code: usage.code, message: usage.message },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
+    const intakeHeld = acceptsRetainedIntake(tenant) || Boolean(usage && !usage.ok);
 
     // Apply the workspace routing configuration for the managed service.
     const settings = await this.getTenantSettings(tenant.id);
@@ -551,6 +544,22 @@ export class LeadsService {
       entityType: 'lead',
       entityId: saved.id,
     });
+
+    if (intakeHeld) {
+      await this.logLeadEvent(saved, 'intake_retained_automation_blocked', {
+        lifecycleStatus: tenant.lifecycleStatus,
+        code: usage && !usage.ok ? usage.code : 'SERVICE_PAUSED',
+      });
+      await this.operations?.createTask({
+        tenantId: tenant.id,
+        category: 'intake_held',
+        title: 'Lead saved; automated response is blocked',
+        description: 'Review the saved lead and workspace service/usage restrictions. No automatic response was queued.',
+        priority: 'high', relatedEntityType: 'lead', relatedEntityId: saved.id,
+        dedupeOpen: true,
+      });
+      return saved;
+    }
 
     // AI is the normal first responder when its approved runtime accepts the
     // lead. Approved templates remain the deterministic fallback. The AI

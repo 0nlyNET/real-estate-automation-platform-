@@ -50,3 +50,9 @@ describe('database SSL configuration', () => {
     ).toEqual({ rejectUnauthorized: true });
   });
 });
+
+
+it('uses an explicitly supplied trusted CA on Railway without disabling verification', () => {
+  expect(buildDatabaseSslConfig(true, {RAILWAY_PROJECT_ID:'project', DATABASE_SSL_CA_CERT:'certificate\\nline'}))
+    .toEqual({rejectUnauthorized:true, ca:'certificate\nline'});
+});

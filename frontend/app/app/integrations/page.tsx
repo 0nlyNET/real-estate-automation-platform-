@@ -20,7 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
-import { API_URL, apiFetch } from "@/lib/api"
+import { API_URL, ApiError, apiFetch } from "@/lib/api"
 import {
   CheckCircle2,
   CalendarDays,
@@ -214,6 +214,7 @@ export default function IntegrationsPage() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
   const [loadErrors, setLoadErrors] = useState<string[]>([])
+  const [accessRestriction, setAccessRestriction] = useState<string | null>(null)
   const loadVersion = useRef(0)
   const [busy, setBusy] = useState<string | null>(null)
   const [integrations, setIntegrations] = useState<Integration[]>([])
@@ -276,11 +277,16 @@ export default function IntegrationsPage() {
     const version = ++loadVersion.current
     const failures: string[] = []
     setLoadErrors([])
+    setAccessRestriction(null)
     async function section<T>(name: string, path: string, apply: (value: T) => void) {
       try {
         const value = await apiFetch<T>(path)
         if (version === loadVersion.current) apply(value)
-      } catch {
+      } catch (error) {
+        if (version === loadVersion.current && error instanceof ApiError &&
+          error.status === 403 && ['PAYMENT_REQUIRED', 'WORKSPACE_SUSPENDED'].includes(error.code || '')) {
+          setAccessRestriction(error.message)
+        }
         failures.push(name)
         if (version === loadVersion.current) setLoadErrors([...failures])
       }
@@ -664,7 +670,7 @@ export default function IntegrationsPage() {
     >
       {loading ? <p role="status">Loading integration status…</p> : null}
       {busy?.includes("test") ? <p role="status">Testing connection…</p> : null}
-      {loadErrors.length ? <Alert variant="destructive"><AlertTitle>Some connection statuses are unavailable</AlertTitle><AlertDescription>{loadErrors.join(", ")} could not be checked. Displayed results may be from the last successful check.<Button className="ml-2" variant="outline" onClick={() => void load()}>Retry connections</Button></AlertDescription></Alert> : null}
+      {loadErrors.length ? <Alert variant="destructive"><AlertTitle>{accessRestriction ? "Workspace access restricts connection checks" : "Some connection statuses are unavailable"}</AlertTitle><AlertDescription>{accessRestriction ? `${accessRestriction} Resolve workspace access before testing these connections. This does not mean the providers are down.` : `${loadErrors.join(", ")} could not be checked. Displayed results may be from the last successful check.`}<Button className="ml-2" variant="outline" onClick={() => void load()}>Retry connections</Button></AlertDescription></Alert> : null}
       <Alert>
         <ShieldCheck />
         <AlertTitle>Twilio and SendGrid are managed by RealtyTechAI</AlertTitle>

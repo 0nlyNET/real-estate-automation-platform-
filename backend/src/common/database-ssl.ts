@@ -1,4 +1,4 @@
-export type DatabaseSslConfig = false | { rejectUnauthorized: boolean };
+export type DatabaseSslConfig = false | { rejectUnauthorized: boolean; ca?: string };
 
 function parseBoolean(value: string | undefined): boolean | undefined {
   if (value === undefined || value.trim() === '') return undefined;
@@ -33,6 +33,11 @@ export function buildDatabaseSslConfig(
 ): DatabaseSslConfig {
   const enabled = parseBoolean(env.DATABASE_SSL) ?? defaultEnabled;
   if (!enabled) return false;
+
+  // Explicitly trusted provider CA enables verified Railway TLS without
+  // changing existing installations that use platform-managed certificates.
+  const ca = env.DATABASE_SSL_CA_CERT?.trim().replace(/\\n/g, '\n');
+  if (ca) return { rejectUnauthorized: true, ca };
 
   if (isRailwayRuntime(env)) {
     return { rejectUnauthorized: false };

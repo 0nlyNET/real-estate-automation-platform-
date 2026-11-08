@@ -20,6 +20,7 @@ export class AiUsageService {
       .addSelect('COALESCE(SUM(run.outputUsage), 0)', 'output')
       .addSelect('COALESCE(SUM(run.estimatedCostUsd), 0)', 'cost')
       .addSelect('COUNT(run.id)', 'runs')
+      .addSelect('COUNT(CASE WHEN run.estimatedCostUsd IS NULL AND (COALESCE(run.inputUsage, 0) + COALESCE(run.outputUsage, 0)) > 0 THEN 1 END)', 'unpriced')
       .where('run.tenantId = :tenantId', { tenantId })
       .andWhere('run.createdAt >= :monthStart', { monthStart })
       .getRawOne();
@@ -30,7 +31,8 @@ export class AiUsageService {
       input,
       output,
       total: input + output,
-      estimatedCostUsd: Number(raw?.cost || 0),
+      estimatedCostUsd: Number(raw?.unpriced || 0) > 0 ? null : Number(raw?.cost || 0),
+      unpricedRuns: Number(raw?.unpriced || 0),
       runs: Number(raw?.runs || 0),
     };
   }
@@ -60,12 +62,16 @@ export class AiUsageService {
   }
 
   estimateCost(inputUsage: number, outputUsage: number) {
-    const inputRate = Number(process.env.AI_INPUT_COST_PER_MILLION_USD || 0);
-    const outputRate = Number(process.env.AI_OUTPUT_COST_PER_MILLION_USD || 0);
+    const inputText = process.env.AI_INPUT_COST_PER_MILLION_USD?.trim();
+    const outputText = process.env.AI_OUTPUT_COST_PER_MILLION_USD?.trim();
+    if (!inputText || !outputText) return null;
+    const inputRate = Number(inputText);
+    const outputRate = Number(outputText);
     if (
       !Number.isFinite(inputRate) ||
       !Number.isFinite(outputRate) ||
-      (inputRate <= 0 && outputRate <= 0)
+      inputRate < 0 || outputRate < 0 ||
+      (inputRate === 0 && outputRate === 0)
     ) {
       return null;
     }

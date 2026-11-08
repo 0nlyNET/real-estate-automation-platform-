@@ -5,14 +5,16 @@ export type LeadAcceptanceContext = {
   source: string;
   controlledTest?: boolean;
   testRunId?: string | null;
+  retainDuringPause?: boolean;
 };
 
 export function assertLeadAcceptance(
-  tenant: Pick<Tenant, 'id' | 'lifecycleStatus'>,
+  tenant: Pick<Tenant, 'id' | 'lifecycleStatus'> & Partial<Pick<Tenant, 'serviceActivatedAt' | 'servicePreviousLifecycleStatus' | 'serviceSuspensionSource'>>,
   context: LeadAcceptanceContext,
 ) {
   const lifecycle = String(tenant.lifecycleStatus || 'ONBOARDING');
   if (lifecycle === 'ACTIVE' && context.controlledTest !== true) return;
+  if (context.controlledTest !== true && context.retainDuringPause === true && acceptsRetainedIntake(tenant)) return;
   if (
     lifecycle === 'TESTING' &&
     context.controlledTest === true &&
@@ -27,4 +29,17 @@ export function assertLeadAcceptance(
     lifecycleStatus: lifecycle,
     source: context.source,
   });
+}
+
+// Existing launched workspaces retain leads during reversible service stops.
+// Never admit new live intake into onboarding/test fixtures or offboarding.
+export function acceptsRetainedIntake(
+  tenant: Pick<Tenant, 'lifecycleStatus'> & Partial<Pick<Tenant,
+    'serviceActivatedAt' | 'servicePreviousLifecycleStatus' | 'serviceSuspensionSource'>>,
+): boolean {
+  const previouslyActive = Boolean(tenant.serviceActivatedAt) ||
+    tenant.servicePreviousLifecycleStatus === 'ACTIVE';
+  return previouslyActive &&
+    (tenant.lifecycleStatus === 'PAUSED' || tenant.lifecycleStatus === 'SUSPENDED') &&
+    String(tenant.serviceSuspensionSource || '') !== 'offboarding';
 }
