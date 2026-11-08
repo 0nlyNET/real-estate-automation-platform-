@@ -50,7 +50,7 @@ type AiConfiguration = {
   usage: {
     runs: number
     total: number
-    estimatedCostUsd: number
+    estimatedCostUsd: number | null
     monthlyLimit: number
   }
   readiness: {
@@ -322,7 +322,9 @@ export function AiAssistantSettings({ canManage }: { canManage: boolean }) {
             <div className="mt-1 text-muted-foreground">
               {configuration.usage.runs} runs · {usagePercent}% of workspace
               limit
-              {configuration.usage.estimatedCostUsd
+              {configuration.usage.estimatedCostUsd === null
+                ? " · Cost unavailable: pricing evidence is incomplete"
+                : configuration.usage.estimatedCostUsd
                 ? ` · ${configuration.usage.estimatedCostUsd.toLocaleString(
                     undefined,
                     { style: "currency", currency: "USD" },

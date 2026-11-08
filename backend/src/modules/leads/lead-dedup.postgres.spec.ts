@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { LeadsService } from './leads.service';
 
 const databaseUrl = String(process.env.TEST_POSTGRES_URL || '').trim();
 const describePostgres = databaseUrl ? describe : describe.skip;
@@ -80,4 +81,39 @@ describePostgres('real PostgreSQL lead intake contention', () => {
     );
     expect(count.rows[0].count).toBe(1);
   });
+
+  it.each(['PAUSED', 'SUSPENDED', 'ACTIVE'])('persists %s intake in PostgreSQL while outbound stays blocked', async (lifecycleStatus) => {
+    const tenantId = `retained-${lifecycleStatus}`;
+    const email = `retained-${lifecycleStatus.toLowerCase()}@example.invalid`;
+    const repo = {
+      findOne: jest.fn(async () => null),
+      create: (row: any) => ({ ...row, id: randomUUID() }),
+      save: async (row: any) => {
+        await pool.query(`INSERT INTO "${schema}".leads (id, tenant_id, email, phone) VALUES ($1,$2,$3,$4)`,
+          [row.id, row.tenantId, row.email, row.phone || null]);
+        return row;
+      },
+    };
+    const events = { create: (row: any) => row, save: jest.fn(async (row: any) => row) };
+    const messaging = { queueInstantResponses: jest.fn() };
+    const sequences = { startForLead: jest.fn() };
+    const ai = { acceptLead: jest.fn() };
+    const compliance = { recordLeadConsent: jest.fn() };
+    const service = new LeadsService(repo as any, events as any, events as any,
+      {} as any, { findOne: jest.fn(async () => null) } as any, {} as any,
+      { findById: jest.fn(async () => ({ id: tenantId, lifecycleStatus, serviceActivatedAt: new Date() })) } as any,
+      messaging as any, sequences as any, { routeLead: jest.fn(async () => null) } as any,
+      compliance as any, undefined,
+      { reserveUsage: jest.fn(async () => ({ ok: false, code: 'LIMIT_LEADS' })) } as any,
+      undefined, undefined, ai as any);
+    const saved = await service.intake(tenantId, { fullName: 'Synthetic retention check', email });
+    const stored = await pool.query(`SELECT tenant_id, email, phone FROM "${schema}".leads WHERE id=$1`, [saved.id]);
+    expect(stored.rows).toEqual([{ tenant_id: tenantId, email, phone: null }]);
+    expect(events.save).toHaveBeenCalledWith(expect.objectContaining({eventType: 'intake_retained_automation_blocked'}));
+    expect(ai.acceptLead).not.toHaveBeenCalled();
+    expect(messaging.queueInstantResponses).not.toHaveBeenCalled();
+    expect(sequences.startForLead).not.toHaveBeenCalled();
+    expect(compliance.recordLeadConsent).toHaveBeenCalledWith(tenantId, saved.id, undefined);
+  });
+
 });

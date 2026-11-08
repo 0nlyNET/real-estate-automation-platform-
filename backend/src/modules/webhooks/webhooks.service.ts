@@ -38,7 +38,7 @@ import { TenantEmailIdentity } from '../integrations/tenant-email-identity.entit
 import { decryptString } from '../../common/crypto-secrets';
 import { LimitsService } from '../limits/limits.service';
 import { Tenant } from '../tenants/tenant.entity';
-import { assertLeadAcceptance } from '../leads/lead-acceptance';
+import { assertLeadAcceptance, acceptsRetainedIntake } from '../leads/lead-acceptance';
 import { TestRun } from '../testing/test-run.entity';
 import { AiRun } from '../ai/ai-run.entity';
 
@@ -76,6 +76,7 @@ export function validTwilioSignature(
 }
 
 type PersistedInbound = {
+  intakeHeld?: boolean;
   duplicate: boolean;
   tenantId?: string;
   leadId?: string;
@@ -522,6 +523,7 @@ export class WebhooksService {
       );
     }
     const tenantId = route.tenantId;
+    let intakeHeld = false;
     if (this.limits) {
       const existingLead = await this.dataSource.getRepository(Lead).findOne({
         where: { tenantId, email: from },
@@ -547,14 +549,14 @@ export class WebhooksService {
           await this.operations?.createTask({
             tenantId,
             category: 'usage_limit',
-            title: 'Inbound email lead blocked by usage limit',
+            title: 'Inbound email retained; automation blocked by usage limit',
             description: usage.message,
             priority: 'critical',
             relatedEntityType: 'tenant',
             relatedEntityId: tenantId,
             dedupeOpen: true,
           });
-          return { status: 'ignored' } as const;
+          intakeHeld = true;
         }
       }
     }
@@ -609,7 +611,8 @@ export class WebhooksService {
         ? { testRunId: readinessLead.testRunId }
         : {}),
     });
-    if (!stopKeyword && persisted.messageId) {
+    intakeHeld = intakeHeld || ('intakeHeld' in persisted && persisted.intakeHeld === true);
+    if (!stopKeyword && !intakeHeld && persisted.messageId) {
       await this.queueAiSafely({
         tenantId,
         leadId: persisted.leadId,
@@ -1411,13 +1414,15 @@ export class WebhooksService {
         input.from,
       );
     }
+    let retainedIntake = false;
     if (!lead) {
       const tenant = await manager.getRepository(Tenant).findOne({
         where: { id: input.tenantId },
         lock: { mode: 'pessimistic_read' },
       });
       if (!tenant) throw new BadRequestException('Inbound tenant not found');
-      assertLeadAcceptance(tenant, { source: 'sendgrid_inbound' });
+      assertLeadAcceptance(tenant, { source: 'sendgrid_inbound', retainDuringPause: true });
+      retainedIntake = acceptsRetainedIntake(tenant);
       lead = await leadRepository.save(
         leadRepository.create({
           tenantId: input.tenantId,
@@ -1491,6 +1496,7 @@ export class WebhooksService {
     );
     return {
       duplicate: false,
+      intakeHeld: retainedIntake,
       tenantId: input.tenantId,
       leadId: lead.id,
       messageId: message.id,

@@ -1,3 +1,6 @@
+import { ServiceControlService } from '../service-control/service-control.service';
+import { ClientOperationsService } from '../client-operations/client-operations.service';
+import { OperationalRemindersService } from '../notifications/operational-reminders.service';
 import { AiConversationService } from '../ai/ai-conversation.service';
 import { MessagingService } from '../messaging/messaging.service';
 import { SequencesService } from '../sequences/sequences.service';
@@ -14,6 +17,9 @@ describe('Actual worker poller liveness', () => {
   it.each([
     ['message_sender', MessagingService, 18, 'processPendingOutbound', 5000],
     ['ai_worker', AiConversationService, 23, 'processPendingRuns', 3000],
+    ['billing_grace_monitor', ServiceControlService, 5, 'suspendExpiredBillingGrace', 300000],
+    ['handoff_escalation', ClientOperationsService, 9, 'runOperationalChecks', 60000],
+    ['operational_reminders', OperationalRemindersService, 3, 'run', 3600000],
     ['sequence_worker', SequencesService, 12, 'processDueEnrollments', 10000],
   ] as const)('%s reports idle polls and failures independently of sent messages', async (key, Type, count, method, interval) => {
     const heartbeats = {
@@ -40,4 +46,19 @@ describe('Actual worker poller liveness', () => {
       expect(heartbeats.recordFailure).not.toHaveBeenCalled();
     } finally { worker.onModuleDestroy(); }
   });
+});
+
+
+it('performs the first actual billing-grace check within five seconds of boot', async () => {
+  const original = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production'; jest.useFakeTimers();
+  const heartbeats = {recordTick: jest.fn(async () => undefined), recordFailure: jest.fn(async () => undefined)};
+  const worker = new ServiceControlService({} as any, {} as any, {} as any, {} as any, undefined, heartbeats as any);
+  const check = jest.spyOn(worker, 'suspendExpiredBillingGrace').mockResolvedValue({checked:0,suspended:0});
+  try {
+    worker.onModuleInit(); expect(heartbeats.recordTick).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(heartbeats.recordTick).toHaveBeenCalledWith('billing_grace_monitor');
+  } finally {worker.onModuleDestroy(); jest.useRealTimers(); process.env.NODE_ENV = original;}
 });

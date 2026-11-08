@@ -1,4 +1,5 @@
 import { UnauthorizedException } from '@nestjs/common';
+import { Tenant } from '../tenants/tenant.entity';
 import { Lead } from '../leads/lead.entity';
 import { LeadEvent } from '../leads/lead-event.entity';
 import { Message } from '../messaging/message.entity';
@@ -55,7 +56,7 @@ describe('SendGrid inbound email webhook', () => {
     const leadRepo = {
       findOne: jest.fn().mockResolvedValue(options?.newLead ? null : lead),
       create: jest.fn((value) => Object.assign(new Lead(), value)),
-      save: jest.fn(async (value) => value),
+      save: jest.fn(async (value) => ({ ...value, id: lead.id })),
     };
     const eventRepo = {
       create: jest.fn((value) => Object.assign(new LeadEvent(), value)),
@@ -64,9 +65,11 @@ describe('SendGrid inbound email webhook', () => {
     const manager = {
       query: jest.fn().mockResolvedValue([]),
       getRepository: jest.fn((entity) => {
+        if (entity === Tenant) return { findOne: jest.fn().mockResolvedValue({ id: lead.tenantId, lifecycleStatus: 'ACTIVE' }) };
         if (entity === Message) return messageRepo;
         if (entity === Lead) return leadRepo;
         if (entity === LeadEvent) return eventRepo;
+        if (entity?.name === 'TestRun') return { findOne: jest.fn().mockResolvedValue(null) };
         throw new Error('Unexpected repository');
       }),
     };
@@ -194,7 +197,7 @@ describe('SendGrid inbound email webhook', () => {
     }
   });
 
-  it('reserves lead usage before an inbound email creates a new real lead', async () => {
+  it('retains an inbound email at the lead cap without queueing AI', async () => {
     const limits = {
       reserveUsage: jest.fn().mockResolvedValue({
         ok: false,
@@ -205,11 +208,12 @@ describe('SendGrid inbound email webhook', () => {
     const item = build({ newLead: true, limits });
     await expect(
       item.service.handleSendGridInbound(body, authorization()),
-    ).resolves.toEqual({ status: 'ignored' });
+    ).resolves.toEqual({ status: 'ok' });
     expect(limits.reserveUsage).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId: item.lead.tenantId, metric: 'lead' }),
     );
-    expect(item.manager.getRepository).not.toHaveBeenCalled();
+    expect(item.messageRepo.save).toHaveBeenCalled();
+    expect(item.ai.acceptInbound).not.toHaveBeenCalled();
   });
 
   it('rejects an unauthenticated inbound parse request', async () => {

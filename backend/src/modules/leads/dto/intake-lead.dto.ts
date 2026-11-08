@@ -10,8 +10,9 @@ export class IntakeLeadDto {
   @IsString()
   fullName!: string;
 
+  @IsOptional()
   @IsString()
-  phone!: string;
+  phone?: string;
 
   @IsOptional()
   @IsEmail()

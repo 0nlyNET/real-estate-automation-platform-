@@ -19,6 +19,7 @@ import { OffboardingRequest } from '../offboarding/offboarding-request.entity';
 import { OnboardingRecord } from '../onboarding/onboarding-record.entity';
 import { OperationsTask } from '../operations/operations-task.entity';
 import { TenantSettings } from '../settings/tenant-settings.entity';
+import { WorkerHeartbeatService } from '../durable-jobs/worker-heartbeat.service';
 import { Tenant } from '../tenants/tenant.entity';
 
 export type ServiceSuspensionSource = 'manual' | 'billing' | 'safety';
@@ -107,6 +108,7 @@ export function describeServiceState(tenant: Tenant, now = new Date()) {
 export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ServiceControlService.name);
   private monitor?: NodeJS.Timeout;
+  private initialMonitor?: NodeJS.Timeout;
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -114,23 +116,33 @@ export class ServiceControlService implements OnModuleInit, OnModuleDestroy {
     private readonly notifications: NotificationsService,
     private readonly audit: AuditService,
     @Optional() private readonly operationalEvents?: OperationalEventsService,
+    @Optional() private readonly heartbeats?: WorkerHeartbeatService,
   ) {}
 
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
-    this.monitor = setInterval(() => {
-      this.suspendExpiredBillingGrace().catch((error: unknown) => {
+    const poll = () => {
+      this.suspendExpiredBillingGrace()
+        .then(() => this.heartbeats?.recordTick('billing_grace_monitor'))
+        .catch(async (error: unknown) => {
+        await this.heartbeats?.recordFailure('billing_grace_monitor', error);
         this.logger.error(
           operationalEvent('billing_suspension_monitor_failed', {
             error: error instanceof Error ? error.message : String(error),
           }),
         );
       });
-    }, 5 * 60_000);
+    };
+    // Perform a real check soon after boot; do not advertise a healthy
+    // heartbeat before the grace query has actually completed.
+    this.initialMonitor = setTimeout(poll, 5_000);
+    this.monitor = setInterval(poll, 5 * 60_000);
+    this.initialMonitor.unref?.();
     this.monitor.unref?.();
   }
 
   onModuleDestroy() {
+    if (this.initialMonitor) clearTimeout(this.initialMonitor);
     if (this.monitor) clearInterval(this.monitor);
   }
 
