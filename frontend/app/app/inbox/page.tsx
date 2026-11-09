@@ -182,6 +182,10 @@ export default function InboxPage() {
   const requestedLeadIdConsumed = useRef(false)
   const threadRefreshInFlight = useRef<string | null>(null)
   const threadRequestVersion = useRef(0)
+  const threadReadUpdates = useRef({
+    version: 0,
+    states: new Map<string, { version: number; state: ConversationReadState }>(),
+  })
   const conversationRequestsInFlight = useRef(new Set<string>())
   const messageCursors = useRef<{
     leadId: string | null
@@ -202,12 +206,19 @@ export default function InboxPage() {
     if (threadRefreshInFlight.current === requestKey) return
     threadRefreshInFlight.current = requestKey
     const requestVersion = ++threadRequestVersion.current
+    const readVersion = threadReadUpdates.current.version
     try {
       const page = await apiFetch<ThreadPage>(
         `/messaging/threads?scope=${scope}&take=${threadTake}&skip=0&includeMeta=1${showTestConversations ? "&includeTest=true" : ""}`,
       )
       if (requestVersion !== threadRequestVersion.current) return
-      const items = Array.isArray(page?.items) ? page.items : []
+      const items = (Array.isArray(page?.items) ? page.items : []).map((thread) => {
+        const update = threadReadUpdates.current.states.get(thread.leadId || "")
+        return update && update.version > readVersion &&
+          (thread.unreadVersion || 0) <= update.state.unreadVersion
+          ? { ...thread, ...update.state }
+          : thread
+      })
       threadItemsRef.current = items
       setThreads(items)
       setHasMoreThreads(Boolean(page?.hasMore))
@@ -383,8 +394,10 @@ export default function InboxPage() {
   )
   const visibleMessages = loadedLeadId === activeLeadId ? messages : []
   const updateReadState = useCallback((state: ConversationReadState) => {
-    // Discard an in-flight list snapshot taken before this write completed.
-    threadRequestVersion.current += 1
+    // Merge newer read badges into overlapping snapshots without discarding
+    // membership/filter changes. Later polls still use fresh server read state.
+    const reads = threadReadUpdates.current
+    reads.states.set(state.leadId, { version: ++reads.version, state })
     setThreads((current) => current.map((thread) =>
       thread.leadId === state.leadId && (thread.unreadVersion || 0) <= state.unreadVersion
         ? { ...thread, ...state } : thread))
