@@ -268,7 +268,7 @@ tail -5 "$WORKDIR/restore.log" || true
 # tables or loses data is not a successful restore.
 log "Verifying..."
 PSQL="psql $TARGET_URL -t -A -v ON_ERROR_STOP=1"
-TABLES="migrations tenants leads lead_events messages sequences sequence_steps sequence_enrollments lead_consent_records compliance_optouts audit_logs credentials password_reset_tokens"
+TABLES="app_migrations tenants leads lead_events messages sequences sequence_steps sequence_enrollments lead_consent_records compliance_optouts audit_logs credentials password_reset_tokens"
 VERIFY_FAILED=0
 for t in $TABLES; do
   n=$($PSQL -c "SELECT count(*) FROM $t" 2>/dev/null || echo "MISSING")

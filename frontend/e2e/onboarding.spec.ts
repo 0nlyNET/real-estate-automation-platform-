@@ -329,8 +329,34 @@ test("operator test view reveals real controlled conversations while normal view
     await expect(confirmation).toHaveCount(0)
     const afterCancel = await db.query('SELECT ownership_status FROM conversation_ai_states WHERE lead_id = $1', [conversationLeadId])
     expect(afterCancel.rows).toEqual(state.rows)
-    await toggle.uncheck()
-    await expect(page.getByTestId(`thread-${conversationLeadId}`)).toHaveCount(0)
+    // Hold the real filtered response while a read-state write completes.
+    // Read badges must not invalidate list membership/filter changes.
+    let releaseList!: () => void
+    let filteredRequested!: () => void
+    const listReleased = new Promise<void>((resolve) => { releaseList = resolve })
+    const filteredList = new Promise<void>((resolve) => { filteredRequested = resolve })
+    const listPattern = "**/api/backend/messaging/threads?*"
+    await page.route(listPattern, async (route) => {
+      if (new URL(route.request().url()).searchParams.get("includeTest") === "true") {
+        await route.continue()
+        return
+      }
+      const response = await route.fetch()
+      filteredRequested()
+      await listReleased
+      await route.fulfill({ response })
+    })
+    try {
+      await toggle.uncheck()
+      await filteredList
+      await page.getByRole("button", { name: "Mark unread", exact: true }).click()
+      await expect(page.getByRole("button", { name: "Mark read", exact: true })).toBeVisible()
+      releaseList()
+      await expect(page.getByTestId(`thread-${conversationLeadId}`)).toHaveCount(0)
+    } finally {
+      releaseList()
+      await page.unroute(listPattern)
+    }
 
     const clientContext = await browser.newContext()
     const clientPage = await clientContext.newPage()

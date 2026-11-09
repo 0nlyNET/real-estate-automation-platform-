@@ -37,6 +37,26 @@ assert_contains "pg_restore error" "$DC/err.log" "pg_restore failed"
 # Case D: even on verification failure, the owned database is still cleaned up.
 assert_contains "owned db dropped after failed verify" "$DA/stub.log" "DROP DATABASE"
 
+# Case E: application migration history is app_migrations, not TypeORM's default.
+unset STUB_MISSING_TABLES STUB_TENANT_MISSING STUB_PGRESTORE_FAIL
+DE=$(setup_test_env t7e)
+drill_env "$DE" STUB_MISSING_TABLES="migrations"
+sh "$SCRIPT" > "$DE/out.log" 2> "$DE/err.log" || fail "valid app_migrations must not require legacy migrations"
+assert_contains "application migration history checked" "$DE/stub.log" "SELECT count(*) FROM app_migrations"
+
+# Case F: missing application migration history must still fail closed.
+DF=$(setup_test_env t7f)
+drill_env "$DF" STUB_MISSING_TABLES="app_migrations"
+set +e
+sh "$SCRIPT" > "$DF/out.log" 2> "$DF/err.log"
+rcf=$?
+set -e
+[ "$rcf" -ne 0 ] || fail "missing app_migrations must fail the drill"
+assert_contains "migration history error" "$DF/err.log" "table app_migrations is missing after restore"
+assert_contains "owned db dropped after migration failure" "$DF/stub.log" "DROP DATABASE"
+teardown_test_env "$DE"
+teardown_test_env "$DF"
+
 teardown_test_env "$DA"
 teardown_test_env "$DB"
 teardown_test_env "$DC"
