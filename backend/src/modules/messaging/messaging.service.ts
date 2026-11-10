@@ -559,7 +559,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
           }
 
           // ENROLLMENT PROVENANCE: a sequence-owned message must still belong
-          // to an active enrollment at the moment of provider submission. The
+          // to a runnable enrollment at the moment of provider submission. The
           // inbound path cancels queued sequence messages when an enrollment
           // stops, but a message claimed just before the stop could otherwise
           // slip through the claim race. Non-sequence messages (AI/manual
@@ -593,7 +593,10 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
               );
               return false;
             }
-            if (enrollmentStatus !== 'active') {
+            // The scheduler completes an enrollment when it queues its final
+            // step, before this worker submits that message. Normal completion
+            // must not cancel the final queued step; explicit stops still do.
+            if (enrollmentStatus !== 'active' && enrollmentStatus !== 'completed') {
               await this.sendDecisions?.record({
                 message: current,
                 safety,

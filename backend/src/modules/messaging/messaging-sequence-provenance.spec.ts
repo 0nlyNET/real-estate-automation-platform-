@@ -186,20 +186,23 @@ describe('dispatch-path enrollment provenance', () => {
     expect(message).toMatchObject({ status: 'queued', lockedBy: null });
   });
 
-  it('submits a sequence follow-up while its enrollment is still active', async () => {
-    const message = sequenceMessage();
-    const { service, sendEmail } = setup(message, 'active');
+  it.each(['active', 'completed'])(
+    'submits an already-queued sequence step when its enrollment is %s',
+    async (enrollmentStatus) => {
+      const message = sequenceMessage();
+      const { service, sendEmail } = setup(message, enrollmentStatus);
 
-    await expect(
-      service.processPendingOutbound({ limit: 1 }),
-    ).resolves.toEqual({ claimed: 1, recovered: 0 });
+      await expect(
+        service.processPendingOutbound({ limit: 1 }),
+      ).resolves.toEqual({ claimed: 1, recovered: 0 });
 
-    expect(sendEmail).toHaveBeenCalledTimes(1);
-    expect(message).toMatchObject({
-      status: 'provider_accepted',
-      providerMessageId: 'provider-1',
-    });
-  });
+      expect(sendEmail).toHaveBeenCalledTimes(1);
+      expect(message).toMatchObject({
+        status: 'provider_accepted',
+        providerMessageId: 'provider-1',
+      });
+    },
+  );
 
   it('still delivers an AI reply to the new inbound after the enrollment stopped', async () => {
     const message = aiReplyMessage();
